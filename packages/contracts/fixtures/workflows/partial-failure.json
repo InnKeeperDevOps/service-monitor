@@ -1,0 +1,20 @@
+{
+  "name": "partial-failure",
+  "description": "Same fork-join topology but documents behavior when one branch fails: the join still receives the successful branch's output.",
+  "nodes": [
+    { "id": "trigger", "type": "onCrash" },
+    { "id": "cursor-plan", "type": "runCursorPlan" },
+    { "id": "claude-plan", "type": "runClaudePlan" },
+    { "id": "join", "type": "join" },
+    { "id": "notify", "type": "slackNotify" }
+  ],
+  "edges": [
+    { "from": "trigger", "to": "cursor-plan" },
+    { "from": "trigger", "to": "claude-plan" },
+    { "from": "cursor-plan", "to": "join" },
+    { "from": "claude-plan", "to": "join" },
+    { "from": "join", "to": "notify" }
+  ],
+  "expectedWaves": [["trigger"], ["cursor-plan", "claude-plan"], ["join"], ["notify"]],
+  "notes": "Topological waves are identical to fork-join. At runtime, if cursor-plan fails but claude-plan succeeds, join still executes because not ALL incoming edges failed. The executor skips a node only when every incoming predecessor failed or was skipped."
+}

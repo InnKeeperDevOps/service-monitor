@@ -1,0 +1,45 @@
+:root {
+  --color-canvas: #f1f5f9;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+  --color-text: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748b;
+  --color-primary: #0d9488;
+  --color-primary-hover: #0f766e;
+  --color-primary-foreground: #ffffff;
+  --color-primary-subtle: #ccfbf1;
+  --color-link: #0f766e;
+  --color-success: #047857;
+  --color-success-bg: #ecfdf5;
+  --color-warning: #b45309;
+  --color-warning-bg: #fffbeb;
+  --color-danger: #b91c1c;
+  --color-danger-bg: #fef2f2;
+  --color-info: #1d4ed8;
+  --color-info-bg: #eff6ff;
+
+  --color-nav-bg: #0f172a;
+  --color-nav-surface: #1e293b;
+  --color-nav-text: #f1f5f9;
+  --color-nav-muted: #94a3b8;
+  --color-nav-active: #2dd4bf;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-text);
+}
+
+a {
+  color: var(--color-link);
+}
+
+*:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 65%, transparent);
+  outline-offset: 2px;
+}

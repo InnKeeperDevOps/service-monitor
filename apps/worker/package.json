@@ -1,0 +1,26 @@
+{
+  "name": "@sm/worker",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "start": "node dist/worker-entry.js"
+  },
+  "dependencies": {
+    "@sm/contracts": "workspace:*",
+    "@sm/db": "workspace:^",
+    "@sm/domain": "workspace:*",
+    "@sm/github": "workspace:*",
+    "@sm/queue": "workspace:*",
+    "bullmq": "^5.47.2",
+    "pg": "^8.14.1"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.1.1"
+  }
+}

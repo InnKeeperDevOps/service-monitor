@@ -1,0 +1,15 @@
+title: Service Monitor Docs
+description: Multi-tenant service monitor and remediation platform
+exclude:
+  - internal/
+  - Gemfile
+  - Gemfile.lock
+  - README.md
+theme: just-the-docs
+url: ""
+baseurl: ""
+aux_links:
+  Repository: https://github.com/example/service-monitor
+just_the_docs:
+  custom_css:
+    - assets/custom.css

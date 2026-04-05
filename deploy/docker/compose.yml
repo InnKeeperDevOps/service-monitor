@@ -1,0 +1,93 @@
+services:
+  web:
+    image: node:22
+    working_dir: /workspace
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ../..:/workspace
+    command: >-
+      sh -c "corepack enable && pnpm install && pnpm --filter @sm/web build &&
+      pnpm --filter @sm/web exec vite preview --host 0.0.0.0 --port 4173"
+    environment:
+      - NODE_ENV=production
+    ports:
+      - "4173:4173"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:4173/').then(r=>process.exit(r.ok&&/text\\/html/i.test(r.headers.get('content-type')||'')?0:1)).catch(()=>process.exit(1))\""
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 180s
+  api:
+    image: node:22
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @sm/api build && pnpm --filter @sm/api start"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 25
+      start_period: 120s
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: service_monitor
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+  worker:
+    image: node:22
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+    command: >-
+      sh -c "corepack enable && pnpm install && pnpm --filter @sm/worker build && pnpm --filter @sm/worker start"
+    environment:
+      - NODE_ENV=production
+      - WORKER_HEALTH_PORT=9090
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:9090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 180s

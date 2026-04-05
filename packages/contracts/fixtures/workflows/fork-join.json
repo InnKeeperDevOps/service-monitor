@@ -1,0 +1,20 @@
+{
+  "name": "fork-join",
+  "description": "Trigger fans out to two parallel AI plan runners, then joins their results before sending a Slack notification.",
+  "nodes": [
+    { "id": "trigger", "type": "onCrash" },
+    { "id": "cursor-plan", "type": "runCursorPlan" },
+    { "id": "claude-plan", "type": "runClaudePlan" },
+    { "id": "join", "type": "join" },
+    { "id": "notify", "type": "slackNotify" }
+  ],
+  "edges": [
+    { "from": "trigger", "to": "cursor-plan" },
+    { "from": "trigger", "to": "claude-plan" },
+    { "from": "cursor-plan", "to": "join" },
+    { "from": "claude-plan", "to": "join" },
+    { "from": "join", "to": "notify" }
+  ],
+  "expectedWaves": [["trigger"], ["cursor-plan", "claude-plan"], ["join"], ["notify"]],
+  "notes": "The two plan runners are independent and execute in the same wave. The join node waits for both."
+}

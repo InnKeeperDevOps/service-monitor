@@ -1,0 +1,15 @@
+{
+  "name": "linear",
+  "description": "Simple 3-node linear chain: trigger fires, runs a shell command, then sends a Slack notification.",
+  "nodes": [
+    { "id": "trigger", "type": "onCrash" },
+    { "id": "run-shell", "type": "runShell" },
+    { "id": "notify", "type": "slackNotify" }
+  ],
+  "edges": [
+    { "from": "trigger", "to": "run-shell" },
+    { "from": "run-shell", "to": "notify" }
+  ],
+  "expectedWaves": [["trigger"], ["run-shell"], ["notify"]],
+  "notes": "Each node depends on the previous one, so every wave contains exactly one node."
+}

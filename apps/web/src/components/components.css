@@ -1,0 +1,195 @@
+/* Shared component styles — consumes tokens from ../tokens.css */
+
+/* ── Button ─────────────────────────────────────────── */
+
+.sm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sm-btn:disabled,
+.sm-btn[aria-busy="true"] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sm-btn--md {
+  padding: 0.5rem 0.85rem;
+  font-size: 0.875rem;
+}
+
+.sm-btn--sm {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
+}
+
+.sm-btn--primary {
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+  border-color: var(--color-primary);
+}
+.sm-btn--primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.sm-btn--secondary {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+.sm-btn--secondary:hover:not(:disabled) {
+  background: var(--color-border);
+}
+
+.sm-btn--danger {
+  background: var(--color-danger);
+  color: var(--color-primary-foreground);
+  border-color: var(--color-danger);
+}
+.sm-btn--danger:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.sm-btn--ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+  border-color: transparent;
+}
+.sm-btn--ghost:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+/* ── Card ───────────────────────────────────────────── */
+
+.sm-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.sm-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.sm-card__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* ── Badge ──────────────────────────────────────────── */
+
+.sm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.sm-badge--success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+.sm-badge--warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+.sm-badge--danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+.sm-badge--info {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+.sm-badge--muted {
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+}
+
+/* ── Input ──────────────────────────────────────────── */
+
+.sm-input-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.sm-input-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.sm-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  background: var(--color-surface-muted);
+  box-sizing: border-box;
+  color: var(--color-text);
+  transition: border-color 0.15s;
+}
+
+.sm-input:focus {
+  border-color: var(--color-primary);
+}
+
+.sm-input--error {
+  border-color: var(--color-danger);
+}
+
+.sm-input-error {
+  font-size: 0.8rem;
+  color: var(--color-danger);
+}
+
+/* ── Table ──────────────────────────────────────────── */
+
+.sm-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sm-table th {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 2px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.sm-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+}
+
+.sm-table__empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+}

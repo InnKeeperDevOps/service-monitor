@@ -1,0 +1,101 @@
+import { describe, expect, it } from "vitest";
+import { coreSchemaSql } from "../src/index.js";
+
+describe("db schema", () => {
+  it("contains key tenancy and auth tables", () => {
+    expect(coreSchemaSql).toContain("create table if not exists tenants");
+    expect(coreSchemaSql).toContain("create table if not exists tenant_memberships");
+    expect(coreSchemaSql).toContain("create table if not exists oidc_providers");
+  });
+
+  describe("Phase A/B core entities", () => {
+    it("defines agents with tenant FK, status check, last_seen_at, name, version, cert, capabilities", () => {
+      expect(coreSchemaSql).toContain("create table if not exists agents");
+      expect(coreSchemaSql).toMatch(/references tenants\(id\)/);
+      expect(coreSchemaSql).toMatch(
+        /create table if not exists agents[\s\S]*?check \(status in \([^)]+\)\)/,
+      );
+      expect(coreSchemaSql).toContain("last_seen_at");
+      expect(coreSchemaSql).toContain("name text");
+      expect(coreSchemaSql).toContain("version text");
+      expect(coreSchemaSql).toContain("cert_fingerprint text");
+      expect(coreSchemaSql).toContain("allowed_capabilities text[]");
+    });
+
+    it("defines monitored_services with tenant, nullable agent FK, name, repo, branch, docker_image, compose_path", () => {
+      expect(coreSchemaSql).toContain("create table if not exists monitored_services");
+      expect(coreSchemaSql).toMatch(
+        /agent_id text references agents\(id\)[^\n]*on delete set null/,
+      );
+      expect(coreSchemaSql).toContain("name text not null");
+      expect(coreSchemaSql).toContain("repo text not null");
+      expect(coreSchemaSql).toContain("branch text not null");
+      expect(coreSchemaSql).toContain("docker_image text");
+      expect(coreSchemaSql).toContain("compose_path text");
+      expect(coreSchemaSql).toContain("workflow_graph_id");
+    });
+
+    it("defines service_runs with tenant, service, agent FKs and state check", () => {
+      expect(coreSchemaSql).toContain("create table if not exists service_runs");
+      expect(coreSchemaSql).toMatch(/references monitored_services\(id\)/);
+      expect(coreSchemaSql).toMatch(/references agents\(id\)/);
+      expect(coreSchemaSql).toMatch(
+        /check \(state in \('starting','running','stopped','crashed','unknown'\)\)/,
+      );
+      expect(coreSchemaSql).toContain("last_heartbeat_at");
+    });
+
+    it("defines workflow_graphs with tenant, service FK, version, graph_json jsonb, is_active", () => {
+      expect(coreSchemaSql).toContain("create table if not exists workflow_graphs");
+      expect(coreSchemaSql).toMatch(/references monitored_services\(id\)/);
+      expect(coreSchemaSql).toContain("graph_json jsonb");
+      expect(coreSchemaSql).toContain("is_active");
+      expect(coreSchemaSql).toMatch(/version (integer|text) not null/);
+    });
+
+    it("defines incidents with tenant, service FK, fingerprint, status check, seen timestamps", () => {
+      expect(coreSchemaSql).toContain("create table if not exists incidents");
+      expect(coreSchemaSql).toMatch(
+        /create table if not exists incidents[\s\S]*?check \(status in \([^)]+\)\)/,
+      );
+      expect(coreSchemaSql).toContain("fingerprint");
+      expect(coreSchemaSql).toContain("first_seen_at");
+      expect(coreSchemaSql).toContain("last_seen_at");
+    });
+
+    it("defines remediation_jobs with tenant, incident FK, executor, status check, created_at", () => {
+      expect(coreSchemaSql).toContain("create table if not exists remediation_jobs");
+      expect(coreSchemaSql).toMatch(/references incidents\(id\)/);
+      expect(coreSchemaSql).toContain("executor");
+      expect(coreSchemaSql).toMatch(
+        /create table if not exists remediation_jobs[\s\S]*?check \(status in \([^)]+\)\)/,
+      );
+      expect(coreSchemaSql).toContain("created_at");
+    });
+
+    it("defines dedup_keys with unique tenant_id + fingerprint", () => {
+      expect(coreSchemaSql).toContain("create table if not exists dedup_keys");
+      expect(coreSchemaSql).toMatch(
+        /unique \(tenant_id,\s*fingerprint\)|primary key \(tenant_id,\s*fingerprint\)/,
+      );
+    });
+
+    it("defines audit_logs with tenant, nullable actor, action, target, metadata jsonb", () => {
+      expect(coreSchemaSql).toContain("create table if not exists audit_logs");
+      expect(coreSchemaSql).toMatch(/actor_id text references users\(id\)[^\n]*/);
+      expect(coreSchemaSql).toContain("action text not null");
+      expect(coreSchemaSql).toContain("target_type text not null");
+      expect(coreSchemaSql).toContain("target_id");
+      expect(coreSchemaSql).toContain("metadata_json");
+    });
+
+    it("defines agent_enrollment_tokens with tenant, hash, expiry, created_by, optional used_at", () => {
+      expect(coreSchemaSql).toContain("create table if not exists agent_enrollment_tokens");
+      expect(coreSchemaSql).toMatch(/tenant_id text not null references tenants\(id\)/);
+      expect(coreSchemaSql).toContain("token_hash text not null");
+      expect(coreSchemaSql).toContain("expires_at timestamptz not null");
+      expect(coreSchemaSql).toContain("created_by text not null");
+      expect(coreSchemaSql).toContain("used_at timestamptz");
+    });
+  });
+});

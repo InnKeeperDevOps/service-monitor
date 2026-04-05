@@ -1,0 +1,27 @@
+{
+  "name": "@sm/queue",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@sm/contracts": "workspace:*",
+    "bullmq": "^5.47.2",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.1.1"
+  }
+}

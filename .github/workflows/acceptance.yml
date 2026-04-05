@@ -1,0 +1,33 @@
+name: acceptance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - name: Start docker compose stack
+        working-directory: deploy/docker
+        run: docker compose -f compose.yml up -d --wait
+      - name: Run acceptance tests
+        env:
+          API_BASE: http://localhost:3001
+          WEB_BASE: http://localhost:4173
+          WORKER_BASE: http://localhost:9090
+        run: pnpm acceptance
+      - name: Stop docker compose stack
+        if: always()
+        working-directory: deploy/docker
+        run: docker compose -f compose.yml down -v

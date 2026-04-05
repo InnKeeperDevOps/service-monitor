@@ -1,0 +1,27 @@
+{
+  "name": "service-monitor",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.5.0",
+  "scripts": {
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
+    "typecheck": "turbo run typecheck",
+    "contracts:openapi": "pnpm --filter @sm/contracts contracts:openapi",
+    "acceptance": "pnpm --filter @sm/acceptance test",
+    "e2e:playwright": "pnpm --filter @sm/playwright-e2e e2e",
+    "version:bump": "node scripts/bump-version-from-tags.mjs",
+    "version:bump:minor": "node scripts/bump-version-from-tags.mjs --level minor",
+    "version:bump:major": "node scripts/bump-version-from-tags.mjs --level major",
+    "version:bump:dry-run": "node scripts/bump-version-from-tags.mjs --dry-run",
+    "test:versioning": "node --test scripts/tests/bump-version-from-tags.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  }
+}

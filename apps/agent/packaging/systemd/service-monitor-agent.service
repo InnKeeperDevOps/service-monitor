@@ -1,0 +1,13 @@
+[Unit]
+Description=Service Monitor Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/agent
+Restart=always
+RestartSec=5
+Environment=SM_REALTIME_URL=wss://example.com/realtime
+
+[Install]
+WantedBy=multi-user.target

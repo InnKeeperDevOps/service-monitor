@@ -1,0 +1,239 @@
+import { z } from "zod";
+
+export const healthResponseSchema = z.object({
+  status: z.enum(["ok"]),
+  uptimeSeconds: z.number().nonnegative()
+});
+
+export const meResponseSchema = z.object({
+  id: z.string(),
+  email: z.string().email(),
+  role: z.enum(["owner", "admin", "operator", "viewer"]),
+  tenantId: z.string()
+});
+
+export const automationActionSchema = z.enum(["create_pr", "merge_pr", "dispatch_workflow", "push"]);
+
+export const automationPolicySchema = z.object({
+  repos: z.array(z.string()),
+  branches: z.array(z.string()),
+  actions: z.array(automationActionSchema)
+});
+
+export const tenantSettingsSchema = z.object({
+  tenantId: z.string(),
+  githubRepo: z.string(),
+  defaultBranch: z.string(),
+  docsUrl: z.string().url().optional(),
+  automationPolicy: automationPolicySchema.optional(),
+  preferredExecutor: z.enum(["cursor", "claude"]).optional()
+});
+
+export const githubPolicyCheckRequestSchema = z.object({
+  repo: z.string(),
+  branch: z.string(),
+  action: automationActionSchema
+});
+
+export const upsertTenantSettingsRequestSchema = tenantSettingsSchema;
+
+export const githubInstallationSettingsSchema = z.object({
+  installationId: z.number().int().positive(),
+  accountLogin: z.string().min(1),
+  appId: z.number().int().positive()
+});
+
+/** POST body may include tenantId for symmetry with settings; must match session or be omitted. */
+export const upsertGithubInstallationRequestSchema = githubInstallationSettingsSchema.extend({
+  tenantId: z.string().optional()
+});
+
+export const githubInstallationsResponseSchema = z.object({
+  installations: z.array(githubInstallationSettingsSchema)
+});
+
+export const syncGithubInstallationRequestSchema = z.object({
+  installationId: z.number().int().positive()
+});
+
+export const createEnrollmentTokenRequestSchema = z.object({
+  ttlSeconds: z.number().int().positive().max(365 * 24 * 60 * 60)
+});
+
+export const enrollmentTokenMetadataSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  expiresAt: z.string().datetime(),
+  createdBy: z.string(),
+  createdAt: z.string().datetime(),
+  usedAt: z.string().datetime().nullable()
+});
+
+export const createEnrollmentTokenResponseSchema = enrollmentTokenMetadataSchema.extend({
+  token: z.string().min(1)
+});
+
+export const listEnrollmentTokensResponseSchema = z.object({
+  tokens: z.array(enrollmentTokenMetadataSchema)
+});
+
+export type CreateEnrollmentTokenRequest = z.infer<typeof createEnrollmentTokenRequestSchema>;
+export type EnrollmentTokenMetadata = z.infer<typeof enrollmentTokenMetadataSchema>;
+export type CreateEnrollmentTokenResponse = z.infer<typeof createEnrollmentTokenResponseSchema>;
+export type ListEnrollmentTokensResponse = z.infer<typeof listEnrollmentTokensResponseSchema>;
+
+export const incidentStatusSchema = z.enum(["open", "acknowledged", "resolved", "closed"]);
+
+export const incidentSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  serviceId: z.string(),
+  fingerprint: z.string(),
+  status: incidentStatusSchema,
+  message: z.string().optional(),
+  firstSeenAt: z.string().datetime(),
+  lastSeenAt: z.string().datetime(),
+  eventCount: z.number().int().nonnegative().default(1)
+});
+
+export const listIncidentsResponseSchema = z.object({
+  incidents: z.array(incidentSchema)
+});
+
+export const updateIncidentStatusRequestSchema = z.object({
+  status: incidentStatusSchema
+});
+
+export const workflowGraphNodeSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  position: z.object({ x: z.number(), y: z.number() }).optional(),
+  data: z.record(z.unknown()).optional()
+});
+
+export const workflowGraphEdgeSchema = z.object({
+  from: z.string(),
+  to: z.string()
+});
+
+export const workflowGraphSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  serviceId: z.string(),
+  version: z.number().int().positive(),
+  nodes: z.array(workflowGraphNodeSchema),
+  edges: z.array(workflowGraphEdgeSchema),
+  viewport: z.object({ x: z.number(), y: z.number(), zoom: z.number() }).optional(),
+  isActive: z.boolean()
+});
+
+export const createWorkflowGraphRequestSchema = z.object({
+  serviceId: z.string(),
+  nodes: z.array(workflowGraphNodeSchema),
+  edges: z.array(workflowGraphEdgeSchema)
+});
+
+export const executeWorkflowRequestSchema = createWorkflowGraphRequestSchema;
+
+export const listWorkflowGraphsResponseSchema = z.object({
+  graphs: z.array(workflowGraphSchema)
+});
+
+export const executeWorkflowResponseSchema = z.object({
+  accepted: z.literal(true),
+  workflowId: z.string(),
+  workflowVersion: z.number().int().positive(),
+  agentId: z.string(),
+  commandId: z.string(),
+  dispatchState: z.enum(["queued_for_dispatch"])
+});
+
+export const monitoredServiceSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  agentId: z.string().nullable(),
+  name: z.string(),
+  repo: z.string(),
+  branch: z.string(),
+  dockerImage: z.string().nullable().optional(),
+  composePath: z.string().nullable().optional()
+});
+
+export const createMonitoredServiceRequestSchema = z.object({
+  name: z.string().min(1),
+  repo: z.string().min(1),
+  branch: z.string().min(1),
+  agentId: z.string().nullable().optional(),
+  dockerImage: z.string().min(1).optional(),
+  composePath: z.string().min(1).optional()
+});
+
+export const listMonitoredServicesResponseSchema = z.object({
+  services: z.array(monitoredServiceSchema)
+});
+
+export const agentSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  name: z.string().nullable(),
+  version: z.string().nullable(),
+  status: z.enum(["online", "offline", "degraded", "unknown"]),
+  lastSeenAt: z.string().datetime().nullable(),
+  certFingerprint: z.string().nullable().optional(),
+  allowedCapabilities: z.array(z.string()).optional()
+});
+
+export const listAgentsResponseSchema = z.object({
+  agents: z.array(agentSchema)
+});
+
+export type AutomationAction = z.infer<typeof automationActionSchema>;
+export type AutomationPolicy = z.infer<typeof automationPolicySchema>;
+export type HealthResponse = z.infer<typeof healthResponseSchema>;
+export type MeResponse = z.infer<typeof meResponseSchema>;
+export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
+export type GithubInstallationSettings = z.infer<typeof githubInstallationSettingsSchema>;
+export type GithubInstallationsResponse = z.infer<typeof githubInstallationsResponseSchema>;
+export type SyncGithubInstallationRequest = z.infer<typeof syncGithubInstallationRequestSchema>;
+export type Incident = z.infer<typeof incidentSchema>;
+export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
+export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;
+export type WorkflowGraphNode = z.infer<typeof workflowGraphNodeSchema>;
+export type WorkflowGraphEdge = z.infer<typeof workflowGraphEdgeSchema>;
+export type ExecuteWorkflowRequest = z.infer<typeof executeWorkflowRequestSchema>;
+export type ExecuteWorkflowResponse = z.infer<typeof executeWorkflowResponseSchema>;
+export type MonitoredService = z.infer<typeof monitoredServiceSchema>;
+export type Agent = z.infer<typeof agentSchema>;
+
+// ---------------------------------------------------------------------------
+// OAuth / OIDC auth
+// ---------------------------------------------------------------------------
+
+export const oauthAuthorizeResponseSchema = z.object({
+  authorizeUrl: z.string()
+});
+
+export const oauthCallbackResponseSchema = z.object({
+  token: z.string(),
+  user: z.object({
+    id: z.string(),
+    email: z.string().email(),
+    tenantId: z.string(),
+    role: z.enum(["owner", "admin", "operator", "viewer"])
+  })
+});
+
+export const authProviderEntrySchema = z.object({
+  id: z.string(),
+  provider: z.string(),
+  name: z.string()
+});
+
+export const listAuthProvidersResponseSchema = z.object({
+  providers: z.array(authProviderEntrySchema)
+});
+
+export type OAuthAuthorizeResponse = z.infer<typeof oauthAuthorizeResponseSchema>;
+export type OAuthCallbackResponse = z.infer<typeof oauthCallbackResponseSchema>;
+export type AuthProviderEntry = z.infer<typeof authProviderEntrySchema>;
+export type ListAuthProvidersResponse = z.infer<typeof listAuthProvidersResponseSchema>;

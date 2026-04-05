@@ -1,0 +1,15 @@
+node_modules
+dist
+coverage
+.turbo
+.pnpm-store
+.env
+.env.*
+!.env.example
+docs/_site
+apps/web/dist
+*.log
+bin/
+playwright-report/
+test-results/
+blob-report/
