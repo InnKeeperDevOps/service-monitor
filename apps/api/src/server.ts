@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
+import { Pool } from "pg";
 import {
   agentCommandJobSchema,
   agentToPlatformMessageSchema,
@@ -54,6 +57,7 @@ import { createPostgresDomainStore } from "./postgresDomainStore.js";
 import { resolveTenantStoreBackend } from "./storeAdapter.js";
 import { createEnrollmentTokenForTenant, listActiveEnrollmentTokensForTenant, validateEnrollmentToken } from "./enrollmentStore.js";
 import { createMemoryAuthStore, seedDevUser } from "./memoryAuthStore.js";
+import { createPostgresAuthStore } from "./postgresAuthStore.js";
 import { enforcePolicy } from "./policy.js";
 import { createReadinessCheckersFromEnv, type ReadinessChecker } from "./readyChecks.js";
 import { RealtimeManager, type PendingCommandRedis } from "./realtimeManager.js";
@@ -64,8 +68,11 @@ import {
   upsertTenantSettings
 } from "./store.js";
 import { createNamedQueue, createRedisConnectionFromEnv } from "@sm/queue";
+import { bootstrapEnv, resolveSetupState } from "./configPersistence.js";
+import { registerSetupRoutes } from "./setupRoutes.js";
 
 const startedAt = Date.now();
+bootstrapEnv(process.env);
 
 function signValid(secret: string, payload: string, signature?: string): boolean {
   if (!signature) return false;
@@ -276,24 +283,56 @@ export function createRuntimeQueueWiringFromEnv(env: NodeJS.ProcessEnv = process
 }
 
 export function buildServer(opts: BuildServerOptions = {}) {
+  const setupState = resolveSetupState(process.env);
   const enqueueGithubJob = opts.enqueueGithubJob ?? noopGithubEnqueue;
   const enqueueLogIngestion = opts.enqueueLogIngestion ?? noopLogIngestion;
   const enqueueAgentCommand = opts.enqueueAgentCommand ?? noopAgentCommandEnqueue;
   const readinessCheckers = opts.readinessCheckers ?? createReadinessCheckersFromEnv();
   const domainStore = resolveDomainStore(opts);
-  const authStore = opts.authStore ?? createMemoryAuthStore();
+  let dbPool: import("pg").Pool | null = null;
+  const authStore = opts.authStore ?? (() => {
+    const databaseUrl = process.env.DATABASE_URL?.trim();
+    if (!setupState.setupRequired && databaseUrl) {
+      dbPool = new Pool({ connectionString: databaseUrl });
+      return createPostgresAuthStore(dbPool);
+    }
+    return createMemoryAuthStore();
+  })();
   const realtimeManager = new RealtimeManager({ redis: opts.redis });
   const app = Fastify();
   app.register(cors);
+  app.register(fastifyStatic, {
+    root: path.resolve(process.cwd(), "dist/public"),
+    prefix: "/",
+    wildcard: false
+  });
   app.register(websocket);
   app.register(correlationIdPlugin);
 
   app.decorate("realtimeManager", realtimeManager);
+  app.addHook("onClose", async () => {
+    if (dbPool) {
+      await dbPool.end().catch(() => {});
+      dbPool = null;
+    }
+  });
 
   // WebSocket routes must live in an async child plugin (Fastify 5 + @fastify/websocket);
   // otherwise upgrades fail with HTTP 500 for both TCP and injectWS.
   app.register(async (instance) => {
     instance.get("/realtime", { websocket: true }, async (socket, req) => {
+      if (setupState.setupRequired) {
+        socket.send(
+          JSON.stringify(
+            apiErrorSchema.parse({
+              code: "SETUP_REQUIRED",
+              message: "Realtime ingress is unavailable until setup completes"
+            })
+          )
+        );
+        socket.close();
+        return;
+      }
       const isDev = process.env.NODE_ENV !== "production";
       const tokenParam = (req.query as Record<string, string | undefined>)?.token;
       let agentTenantId: string | undefined;
@@ -430,6 +469,30 @@ export function buildServer(opts: BuildServerOptions = {}) {
       }
     }
     return { status: "ready" as const };
+  });
+
+  registerSetupRoutes(app, {
+    getStatus: () => ({
+      setupRequired: setupState.setupRequired,
+      setupComplete: setupState.setupComplete,
+      version: process.env.npm_package_version ?? "0.1.0"
+    })
+  });
+
+  app.addHook("preHandler", async (req, reply) => {
+    if (!setupState.setupRequired) {
+      return;
+    }
+    if (!req.url.startsWith("/api/v1/")) {
+      return;
+    }
+    if (req.url.startsWith("/api/v1/setup/")) {
+      return;
+    }
+    return reply.status(503).send({
+      code: "SETUP_REQUIRED",
+      message: "Initial setup has not completed yet"
+    });
   });
 
   app.post("/api/v1/auth/login", async (req, reply) => {
@@ -1045,6 +1108,14 @@ export function buildServer(opts: BuildServerOptions = {}) {
         dispatchState: "queued_for_dispatch" as const
       })
     );
+  });
+
+  app.get("/*", async (req, reply) => {
+    const url = req.url.split("?")[0] ?? "/";
+    if (url.startsWith("/api/") || url === "/health" || url === "/ready" || url === "/realtime") {
+      return reply.status(404).send({ code: "NOT_FOUND", message: "Not found" });
+    }
+    return reply.sendFile("index.html");
   });
 
   return Object.assign(app, { realtimeManager });

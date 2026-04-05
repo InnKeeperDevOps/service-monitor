@@ -95,6 +95,41 @@ describe("api", () => {
     });
   });
 
+  describe("setup-required mode", () => {
+    it("exposes setup status when DATABASE_URL is absent", async () => {
+      vi.stubEnv("DATABASE_URL", "");
+      vi.stubEnv("KAIAD_SETUP_COMPLETE", "");
+      vi.stubEnv("KAIAD_SETUP_REQUIRED", "1");
+      const setupApp = buildServer();
+      await setupApp.ready();
+      const response = await setupApp.inject({ method: "GET", url: "/api/v1/setup/status" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual(
+        expect.objectContaining({
+          setupRequired: true,
+          setupComplete: false
+        })
+      );
+      await setupApp.close();
+    });
+
+    it("returns SETUP_REQUIRED for non-setup API routes while setup is pending", async () => {
+      vi.stubEnv("DATABASE_URL", "");
+      vi.stubEnv("KAIAD_SETUP_COMPLETE", "");
+      vi.stubEnv("KAIAD_SETUP_REQUIRED", "1");
+      const setupApp = buildServer();
+      await setupApp.ready();
+      const response = await setupApp.inject({ method: "GET", url: "/api/v1/me" });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual(
+        expect.objectContaining({
+          code: "SETUP_REQUIRED"
+        })
+      );
+      await setupApp.close();
+    });
+  });
+
   it("requires auth for /api/v1/me", async () => {
     const response = await app.inject({ method: "GET", url: "/api/v1/me" });
     expect(response.statusCode).toBe(401);
@@ -158,6 +193,7 @@ describe("api", () => {
     it("fails closed in production when INTERNAL_API_TOKEN is not configured", async () => {
       vi.stubEnv("NODE_ENV", "production");
       vi.stubEnv("INTERNAL_API_TOKEN", "");
+      vi.stubEnv("DATABASE_URL", "postgres://example.invalid/db");
       const internalApp = buildServer();
       await internalApp.ready();
       const response = await internalApp.inject({
