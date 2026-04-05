@@ -90,7 +90,7 @@ export function LoginPage() {
         }}
       >
         <h1 style={{ margin: "0 0 0.25rem", fontSize: "1.25rem", fontWeight: 700 }}>
-          Service Monitor
+          Kaiad
         </h1>
         <p style={{ margin: "0 0 1.5rem", color: "var(--color-text-secondary)", fontSize: "0.9rem" }}>
           Sign in to continue

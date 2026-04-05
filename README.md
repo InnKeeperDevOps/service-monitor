@@ -1,6 +1,6 @@
-# Service Monitor
+# Kaiad
 
-Monorepo for the Service Monitor control plane and agent.
+Monorepo for the Kaiad control plane and agent.
 
 ## Apps in this repo
 

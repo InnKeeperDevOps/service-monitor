@@ -6,7 +6,7 @@ const outputPath = join(outputDir, "openapi.yaml");
 
 const yaml = `openapi: 3.1.0
 info:
-  title: Service Monitor API
+  title: Kaiad API
   version: 0.1.0
 paths:
   /health:

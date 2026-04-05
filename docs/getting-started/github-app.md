@@ -6,7 +6,7 @@ nav_order: 2
 
 # GitHub App setup
 
-The GitHub App lets Service Monitor receive **webhooks**, obtain **installation tokens**, and perform **mutations** (PRs, merges, workflow dispatch) subject to your **automation policy**. This page covers permissions, installation flow, secrets, allowlists, and signature troubleshooting.
+The GitHub App lets Kaiad receive **webhooks**, obtain **installation tokens**, and perform **mutations** (PRs, merges, workflow dispatch) subject to your **automation policy**. This page covers permissions, installation flow, secrets, allowlists, and signature troubleshooting.
 
 ## Required GitHub permissions
 

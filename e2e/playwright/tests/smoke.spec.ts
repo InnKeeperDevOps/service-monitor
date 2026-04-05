@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
 
 test("E2E-001 Operator auth smoke", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Service Monitor")).toBeVisible();
+  await expect(page.getByText("Kaiad")).toBeVisible();
   await expect(page.getByText("Dashboard")).toBeVisible();
 });
 

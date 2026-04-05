@@ -19,9 +19,9 @@ beforeEach(() => {
 });
 
 describe("web app", () => {
-  it("renders sidebar with Service Monitor branding", async () => {
+  it("renders sidebar with Kaiad branding", async () => {
     render(<App />);
-    expect(screen.getByText("Service Monitor")).toBeInTheDocument();
+    expect(screen.getByText("Kaiad")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });

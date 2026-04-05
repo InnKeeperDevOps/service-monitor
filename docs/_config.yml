@@ -1,5 +1,5 @@
-title: Service Monitor Docs
-description: Multi-tenant service monitor and remediation platform
+title: Kaiad Docs
+description: Multi-tenant Kaiad control plane and remediation platform
 exclude:
   - internal/
   - Gemfile
@@ -9,7 +9,7 @@ theme: just-the-docs
 url: ""
 baseurl: ""
 aux_links:
-  Repository: https://github.com/example/service-monitor
+  Repository: https://github.com/InnKeeperDevOps/kaiad
 just_the_docs:
   custom_css:
     - assets/custom.css

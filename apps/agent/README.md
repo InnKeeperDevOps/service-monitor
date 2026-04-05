@@ -1,4 +1,4 @@
-# Service Monitor Agent (Go)
+# Kaiad Agent (Go)
 
 - Primary transport: TLS WebSocket (`SM_REALTIME_URL`).
 - Enrollment uses token-auth over outbound WSS (`SM_ENROLLMENT_TOKEN`) with local credential persistence for subsequent reconnects; mTLS lifecycle remains a documented hardening path.

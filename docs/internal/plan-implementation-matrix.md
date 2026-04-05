@@ -1,8 +1,8 @@
-# Service Monitor Plan vs Implementation Matrix
+# Kaiad Plan vs Implementation Matrix
 
 Snapshot date: 2026-04-05
 Plan source: `.cursor/plans/service_monitor_platform_5fd05388.plan.md`
-Repository assessed: `service-monitor`
+Repository assessed: `kaiad`
 
 This matrix compares the plan description to **actual code and config** (not task checkboxes).
 

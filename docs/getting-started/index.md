@@ -6,7 +6,7 @@ has_children: true
 
 # Getting started
 
-Service Monitor is a **multi-tenant SaaS control plane**: your team operates the platform in your environment, while **customer agents** run beside their workloads (typically Docker-based services), stream logs for error detection, and execute remediation you define. The plane **deduplicates incidents** (fingerprint + cooldown), **queues remediation and automation** jobs, and ties everything to **tenants**, **services**, and **GitHub** installations when you use the GitHub App path.
+Kaiad is a **multi-tenant SaaS control plane**: your team operates the platform in your environment, while **customer agents** run beside their workloads (typically Docker-based services), stream logs for error detection, and execute remediation you define. The plane **deduplicates incidents** (fingerprint + cooldown), **queues remediation and automation** jobs, and ties everything to **tenants**, **services**, and **GitHub** installations when you use the GitHub App path.
 
 ## What you are operating
 

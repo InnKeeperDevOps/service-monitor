@@ -1,5 +1,5 @@
 [Unit]
-Description=Service Monitor Agent
+Description=Kaiad Agent
 After=network.target
 
 [Service]

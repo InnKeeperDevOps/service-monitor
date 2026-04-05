@@ -1,11 +1,11 @@
 ---
-title: Service Monitor
+title: Kaiad
 nav_order: 1
 ---
 
-# Service Monitor
+# Kaiad
 
-Service Monitor is a multi-tenant control plane with customer-managed agents.
+Kaiad is a multi-tenant control plane with customer-managed agents.
 
 - Fastify API + WSS agent channel
 - Redis/BullMQ orchestration

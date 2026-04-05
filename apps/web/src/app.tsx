@@ -95,7 +95,7 @@ export function App() {
       <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", minHeight: "100vh" }}>
         <nav style={{ background: "var(--color-nav-bg)", padding: "1rem 0", display: "flex", flexDirection: "column", gap: "0.15rem" }}>
           <div style={{ padding: "0 1rem 1rem", color: "var(--color-nav-text)", fontWeight: 700, fontSize: "1.1rem" }}>
-            Service Monitor
+            Kaiad
           </div>
           {visibleNav.map((item) => {
             const active = route === item.route;
