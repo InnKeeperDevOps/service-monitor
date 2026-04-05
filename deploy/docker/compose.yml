@@ -33,6 +33,8 @@ services:
     command: sh -c "corepack enable && pnpm exec turbo run build --filter=@sm/api && pnpm --filter @sm/api start"
     environment:
       - NODE_ENV=production
+      # Acceptance stack + e2e use Bearer dev-token against production-mode API.
+      - SM_ALLOW_DEV_TOKEN=1
       - PORT=3001
     ports:
       - "3001:3001"

@@ -66,6 +66,18 @@ describe("login / resolveSession", () => {
     process.env.NODE_ENV = prev;
   });
 
+  it("resolveSession resolves dev-token in production when SM_ALLOW_DEV_TOKEN=1", async () => {
+    const prevNode = process.env.NODE_ENV;
+    const prevFlag = process.env.SM_ALLOW_DEV_TOKEN;
+    process.env.NODE_ENV = "production";
+    process.env.SM_ALLOW_DEV_TOKEN = "1";
+    const session = await resolveSession(store, "Bearer dev-token");
+    expect(session).not.toBeNull();
+    expect(session!.tenantId).toBe("t-1");
+    process.env.NODE_ENV = prevNode;
+    process.env.SM_ALLOW_DEV_TOKEN = prevFlag;
+  });
+
   it("resolveSession resolves a real session token after login", async () => {
     const result = await login(store, "admin@example.com", "admin");
     expect(result).not.toBeNull();
