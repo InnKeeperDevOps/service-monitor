@@ -8,7 +8,7 @@ services:
     volumes:
       - ../..:/workspace
     command: >-
-      sh -c "corepack enable && pnpm install && pnpm --filter @sm/web build &&
+      sh -c "corepack enable && pnpm install && pnpm exec turbo run build --filter=@sm/web &&
       pnpm --filter @sm/web exec vite preview --host 0.0.0.0 --port 4173"
     environment:
       - NODE_ENV=production
@@ -29,7 +29,7 @@ services:
     working_dir: /workspace
     volumes:
       - ../..:/workspace
-    command: sh -c "corepack enable && pnpm install && pnpm --filter @sm/api build && pnpm --filter @sm/api start"
+    command: sh -c "corepack enable && pnpm install && pnpm exec turbo run build --filter=@sm/api && pnpm --filter @sm/api start"
     environment:
       - NODE_ENV=production
       - PORT=3001
@@ -75,7 +75,7 @@ services:
     volumes:
       - ../..:/workspace
     command: >-
-      sh -c "corepack enable && pnpm install && pnpm --filter @sm/worker build && pnpm --filter @sm/worker start"
+      sh -c "corepack enable && pnpm install && pnpm exec turbo run build --filter=@sm/worker && pnpm --filter @sm/worker start"
     environment:
       - NODE_ENV=production
       - WORKER_HEALTH_PORT=9090
