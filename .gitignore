@@ -7,6 +7,8 @@ coverage
 .env.*
 !.env.example
 docs/_site
+docs/vendor
+docs/.bundle
 apps/web/dist
 *.log
 bin/

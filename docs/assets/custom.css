@@ -34,7 +34,8 @@ div.highlighter-rouge .highlight code {
 }
 
 /* Mermaid diagrams (see index and pages using div.mermaid) */
-.mermaid {
+.mermaid,
+pre.mermaid {
   margin: 1.5rem 0;
   text-align: center;
 }

@@ -1,4 +1,6 @@
-<pre class="mermaid">flowchart TB
+%% Source for architecture diagram (keep in sync with _includes/mermaid-architecture.html).
+%% Verify: scripts/verify-mermaid-diagram.sh
+flowchart TB
   subgraph gh[GitHub]
     GHC[Repositories and checks]
   end
@@ -25,4 +27,3 @@
   GHC -->|signed webhooks| APINode
   AG -->|outbound WSS| APINode
   AG --> APP
-</pre>
