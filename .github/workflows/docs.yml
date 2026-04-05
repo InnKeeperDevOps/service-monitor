@@ -31,11 +31,11 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
-          bundler-cache: true
-          working-directory: docs
+          bundler-cache: false
 
       - name: Build Jekyll site
         run: |
+          bundle install
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
             bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
           else

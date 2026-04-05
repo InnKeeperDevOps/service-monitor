@@ -28,12 +28,13 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
-          bundler-cache: true
-          working-directory: docs
+          bundler-cache: false
 
       - name: Build Jekyll site
         working-directory: docs
-        run: bundle exec jekyll build
+        run: |
+          bundle install
+          bundle exec jekyll build
 
       - name: Publish to site-www branch
         uses: peaceiris/actions-gh-pages@v4
