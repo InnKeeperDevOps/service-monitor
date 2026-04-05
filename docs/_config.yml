@@ -13,3 +13,8 @@ aux_links:
 just_the_docs:
   custom_css:
     - assets/custom.css
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
