@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { bootstrapEnv, isSetupRequired } from "./bootstrapEnv.js";
+import { setupRoutes, type SetupCompleteCallback } from "./setupRoutes.js";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import { Pool } from "pg";
 import {
   agentCommandJobSchema,
   agentToPlatformMessageSchema,
@@ -58,6 +60,7 @@ import { resolveTenantStoreBackend } from "./storeAdapter.js";
 import { createEnrollmentTokenForTenant, listActiveEnrollmentTokensForTenant, validateEnrollmentToken } from "./enrollmentStore.js";
 import { createMemoryAuthStore, seedDevUser } from "./memoryAuthStore.js";
 import { createPostgresAuthStore } from "./postgresAuthStore.js";
+import type { KaiadConfig } from "./configPersistence.js";
 import { enforcePolicy } from "./policy.js";
 import { createReadinessCheckersFromEnv, type ReadinessChecker } from "./readyChecks.js";
 import { RealtimeManager, type PendingCommandRedis } from "./realtimeManager.js";
@@ -68,11 +71,9 @@ import {
   upsertTenantSettings
 } from "./store.js";
 import { createNamedQueue, createRedisConnectionFromEnv } from "@sm/queue";
-import { bootstrapEnv, resolveSetupState } from "./configPersistence.js";
-import { registerSetupRoutes } from "./setupRoutes.js";
+import { ensureCoreSchema } from "@sm/db";
 
 const startedAt = Date.now();
-bootstrapEnv(process.env);
 
 function signValid(secret: string, payload: string, signature?: string): boolean {
   if (!signature) return false;
@@ -159,6 +160,7 @@ export type BuildServerOptions = {
   domainStore?: DomainStore;
   redis?: PendingCommandRedis;
   authStore?: AuthStore;
+  onSetupComplete?: SetupCompleteCallback;
 };
 
 export type RuntimeQueueWiring = {
@@ -193,6 +195,7 @@ async function initDomainStoreFromEnv(): Promise<DomainStore> {
       return createMemoryDomainStore();
     }
     const pool = new Pool({ connectionString: url });
+    await ensureCoreSchema(pool);
     return createPostgresDomainStore(pool);
   }
   return createMemoryDomainStore();
@@ -282,57 +285,65 @@ export function createRuntimeQueueWiringFromEnv(env: NodeJS.ProcessEnv = process
   };
 }
 
+function createSwappableAuthStore(initial: AuthStore): AuthStore & { swap: (next: AuthStore) => void } {
+  let current = initial;
+  return {
+    findUserByEmail: (email) => current.findUserByEmail(email),
+    findMemberships: (userId) => current.findMemberships(userId),
+    createSession: (userId, tenantId, tokenHash, expiresAt) =>
+      current.createSession(userId, tenantId, tokenHash, expiresAt),
+    findSessionByTokenHash: (tokenHash) => current.findSessionByTokenHash(tokenHash),
+    findUserById: (id) => current.findUserById(id),
+    swap: (next) => { current = next; },
+  };
+}
+
 export function buildServer(opts: BuildServerOptions = {}) {
-  const setupState = resolveSetupState(process.env);
   const enqueueGithubJob = opts.enqueueGithubJob ?? noopGithubEnqueue;
   const enqueueLogIngestion = opts.enqueueLogIngestion ?? noopLogIngestion;
   const enqueueAgentCommand = opts.enqueueAgentCommand ?? noopAgentCommandEnqueue;
   const readinessCheckers = opts.readinessCheckers ?? createReadinessCheckersFromEnv();
   const domainStore = resolveDomainStore(opts);
-  let dbPool: import("pg").Pool | null = null;
-  const authStore = opts.authStore ?? (() => {
-    const databaseUrl = process.env.DATABASE_URL?.trim();
-    if (!setupState.setupRequired && databaseUrl) {
-      dbPool = new Pool({ connectionString: databaseUrl });
-      return createPostgresAuthStore(dbPool);
-    }
-    return createMemoryAuthStore();
-  })();
+  const authStore = opts.authStore ?? createMemoryAuthStore();
   const realtimeManager = new RealtimeManager({ redis: opts.redis });
   const app = Fastify();
   app.register(cors);
-  app.register(fastifyStatic, {
-    root: path.resolve(process.cwd(), "dist/public"),
-    prefix: "/",
-    wildcard: false
-  });
   app.register(websocket);
   app.register(correlationIdPlugin);
 
-  app.decorate("realtimeManager", realtimeManager);
-  app.addHook("onClose", async () => {
-    if (dbPool) {
-      await dbPool.end().catch(() => {});
-      dbPool = null;
-    }
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const publicDir = path.join(__dirname, "public");
+  app.register(fastifyStatic, {
+    root: publicDir,
+    prefix: "/",
+    wildcard: false,
   });
+
+  app.decorate("realtimeManager", realtimeManager);
+
+  app.addHook("onRequest", async (req, reply) => {
+    if (!isSetupRequired()) return;
+    const url = req.url;
+    if (
+      url.startsWith("/api/v1/setup/") ||
+      url === "/health" ||
+      url === "/ready" ||
+      !url.startsWith("/api/")
+    ) {
+      return;
+    }
+    return reply.status(503).send({
+      code: "SETUP_REQUIRED",
+      message: "Initial setup has not been completed",
+    });
+  });
+
+  app.register(setupRoutes, { onSetupComplete: opts.onSetupComplete });
 
   // WebSocket routes must live in an async child plugin (Fastify 5 + @fastify/websocket);
   // otherwise upgrades fail with HTTP 500 for both TCP and injectWS.
   app.register(async (instance) => {
     instance.get("/realtime", { websocket: true }, async (socket, req) => {
-      if (setupState.setupRequired) {
-        socket.send(
-          JSON.stringify(
-            apiErrorSchema.parse({
-              code: "SETUP_REQUIRED",
-              message: "Realtime ingress is unavailable until setup completes"
-            })
-          )
-        );
-        socket.close();
-        return;
-      }
       const isDev = process.env.NODE_ENV !== "production";
       const tokenParam = (req.query as Record<string, string | undefined>)?.token;
       let agentTenantId: string | undefined;
@@ -469,30 +480,6 @@ export function buildServer(opts: BuildServerOptions = {}) {
       }
     }
     return { status: "ready" as const };
-  });
-
-  registerSetupRoutes(app, {
-    getStatus: () => ({
-      setupRequired: setupState.setupRequired,
-      setupComplete: setupState.setupComplete,
-      version: process.env.npm_package_version ?? "0.1.0"
-    })
-  });
-
-  app.addHook("preHandler", async (req, reply) => {
-    if (!setupState.setupRequired) {
-      return;
-    }
-    if (!req.url.startsWith("/api/v1/")) {
-      return;
-    }
-    if (req.url.startsWith("/api/v1/setup/")) {
-      return;
-    }
-    return reply.status(503).send({
-      code: "SETUP_REQUIRED",
-      message: "Initial setup has not completed yet"
-    });
   });
 
   app.post("/api/v1/auth/login", async (req, reply) => {
@@ -1110,12 +1097,18 @@ export function buildServer(opts: BuildServerOptions = {}) {
     );
   });
 
-  app.get("/*", async (req, reply) => {
-    const url = req.url.split("?")[0] ?? "/";
-    if (url.startsWith("/api/") || url === "/health" || url === "/ready" || url === "/realtime") {
-      return reply.status(404).send({ code: "NOT_FOUND", message: "Not found" });
+  app.setNotFoundHandler(async (req, reply) => {
+    if (
+      req.method === "GET" &&
+      !req.url.startsWith("/api/") &&
+      !req.url.startsWith("/webhooks/") &&
+      req.url !== "/health" &&
+      req.url !== "/ready" &&
+      req.url !== "/realtime"
+    ) {
+      return reply.sendFile("index.html");
     }
-    return reply.sendFile("index.html");
+    return reply.status(404).send({ code: "NOT_FOUND", message: "Route not found" });
   });
 
   return Object.assign(app, { realtimeManager });
@@ -1123,28 +1116,112 @@ export function buildServer(opts: BuildServerOptions = {}) {
 
 /** Avoid auto-listen in test runners; allow normal `node dist/server.js` startup. */
 if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  bootstrapEnv();
   const store = createMemoryAuthStore();
-  if (process.env.NODE_ENV !== "production") {
+  const seedDevCredentials =
+    process.env.NODE_ENV !== "production" || process.env.SM_ALLOW_DEV_TOKEN === "1";
+  if (seedDevCredentials) {
     seedDevUser(store).catch(() => {});
+  }
+  if (process.env.NODE_ENV !== "production") {
     seedGoogleProviderFromEnv();
   }
-  const queueWiring = createRuntimeQueueWiringFromEnv(process.env);
-  if (!queueWiring) {
+
+  const swappableStore = createSwappableAuthStore(store);
+  let currentQueueWiring = createRuntimeQueueWiringFromEnv(process.env);
+  if (!currentQueueWiring) {
     console.error("[api] REDIS_DISABLED=1 — queue-backed async paths are disabled");
   }
-  const app = buildServer({ authStore: store, ...(queueWiring?.buildOptions ?? {}) });
-  app.listen({ port: Number(process.env.PORT ?? 3001), host: "0.0.0.0" }).catch((err) => {
+
+  const onSetupComplete: SetupCompleteCallback = async (config: KaiadConfig) => {
+    console.error("[api] Setup complete — hot-reloading runtime...");
+
+    if (config.databaseUrl) process.env.DATABASE_URL = config.databaseUrl;
+    if (config.redisUrl) process.env.REDIS_URL = config.redisUrl;
+    if (config.publicBaseUrl) process.env.PUBLIC_BASE_URL = config.publicBaseUrl;
+    if (config.internalApiToken) process.env.INTERNAL_API_TOKEN = config.internalApiToken;
+    if (config.internalApiUrl) process.env.INTERNAL_API_URL = config.internalApiUrl;
+    if (config.defaultWebhookTenantId) process.env.DEFAULT_WEBHOOK_TENANT_ID = config.defaultWebhookTenantId;
+    if (config.githubApp) {
+      process.env.GITHUB_APP_ID = config.githubApp.appId;
+      process.env.GITHUB_APP_PRIVATE_KEY = config.githubApp.privateKeyPem;
+      process.env.GITHUB_WEBHOOK_SECRET = config.githubApp.webhookSecret;
+    }
+    if (config.oauth?.googleClientId) {
+      process.env.GOOGLE_CLIENT_ID = config.oauth.googleClientId;
+      process.env.GOOGLE_CLIENT_SECRET = config.oauth.googleClientSecret ?? "";
+    }
+    if (config.kubernetes?.namespace) {
+      process.env.KAIAD_K8S_NAMESPACE = config.kubernetes.namespace;
+    }
+
+    try {
+      const { Pool } = await import("pg");
+      const pool = new Pool({ connectionString: config.databaseUrl });
+      const pgAuth = createPostgresAuthStore(pool);
+      swappableStore.swap(pgAuth);
+      console.error("[api] Auth store swapped to Postgres");
+    } catch (err) {
+      console.error("[api] Failed to create Postgres auth store:", err);
+    }
+
+    if (config.oauth?.googleClientId) {
+      seedGoogleProviderFromEnv();
+      console.error("[api] Google OAuth provider seeded");
+    }
+
+    if (!currentQueueWiring) {
+      const newWiring = createRuntimeQueueWiringFromEnv(process.env);
+      if (newWiring) {
+        currentQueueWiring = newWiring;
+        console.error("[api] Queue wiring initialized (note: already-registered routes still use noop enqueue — restart recommended for full queue support)");
+      }
+    }
+
+    console.error("[api] Hot-reload complete");
+  };
+
+  const app = buildServer({
+    authStore: swappableStore,
+    onSetupComplete,
+    ...(currentQueueWiring?.buildOptions ?? {}),
+  });
+  let shutdownFn = async () => {
+    await currentQueueWiring?.close().catch(() => {});
+    await app.close().catch(() => {});
+  };
+
+  app.listen({ port: Number(process.env.PORT ?? 3001), host: "0.0.0.0" }).then(() => {
+    if (process.env.SM_EMBED_WORKER === "1") {
+      const port = Number(process.env.PORT ?? 3001);
+      if (!process.env.INTERNAL_API_URL) {
+        process.env.INTERNAL_API_URL = `http://127.0.0.1:${port}`;
+      }
+      import("@sm/worker/runtime").then((mod) => {
+        const { connection: wc, workers: wi } = mod.startQueueConsumersFromEnv(process.env);
+        if (wi.length > 0) {
+          console.error(`[api] Embedded worker: ${wi.length} BullMQ consumer(s) started`);
+        } else {
+          console.error("[api] Embedded worker: no consumers started (REDIS_DISABLED?)");
+        }
+        const prev = shutdownFn;
+        shutdownFn = async () => {
+          await mod.shutdownWorkersAndRedis(wi, wc).catch(() => {});
+          await prev();
+        };
+      }).catch((err) => {
+        console.error("[api] Failed to start embedded worker:", err);
+      });
+    }
+  }).catch((err) => {
     app.log.error(err);
     process.exit(1);
   });
-  const shutdown = async () => {
-    await queueWiring?.close().catch(() => {});
-    await app.close().catch(() => {});
-  };
+
   process.on("SIGTERM", () => {
-    void shutdown();
+    void shutdownFn();
   });
   process.on("SIGINT", () => {
-    void shutdown();
+    void shutdownFn();
   });
 }

@@ -1,3 +1,4 @@
+import { ensureCoreSchema } from "@sm/db";
 import { createMemoryTenantStore, __resetMemoryTenantStoreForTests, type TenantStore } from "./memoryTenantStore.js";
 import { createPostgresTenantStore } from "./postgresTenantStore.js";
 import { resolveTenantStoreBackend } from "./storeAdapter.js";
@@ -24,6 +25,7 @@ async function initStore(): Promise<TenantStore> {
       return createMemoryTenantStore();
     }
     const pool = new Pool({ connectionString: url });
+    await ensureCoreSchema(pool);
     return createPostgresTenantStore(pool);
   }
   return createMemoryTenantStore();

@@ -5,7 +5,8 @@
   "main": "dist/server.js",
   "types": "dist/server.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ./scripts/copy-web-dist.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "postbuild": "node scripts/copy-web.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -13,13 +14,15 @@
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
-    "@fastify/static": "^8.3.0",
+    "@fastify/static": "^9.0.0",
     "@fastify/websocket": "^11.0.1",
     "@sm/contracts": "workspace:*",
     "@sm/db": "workspace:*",
     "@sm/domain": "workspace:*",
     "@sm/github": "workspace:*",
     "@sm/queue": "workspace:*",
+    "@sm/web": "workspace:*",
+    "@sm/worker": "workspace:*",
     "fastify": "^5.2.1",
     "fastify-plugin": "^5.1.0",
     "pg": "^8.14.1"

@@ -16,6 +16,12 @@ export default defineConfig({
   build: {
     outDir: "dist"
   },
+  server: {
+    allowedHosts: ["localhost", "127.0.0.1", "panel.kaiad.dev"]
+  },
+  preview: {
+    allowedHosts: ["localhost", "127.0.0.1", "panel.kaiad.dev"]
+  },
   test: {
     include: ["test/**/*.test.tsx"],
     environment: "jsdom",

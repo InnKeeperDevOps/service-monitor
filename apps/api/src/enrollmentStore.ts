@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { EnrollmentTokenMetadata } from "@sm/contracts";
+import { ensureCoreSchema } from "@sm/db";
 
 export type EnrollmentTokenRow = {
   id: string;
@@ -91,6 +92,7 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
   try {
     const { Pool } = await import("pg");
     const pool = new Pool({ connectionString: url });
+    await ensureCoreSchema(pool);
     return {
       async create(input) {
         const plaintext = crypto.randomBytes(32).toString("hex");

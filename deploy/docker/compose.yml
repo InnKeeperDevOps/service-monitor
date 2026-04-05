@@ -13,8 +13,11 @@ services:
       pnpm --filter @sm/web exec vite preview --host 0.0.0.0 --port 4173"
     environment:
       - NODE_ENV=production
+      # Baked into the client bundle at build time. Override for local all-in-one: VITE_API_BASE=http://localhost:3001
+      - VITE_API_BASE=${VITE_API_BASE:-https://api.kaiad.dev}
     ports:
-      - "4173:4173"
+      # Set WEB_HOST_PORT if 4173 is already in use on the host (e.g. local vite preview).
+      - "${WEB_HOST_PORT:-4173}:4173"
     healthcheck:
       test:
         [
@@ -28,6 +31,11 @@ services:
   api:
     image: node:22
     working_dir: /workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ../..:/workspace
     command: sh -c "corepack enable && pnpm exec turbo run build --filter=@sm/api && pnpm --filter @sm/api start"
@@ -36,6 +44,13 @@ services:
       # Acceptance stack + e2e use Bearer dev-token against production-mode API.
       - SM_ALLOW_DEV_TOKEN=1
       - PORT=3001
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/service_monitor
+      - REDIS_URL=redis://redis:6379
+      - INTERNAL_API_TOKEN=dev-token
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     ports:
       - "3001:3001"
     healthcheck:
@@ -85,6 +100,10 @@ services:
     environment:
       - NODE_ENV=production
       - WORKER_HEALTH_PORT=9090
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/service_monitor
+      - REDIS_URL=redis://redis:6379
+      - INTERNAL_API_URL=http://api:3001
+      - INTERNAL_API_TOKEN=dev-token
     ports:
       - "9090:9090"
     healthcheck:

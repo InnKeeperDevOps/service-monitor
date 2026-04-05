@@ -38,6 +38,49 @@ Endpoints after startup:
 - API readiness: `http://localhost:3001/ready`
 - Worker health: `http://localhost:9090/health`
 
+## Quick Start (Single Container)
+
+Kaiad can run as a single container serving the web UI, API, and optional embedded worker on one port:
+
+```bash
+docker compose -f deploy/docker/compose.unified.yml up --build
+```
+
+Open http://localhost:3001 to access the setup wizard. You'll configure:
+
+- PostgreSQL and Redis connections
+- Admin account
+- GitHub App credentials (optional)
+- OAuth providers (optional)
+
+### Configuration
+
+Kaiad stores its config in `KAIAD_DATA_DIR` (default: `/data` in Docker, `./data` locally).
+
+**Environment variable precedence**: Environment variables always override values from `kaiad.config.json`. This means Kubernetes secrets, Docker env, or shell exports take priority over the config file.
+
+**Key environment variables:**
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | HTTP listen port | `3001` |
+| `KAIAD_DATA_DIR` | Data/config directory | `./data` |
+| `DATABASE_URL` | PostgreSQL connection string | Set via wizard |
+| `REDIS_URL` | Redis connection string | Set via wizard |
+| `SM_EMBED_WORKER` | Run BullMQ workers in API process | `0` |
+| `SM_ALLOW_DEV_TOKEN` | Allow `dev-token` auth in production | `0` |
+
+**Pre-configured deployment** (skip wizard): Set `DATABASE_URL` and `REDIS_URL` as environment variables. The wizard is only shown when no `DATABASE_URL` is available.
+
+### Kubernetes
+
+For Kubernetes deployments:
+
+- Mount `KAIAD_DATA_DIR` as a PersistentVolume or use environment variables exclusively
+- Use Kubernetes Secrets for `DATABASE_URL`, `REDIS_URL`, `GITHUB_APP_PRIVATE_KEY`, etc.
+- The config file (`kaiad.config.json`) is written with mode `0600` for security
+- Set `SM_EMBED_WORKER=1` for single-pod deployments or run the worker separately for scale
+
 ## Option 2: Run each app locally (multiple terminals)
 
 Use one terminal per long-running process.

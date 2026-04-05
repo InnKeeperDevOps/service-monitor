@@ -5,62 +5,59 @@ import type { AuthStore } from "./auth.js";
 export function createPostgresAuthStore(pool: Pool): AuthStore {
   return {
     async findUserByEmail(email) {
-      const result = await pool.query(
-        `select id, email, password_hash from users where lower(email) = lower($1) limit 1`,
+      const { rows } = await pool.query(
+        "SELECT id, email, password_hash FROM users WHERE email = $1",
         [email]
       );
-      if (result.rowCount === 0) {
-        return null;
-      }
-      const row = result.rows[0] as { id: string; email: string; password_hash: string | null };
-      return { id: row.id, email: row.email, passwordHash: row.password_hash };
+      if (rows.length === 0) return null;
+      return {
+        id: rows[0].id,
+        email: rows[0].email,
+        passwordHash: rows[0].password_hash,
+      };
     },
+
     async findMemberships(userId) {
-      const result = await pool.query(
-        `select tenant_id, role from tenant_memberships where user_id = $1 order by role asc`,
+      const { rows } = await pool.query(
+        "SELECT tenant_id, role FROM tenant_memberships WHERE user_id = $1",
         [userId]
       );
-      return result.rows.map((row) => ({
-        tenantId: String((row as { tenant_id: string }).tenant_id),
-        role: String((row as { role: string }).role)
+      return rows.map((r: { tenant_id: string; role: string }) => ({
+        tenantId: r.tenant_id,
+        role: r.role,
       }));
     },
+
     async createSession(userId, tenantId, tokenHash, expiresAt) {
       const id = `sess-${crypto.randomUUID()}`;
       await pool.query(
-        `insert into sessions (id, user_id, tenant_id, token_hash, expires_at) values ($1, $2, $3, $4, $5)`,
+        "INSERT INTO sessions (id, user_id, tenant_id, token_hash, expires_at) VALUES ($1, $2, $3, $4, $5)",
         [id, userId, tenantId, tokenHash, expiresAt]
       );
       return id;
     },
+
     async findSessionByTokenHash(tokenHash) {
-      const result = await pool.query(
-        `select id, user_id, tenant_id, expires_at from sessions where token_hash = $1 limit 1`,
+      const { rows } = await pool.query(
+        "SELECT id, user_id, tenant_id, expires_at FROM sessions WHERE token_hash = $1",
         [tokenHash]
       );
-      if (result.rowCount === 0) {
-        return null;
-      }
-      const row = result.rows[0] as {
-        id: string;
-        user_id: string;
-        tenant_id: string;
-        expires_at: Date | string;
-      };
+      if (rows.length === 0) return null;
       return {
-        id: row.id,
-        userId: row.user_id,
-        tenantId: row.tenant_id,
-        expiresAt: row.expires_at instanceof Date ? row.expires_at : new Date(row.expires_at)
+        id: rows[0].id,
+        userId: rows[0].user_id,
+        tenantId: rows[0].tenant_id,
+        expiresAt: new Date(rows[0].expires_at),
       };
     },
+
     async findUserById(id) {
-      const result = await pool.query(`select id, email from users where id = $1 limit 1`, [id]);
-      if (result.rowCount === 0) {
-        return null;
-      }
-      const row = result.rows[0] as { id: string; email: string };
-      return { id: row.id, email: row.email };
-    }
+      const { rows } = await pool.query(
+        "SELECT id, email FROM users WHERE id = $1",
+        [id]
+      );
+      if (rows.length === 0) return null;
+      return { id: rows[0].id, email: rows[0].email };
+    },
   };
 }

@@ -21,11 +21,12 @@ export function AgentsPage() {
     <section>
       <h2 style={{ margin: "0 0 1rem" }}>Connected Agents</h2>
       {error && <div style={{ color: "var(--color-danger)", marginBottom: "0.5rem" }}>{error}</div>}
-      {agents.length === 0 ? (
+      {!error && agents.length === 0 ? (
         <p style={{ color: "var(--color-text-secondary)" }}>
           No agents connected. Create an enrollment token in Settings to register an agent.
         </p>
-      ) : (
+      ) : null}
+      {!error && agents.length > 0 ? (
         <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
           {agents.map((a) => {
             const badge = statusBadge[a.status] ?? statusBadge.unknown;
@@ -47,7 +48,7 @@ export function AgentsPage() {
             );
           })}
         </div>
-      )}
+      ) : null}
     </section>
   );
 }

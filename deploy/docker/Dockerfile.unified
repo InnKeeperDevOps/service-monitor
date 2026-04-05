@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+
+# ── Build stage ────────────────────────────────────────────
+FROM node:22-slim AS build
+WORKDIR /build
+
+# Enable corepack for pnpm
+RUN corepack enable
+
+# Copy package manifests first for caching
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/worker/package.json apps/worker/
+COPY packages/contracts/package.json packages/contracts/
+COPY packages/db/package.json packages/db/
+COPY packages/domain/package.json packages/domain/
+COPY packages/github/package.json packages/github/
+COPY packages/queue/package.json packages/queue/
+COPY packages/config/package.json packages/config/
+COPY packages/workflow-engine/package.json packages/workflow-engine/
+COPY packages/tsconfig/package.json packages/tsconfig/
+COPY packages/eslint-config/package.json packages/eslint-config/
+COPY e2e/acceptance/package.json e2e/acceptance/
+COPY e2e/playwright/package.json e2e/playwright/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source
+COPY . .
+
+# Build everything (turbo respects dependency order: packages → web → api)
+RUN pnpm run build
+
+# ── Runtime stage ──────────────────────────────────────────
+FROM node:22-slim AS runtime
+WORKDIR /app
+
+RUN corepack enable
+
+# Copy built artifacts and node_modules
+COPY --from=build /build/package.json /build/pnpm-lock.yaml /build/pnpm-workspace.yaml /build/turbo.json ./
+COPY --from=build /build/node_modules ./node_modules
+COPY --from=build /build/apps/api/dist ./apps/api/dist
+COPY --from=build /build/apps/api/package.json ./apps/api/
+COPY --from=build /build/apps/api/node_modules ./apps/api/node_modules
+COPY --from=build /build/apps/worker/dist ./apps/worker/dist
+COPY --from=build /build/apps/worker/package.json ./apps/worker/
+COPY --from=build /build/apps/worker/node_modules ./apps/worker/node_modules
+COPY --from=build /build/packages ./packages
+
+ENV NODE_ENV=production
+ENV PORT=3001
+ENV SM_EMBED_WORKER=1
+ENV KAIAD_DATA_DIR=/data
+
+VOLUME ["/data"]
+EXPOSE 3001
+
+CMD ["node", "apps/api/dist/server.js"]

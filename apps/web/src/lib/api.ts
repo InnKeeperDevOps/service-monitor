@@ -148,5 +148,44 @@ export const api = {
     apiFetch<{ authorizeUrl: string }>(`/api/v1/auth/oauth/authorize?provider=${encodeURIComponent(providerId)}`),
 
   handleOAuthCallback: (code: string, state: string) =>
-    apiFetch<{ token: string }>(`/api/v1/auth/oauth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`)
+    apiFetch<{ token: string }>(`/api/v1/auth/oauth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`),
+
+  getSetupStatus: () =>
+    apiFetch<{ setupRequired: boolean; version: string }>("/api/v1/setup/status"),
+
+  testDatabase: (databaseUrl: string) =>
+    apiFetch<{ ok: boolean }>("/api/v1/setup/test-database", {
+      method: "POST",
+      body: JSON.stringify({ databaseUrl }),
+    }),
+
+  testRedis: (redisUrl: string) =>
+    apiFetch<{ ok: boolean }>("/api/v1/setup/test-redis", {
+      method: "POST",
+      body: JSON.stringify({ redisUrl }),
+    }),
+
+  getSetupTenants: (databaseUrl: string) =>
+    apiFetch<{ tenants: { id: string; name: string }[] }>(
+      `/api/v1/setup/tenants?databaseUrl=${encodeURIComponent(databaseUrl)}`
+    ),
+
+  completeSetup: (data: {
+    databaseUrl: string;
+    redisUrl: string;
+    publicBaseUrl?: string;
+    adminEmail: string;
+    adminPassword: string;
+    githubAppId?: string;
+    githubAppPrivateKeyPem?: string;
+    githubWebhookSecret?: string;
+    googleClientId?: string;
+    googleClientSecret?: string;
+    defaultWebhookTenantId?: string;
+    kubernetesNamespace?: string;
+  }) =>
+    apiFetch<{ ok: boolean; tenantId: string; adminEmail: string }>("/api/v1/setup/complete", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };

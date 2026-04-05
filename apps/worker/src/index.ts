@@ -6,6 +6,7 @@ import {
 import type { JobsOptions, Queue } from "bullmq";
 import { fingerprintError } from "@sm/domain";
 import { GitHubAppClient, policyGuardedMutation } from "@sm/github";
+import { ensureCoreSchema } from "@sm/db";
 import { queueNameFor } from "@sm/queue";
 import { executors, type ExecutorRunMetadata } from "./executors.js";
 
@@ -38,6 +39,7 @@ async function getAuditPool(): Promise<{ query: QueryFn } | null> {
       try {
         const { Pool } = await import("pg");
         const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+        await ensureCoreSchema(pool);
         return {
           query: async (sql: string, params: unknown[]) => {
             const result = await pool.query(sql, params);

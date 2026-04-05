@@ -16,6 +16,7 @@ import { AgentsPage } from "./features/agents/AgentsPage.js";
 import { ServicesPage } from "./features/services/ServicesPage.js";
 import { SettingsPage } from "./features/settings/SettingsPage.js";
 import { LoginPage } from "./features/auth/LoginPage.js";
+import { SetupWizardPage } from "./features/setup/SetupWizardPage.js";
 import { WorkflowEditorPage } from "./features/workflow-editor/WorkflowEditorPage.js";
 import { api, type Incident } from "./lib/api.js";
 import { AuthContext, buildAuthState, type AuthUser } from "./lib/useAuth.js";
@@ -46,6 +47,30 @@ function hasToken(): boolean {
 }
 
 export function App() {
+  const [setupStatus, setSetupStatus] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    api.getSetupStatus()
+      .then((res) => setSetupStatus(res.setupRequired))
+      .catch(() => setSetupStatus(false));
+  }, []);
+
+  if (setupStatus === null) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+        <p style={{ color: "var(--color-text-secondary)" }}>Loading…</p>
+      </div>
+    );
+  }
+
+  if (setupStatus) {
+    return <SetupWizardPage />;
+  }
+
+  return <AppMain />;
+}
+
+function AppMain() {
   const [route, setRoute] = useState<Route>(() => {
     if (!hasToken() && getHashRoute() !== "login") return "login";
     return getHashRoute();
