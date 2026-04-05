@@ -57,10 +57,19 @@ export type MonitoredService = {
 
 export type WorkflowGraphNode = {
   id: string;
-  type: string;
   position?: { x: number; y: number };
-  data?: Record<string, unknown>;
-};
+} & (
+  | { type: "onBuild"; data?: { displayName?: string } }
+  | { type: "onStartup"; data?: { displayName?: string } }
+  | { type: "onCrash"; data?: { displayName?: string } }
+  | { type: "onShutdown"; data?: { displayName?: string } }
+  | { type: "onLogPattern"; data: { filter: string; displayName?: string } }
+  | { type: "onSchedule"; data: { schedule: string; displayName?: string } }
+  | {
+      type: string;
+      data?: Record<string, unknown>;
+    }
+);
 
 export type WorkflowGraph = {
   id: string;
@@ -151,8 +160,17 @@ export const api = {
       body: JSON.stringify(data)
     }),
   listEnrollmentTokens: () =>
-    apiFetch<{ tokens: { id: string; tenantId: string; expiresAt: string; createdBy: string; usedAt: string | null }[] }>(
+    apiFetch<{ tokens: { id: string; tenantId: string; expiresAt: string; createdBy: string; createdAt: string; usedAt: string | null }[] }>(
       "/api/v1/agents/enrollment-tokens"
+    ),
+
+  createEnrollmentToken: (data: { ttlSeconds: number }) =>
+    apiFetch<{ id: string; tenantId: string; token: string; expiresAt: string; createdBy: string; createdAt: string; usedAt: string | null }>(
+      "/api/v1/agents/enrollment-tokens",
+      {
+        method: "POST",
+        body: JSON.stringify(data)
+      }
     ),
 
   listGithubInstallations: () =>

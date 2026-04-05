@@ -2,8 +2,17 @@ import { useEffect, useState } from "react";
 import { Settings, Key, Shield, GitBranch, Cpu, Lock } from "lucide-react";
 import { api } from "../../lib/api.js";
 
-type TokenInfo = { id: string; tenantId: string; expiresAt: string; createdBy: string; usedAt: string | null };
+type TokenInfo = { id: string; tenantId: string; expiresAt: string; createdBy: string; createdAt: string; usedAt: string | null };
 type GithubInstallation = { installationId: number; accountLogin: string; repos?: string[] };
+type EnrollmentTokenPreset = "1h" | "24h" | "7d" | "30d";
+
+const ENROLLMENT_MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
+const ENROLLMENT_PRESET_SECONDS: Record<EnrollmentTokenPreset, number> = {
+  "1h": 60 * 60,
+  "24h": 24 * 60 * 60,
+  "7d": 7 * 24 * 60 * 60,
+  "30d": 30 * 24 * 60 * 60
+};
 
 const sectionStyle: React.CSSProperties = {
   background: "var(--color-surface)",
@@ -16,12 +25,31 @@ const sectionStyle: React.CSSProperties = {
 const h3Style: React.CSSProperties = { margin: "0 0 0.75rem", fontSize: "1rem", display: "flex", alignItems: "center", gap: "0.4rem" };
 const mutedText: React.CSSProperties = { color: "var(--color-text-secondary)", margin: 0, fontSize: "0.85rem" };
 
+function formatDateTimeLocal(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function toPresetExpiration(preset: EnrollmentTokenPreset): string {
+  return formatDateTimeLocal(new Date(Date.now() + ENROLLMENT_PRESET_SECONDS[preset] * 1000));
+}
+
 export function SettingsPage() {
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
   const [installations, setInstallations] = useState<GithubInstallation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [selectedPreset, setSelectedPreset] = useState<EnrollmentTokenPreset>("24h");
+  const [expiresAtInput, setExpiresAtInput] = useState<string>(() => toPresetExpiration("24h"));
+  const [isGeneratingToken, setIsGeneratingToken] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [latestToken, setLatestToken] = useState<string | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
 
   useEffect(() => {
     api.listEnrollmentTokens().then((r) => setTokens(r.tokens)).catch(() => {});
@@ -54,6 +82,56 @@ export function SettingsPage() {
         });
     }
   }, []);
+
+  async function handleGenerateEnrollmentToken() {
+    setTokenError(null);
+    setLatestToken(null);
+    setCopyMessage(null);
+
+    const expiration = new Date(expiresAtInput);
+    if (!expiresAtInput || Number.isNaN(expiration.getTime())) {
+      setTokenError("Choose a valid expiration date and time.");
+      return;
+    }
+
+    const ttlSeconds = Math.floor((expiration.getTime() - Date.now()) / 1000);
+    if (ttlSeconds <= 0) {
+      setTokenError("Expiration must be in the future.");
+      return;
+    }
+    if (ttlSeconds > ENROLLMENT_MAX_TTL_SECONDS) {
+      setTokenError("Expiration cannot be more than 365 days from now.");
+      return;
+    }
+
+    setIsGeneratingToken(true);
+    try {
+      const created = await api.createEnrollmentToken({ ttlSeconds });
+      const { token, ...metadata } = created;
+      setTokens((prev) => [metadata, ...prev]);
+      setLatestToken(token);
+      setError(null);
+    } catch (e) {
+      setTokenError((e as Error).message);
+    } finally {
+      setIsGeneratingToken(false);
+    }
+  }
+
+  async function handleCopyToken() {
+    if (!latestToken) {
+      return;
+    }
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(latestToken);
+      setCopyMessage("Copied token to clipboard.");
+    } catch {
+      setCopyMessage("Unable to copy token automatically.");
+    }
+  }
 
   const policy = settings?.automationPolicy as { repos?: string[]; branches?: string[]; actions?: string[] } | undefined;
 
@@ -88,6 +166,82 @@ export function SettingsPage() {
       {/* Enrollment Tokens */}
       <div style={sectionStyle}>
         <h3 style={h3Style}><Key size={16} /> Enrollment Tokens</h3>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "end", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.8rem" }}>
+            <span style={{ color: "var(--color-text-secondary)" }}>Preset</span>
+            <select
+              value={selectedPreset}
+              onChange={(e) => {
+                const preset = e.target.value as EnrollmentTokenPreset;
+                setSelectedPreset(preset);
+                setExpiresAtInput(toPresetExpiration(preset));
+              }}
+              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.35rem 0.45rem", background: "var(--color-surface)", color: "var(--color-text-primary)" }}
+            >
+              <option value="1h">1 hour</option>
+              <option value="24h">24 hours</option>
+              <option value="7d">7 days</option>
+              <option value="30d">30 days</option>
+            </select>
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.8rem" }}>
+            <span style={{ color: "var(--color-text-secondary)" }}>Expires at</span>
+            <input
+              type="datetime-local"
+              aria-label="Expires at"
+              value={expiresAtInput}
+              onChange={(e) => setExpiresAtInput(e.target.value)}
+              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.35rem 0.45rem", background: "var(--color-surface)", color: "var(--color-text-primary)" }}
+            />
+          </label>
+          <button
+            onClick={() => void handleGenerateEnrollmentToken()}
+            disabled={isGeneratingToken}
+            style={{
+              background: "var(--color-primary)",
+              color: "var(--color-primary-foreground)",
+              border: "none",
+              borderRadius: 6,
+              padding: "0.45rem 0.8rem",
+              fontSize: "0.85rem",
+              cursor: isGeneratingToken ? "not-allowed" : "pointer",
+              opacity: isGeneratingToken ? 0.75 : 1
+            }}
+          >
+            {isGeneratingToken ? "Generating..." : "Generate token"}
+          </button>
+        </div>
+        {tokenError && <p style={{ color: "var(--color-danger)", fontSize: "0.85rem", margin: "0 0 0.75rem" }}>{tokenError}</p>}
+        {latestToken && (
+          <div style={{ marginBottom: "0.75rem", background: "var(--color-surface-muted)", border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.65rem" }}>
+            <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", marginBottom: "0.35rem" }}>
+              New enrollment token (copy now - shown only once):
+            </div>
+            <code style={{ display: "block", fontSize: "0.8rem", wordBreak: "break-all" }}>{latestToken}</code>
+            <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => void handleCopyToken()}
+                style={{
+                  background: "var(--color-surface)",
+                  color: "var(--color-text-primary)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 6,
+                  padding: "0.35rem 0.65rem",
+                  fontSize: "0.8rem",
+                  cursor: "pointer"
+                }}
+              >
+                Copy token
+              </button>
+              {copyMessage && (
+                <span style={{ fontSize: "0.8rem", color: copyMessage.startsWith("Copied") ? "var(--color-success)" : "var(--color-danger)" }}>
+                  {copyMessage}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
         {tokens.length === 0 ? (
           <p style={mutedText}>No enrollment tokens created.</p>
         ) : (
