@@ -7,9 +7,9 @@ services:
         condition: service_healthy
     volumes:
       - ../..:/workspace
+    # Host checkout must have node_modules (CI runs pnpm install before compose; locally: pnpm install at repo root).
     command: >-
-      sh -c "corepack enable && NODE_ENV=development pnpm install &&
-      pnpm exec turbo run build --filter=@sm/web &&
+      sh -c "corepack enable && pnpm exec turbo run build --filter=@sm/web &&
       pnpm --filter @sm/web exec vite preview --host 0.0.0.0 --port 4173"
     environment:
       - NODE_ENV=production
@@ -30,7 +30,7 @@ services:
     working_dir: /workspace
     volumes:
       - ../..:/workspace
-    command: sh -c "corepack enable && NODE_ENV=development pnpm install && pnpm exec turbo run build --filter=@sm/api && pnpm --filter @sm/api start"
+    command: sh -c "corepack enable && pnpm exec turbo run build --filter=@sm/api && pnpm --filter @sm/api start"
     environment:
       - NODE_ENV=production
       - PORT=3001
@@ -73,11 +73,13 @@ services:
   worker:
     image: node:22
     working_dir: /workspace
+    depends_on:
+      api:
+        condition: service_healthy
     volumes:
       - ../..:/workspace
     command: >-
-      sh -c "corepack enable && NODE_ENV=development pnpm install &&
-      pnpm exec turbo run build --filter=@sm/worker && pnpm --filter @sm/worker start"
+      sh -c "corepack enable && pnpm exec turbo run build --filter=@sm/worker && pnpm --filter @sm/worker start"
     environment:
       - NODE_ENV=production
       - WORKER_HEALTH_PORT=9090
