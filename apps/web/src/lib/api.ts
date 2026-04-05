@@ -50,15 +50,27 @@ export type MonitoredService = {
   repo: string;
   branch: string;
   agentId: string | null;
+  workflowGraphId?: string | null;
   dockerImage?: string | null;
   composePath?: string | null;
 };
 
+export type WorkflowGraphNode = {
+  id: string;
+  type: string;
+  position?: { x: number; y: number };
+  data?: Record<string, unknown>;
+};
+
 export type WorkflowGraph = {
   id: string;
+  tenantId: string;
   serviceId: string;
-  nodes: { id: string; type: string }[];
+  version: number;
+  nodes: WorkflowGraphNode[];
   edges: { from: string; to: string }[];
+  viewport?: { x: number; y: number; zoom: number };
+  isActive: boolean;
 };
 
 export type WorkflowExecutionResponse = {
@@ -68,6 +80,11 @@ export type WorkflowExecutionResponse = {
   agentId: string;
   commandId: string;
   dispatchState: "queued_for_dispatch";
+};
+
+export type WorkflowDryRunResponse = {
+  success: boolean;
+  steps: { nodeId: string; nodeType: string; success: boolean; output?: string }[];
 };
 
 export const api = {
@@ -103,19 +120,30 @@ export const api = {
       body: JSON.stringify(data)
     }),
 
-  createWorkflow: (data: { serviceId: string; nodes: { id: string; type: string }[]; edges: { from: string; to: string }[] }) =>
+  createWorkflow: (data: { serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
     apiFetch<WorkflowGraph>("/api/v1/workflows", {
       method: "POST",
       body: JSON.stringify(data)
     }),
 
-  executeWorkflow: (data: { serviceId: string; nodes: { id: string; type: string }[]; edges: { from: string; to: string }[] }) =>
+  executeWorkflow: (data: { serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
     apiFetch<WorkflowExecutionResponse>("/api/v1/workflows/execute", {
       method: "POST",
       body: JSON.stringify(data)
     }),
 
+  dryRunWorkflow: (data: { serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
+    apiFetch<WorkflowDryRunResponse>("/api/v1/workflows/dry-run", {
+      method: "POST",
+      body: JSON.stringify(data)
+    }),
+
   listWorkflows: () => apiFetch<{ graphs: WorkflowGraph[] }>("/api/v1/workflows"),
+  setServiceWorkflow: (serviceId: string, workflowGraphId: string | null) =>
+    apiFetch<MonitoredService>(`/api/v1/services/${serviceId}/workflow`, {
+      method: "PATCH",
+      body: JSON.stringify({ workflowGraphId })
+    }),
   getSettings: () => apiFetch<Record<string, unknown>>("/api/v1/settings").catch(() => null),
   updateSettings: (data: Record<string, unknown>) =>
     apiFetch<Record<string, unknown>>("/api/v1/settings", {

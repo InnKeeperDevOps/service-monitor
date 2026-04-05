@@ -180,6 +180,7 @@ export interface ServiceRow {
   id: string;
   tenantId: string;
   agentId: string | null;
+  workflowGraphId: string | null;
   name: string;
   repo: string;
   branch: string;
@@ -192,6 +193,7 @@ function mapService(r: Record<string, unknown>): ServiceRow {
     id: r.id as string,
     tenantId: r.tenant_id as string,
     agentId: (r.agent_id as string) ?? null,
+    workflowGraphId: (r.workflow_graph_id as string) ?? null,
     name: r.name as string,
     repo: r.repo as string,
     branch: r.branch as string,
@@ -248,6 +250,25 @@ export async function createService(
   return mapService(rows[0]);
 }
 
+export async function updateServiceWorkflow(
+  query: QueryFn,
+  tenantId: string,
+  serviceId: string,
+  workflowGraphId: string | null
+): Promise<ServiceRow | undefined> {
+  const { rows } = await query(
+    `UPDATE monitored_services
+     SET workflow_graph_id = $3
+     WHERE tenant_id = $1 AND id = $2
+     RETURNING *`,
+    [tenantId, serviceId, workflowGraphId]
+  );
+  if (rows.length === 0) {
+    return undefined;
+  }
+  return mapService(rows[0]);
+}
+
 // ---------------------------------------------------------------------------
 // Workflow Graphs
 // ---------------------------------------------------------------------------
@@ -287,6 +308,21 @@ export async function listWorkflowGraphs(
     [tenantId],
   );
   return rows.map(mapWorkflowGraph);
+}
+
+export async function getWorkflowGraph(
+  query: QueryFn,
+  tenantId: string,
+  workflowId: string
+): Promise<WorkflowGraphRow | undefined> {
+  const { rows } = await query(
+    `SELECT * FROM workflow_graphs WHERE tenant_id = $1 AND id = $2`,
+    [tenantId, workflowId]
+  );
+  if (rows.length === 0) {
+    return undefined;
+  }
+  return mapWorkflowGraph(rows[0]);
 }
 
 export async function createWorkflowGraph(

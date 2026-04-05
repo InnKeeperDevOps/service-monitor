@@ -31,9 +31,15 @@ export type DomainStore = {
       composePath?: string;
     }
   ): Promise<MonitoredService>;
+  updateServiceWorkflow(
+    tenantId: string,
+    serviceId: string,
+    workflowGraphId: string | null
+  ): Promise<MonitoredService | undefined>;
   deleteService(tenantId: string, id: string): Promise<boolean>;
 
   listWorkflowGraphs(tenantId: string): Promise<WorkflowGraph[]>;
+  getWorkflowGraph(tenantId: string, workflowId: string): Promise<WorkflowGraph | undefined>;
   createWorkflowGraph(tenantId: string, data: { serviceId: string; nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] }): Promise<WorkflowGraph>;
 };
 
@@ -106,6 +112,7 @@ export function createMemoryDomainStore(): DomainStore {
         id: `svc-${uid()}`,
         tenantId,
         agentId: data.agentId ?? null,
+        workflowGraphId: null,
         name: data.name,
         repo: data.repo,
         branch: data.branch,
@@ -113,6 +120,12 @@ export function createMemoryDomainStore(): DomainStore {
         composePath: data.composePath ?? null
       };
       services.set(svc.id, svc);
+      return svc;
+    },
+    async updateServiceWorkflow(tenantId, serviceId, workflowGraphId) {
+      const svc = services.get(serviceId);
+      if (!svc || svc.tenantId !== tenantId) return undefined;
+      svc.workflowGraphId = workflowGraphId;
       return svc;
     },
     async deleteService(tenantId, id) {
@@ -124,6 +137,11 @@ export function createMemoryDomainStore(): DomainStore {
 
     async listWorkflowGraphs(tenantId) {
       return [...workflows.values()].filter((w) => w.tenantId === tenantId);
+    },
+    async getWorkflowGraph(tenantId, workflowId) {
+      const workflow = workflows.get(workflowId);
+      if (!workflow || workflow.tenantId !== tenantId) return undefined;
+      return workflow;
     },
     async createWorkflowGraph(tenantId, data) {
       const existing = [...workflows.values()].filter(

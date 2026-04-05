@@ -137,10 +137,29 @@ describe("services API", () => {
     expect(listRes.json().services).toHaveLength(1);
     expect(listRes.json().services[0]).toEqual(
       expect.objectContaining({
+        workflowGraphId: null,
         dockerImage: "acme/app:latest",
         composePath: "deploy/compose.yml"
       })
     );
+  });
+
+  it("sets active workflow for a service", async () => {
+    const svc = await domainStore.createService("t-1", { name: "svc-active", repo: "o/r", branch: "main" });
+    const graph = await domainStore.createWorkflowGraph("t-1", {
+      serviceId: svc.id,
+      nodes: [{ id: "n1", type: "onCrash" }],
+      edges: []
+    });
+
+    const setRes = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/services/${svc.id}/workflow`,
+      headers: AUTH,
+      payload: { workflowGraphId: graph.id }
+    });
+    expect(setRes.statusCode).toBe(200);
+    expect(setRes.json().workflowGraphId).toBe(graph.id);
   });
 });
 
@@ -239,5 +258,32 @@ describe("workflows API", () => {
       })
     );
     await executeApp.close();
+  });
+
+  it("returns dry-run execution steps", async () => {
+    const svc = await domainStore.createService("t-1", { name: "dry-run", repo: "o/r", branch: "main" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/workflows/dry-run",
+      headers: AUTH,
+      payload: {
+        serviceId: svc.id,
+        nodes: [
+          { id: "n1", type: "onCrash" },
+          { id: "n2", type: "runShell", data: { command: "echo ok" } }
+        ],
+        edges: [{ from: "n1", to: "n2" }]
+      }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(
+      expect.objectContaining({
+        success: true,
+        steps: expect.arrayContaining([
+          expect.objectContaining({ nodeId: "n1", nodeType: "onCrash", success: true }),
+          expect.objectContaining({ nodeId: "n2", nodeType: "runShell", success: true })
+        ])
+      })
+    );
   });
 });

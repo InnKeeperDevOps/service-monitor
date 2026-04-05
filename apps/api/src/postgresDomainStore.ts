@@ -19,6 +19,8 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
     listServices: (tenantId) => queries.listServices(queryFn, tenantId),
     getService: (tenantId, id) => queries.getService(queryFn, tenantId, id),
     createService: (tenantId, data) => queries.createService(queryFn, tenantId, data),
+    updateServiceWorkflow: (tenantId, serviceId, workflowGraphId) =>
+      queries.updateServiceWorkflow(queryFn, tenantId, serviceId, workflowGraphId),
     deleteService: async (tenantId, id) => {
       const { rows } = await queryFn(
         "DELETE FROM monitored_services WHERE id = $1 AND tenant_id = $2 RETURNING id",
@@ -27,6 +29,7 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
       return rows.length > 0;
     },
     listWorkflowGraphs: (tenantId) => queries.listWorkflowGraphs(queryFn, tenantId),
+    getWorkflowGraph: (tenantId, workflowId) => queries.getWorkflowGraph(queryFn, tenantId, workflowId),
     createWorkflowGraph: (tenantId, data) => queries.createWorkflowGraph(queryFn, tenantId, data)
   } as DomainStore;
 }

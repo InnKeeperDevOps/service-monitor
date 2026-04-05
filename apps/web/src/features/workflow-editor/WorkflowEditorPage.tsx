@@ -1,13 +1,28 @@
-import { useState, useEffect, useCallback, useRef, type DragEvent } from "react";
+import { useState, useEffect, useCallback, useMemo, type DragEvent } from "react";
 import {
+  WORKFLOW_NODE_TYPES,
   WORKFLOW_TRIGGER_TYPES,
   validateWorkflowGraph,
   type WorkflowNode,
   type WorkflowNodeType
 } from "@sm/domain";
-import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from "@xyflow/react";
+import {
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  Background,
+  Controls,
+  MiniMap,
+  ReactFlow,
+  type Connection,
+  type Edge,
+  type EdgeChange,
+  type Node,
+  type NodeChange,
+  type ReactFlowInstance
+} from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { api, type WorkflowGraph, type MonitoredService } from "../../lib/api.js";
+import { api, type WorkflowGraph, type WorkflowGraphNode, type MonitoredService } from "../../lib/api.js";
 import { Button } from "../../components/Button.js";
 import { Input } from "../../components/Input.js";
 
@@ -48,13 +63,31 @@ const DEFERRED_PALETTE: { title: string; types: string[] }[] = [
   { title: "Actions (coming soon)", types: ["teamsNotify", "discordWebhook", "createIncident", "updateIncident", "requestApproval", "uploadArtifact"] }
 ];
 
-const INITIAL_NODES: Node[] = [
-  { id: "t1", position: { x: 0, y: 120 }, data: { label: "onCrash" }, type: "input" },
-  { id: "br", position: { x: 200, y: 120 }, data: { label: "branchIf" } },
-  { id: "p1", position: { x: 420, y: 40 }, data: { label: "runCursorPlan" } },
-  { id: "p2", position: { x: 420, y: 200 }, data: { label: "runClaudePlan" } },
-  { id: "jn", position: { x: 640, y: 120 }, data: { label: "join" } },
-  { id: "sl", position: { x: 860, y: 120 }, data: { label: "slackNotify" }, type: "output" }
+type WorkflowEditorNodeData = {
+  nodeType: WorkflowNodeType;
+  label: string;
+  displayName?: string;
+  filter?: string;
+  schedule?: string;
+  command?: string;
+  method?: string;
+  url?: string;
+  channel?: string;
+  webhookRef?: string;
+  condition?: string;
+  template?: string;
+  [key: string]: unknown;
+};
+
+const NODE_TYPE_SET = new Set<string>(WORKFLOW_NODE_TYPES);
+
+const INITIAL_NODES: Node<WorkflowEditorNodeData>[] = [
+  { id: "t1", position: { x: 0, y: 120 }, data: { nodeType: "onCrash", label: "onCrash" } },
+  { id: "br", position: { x: 220, y: 120 }, data: { nodeType: "branchIf", label: "branchIf", condition: "severity=critical" } },
+  { id: "p1", position: { x: 460, y: 30 }, data: { nodeType: "runCursorPlan", label: "runCursorPlan" } },
+  { id: "p2", position: { x: 460, y: 220 }, data: { nodeType: "runClaudePlan", label: "runClaudePlan" } },
+  { id: "jn", position: { x: 700, y: 120 }, data: { nodeType: "join", label: "join" } },
+  { id: "sl", position: { x: 920, y: 120 }, data: { nodeType: "slackNotify", label: "slackNotify", channel: "#alerts" } }
 ];
 
 const INITIAL_EDGES: Edge[] = [
@@ -68,10 +101,39 @@ const INITIAL_EDGES: Edge[] = [
 
 const TRIGGER_TYPES = new Set<string>(WORKFLOW_TRIGGER_TYPES);
 
-function toWorkflowNodes(nodes: Node[]): WorkflowNode[] {
+function getNodeLabel(data: WorkflowEditorNodeData): string {
+  const custom = typeof data.displayName === "string" ? data.displayName.trim() : "";
+  return custom.length > 0 ? custom : data.nodeType;
+}
+
+function sanitizeNodeData(data: WorkflowEditorNodeData): Record<string, unknown> | undefined {
+  const { nodeType, label: _label, ...rest } = data;
+  const entries = Object.entries(rest).filter(([, value]) => value !== undefined && value !== null && value !== "");
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
+}
+
+function isWorkflowNodeType(value: string): value is WorkflowNodeType {
+  return NODE_TYPE_SET.has(value);
+}
+
+function toDomainNodes(nodes: Node<WorkflowEditorNodeData>[]): WorkflowNode[] {
   return nodes.map((n) => ({
     id: n.id,
-    type: String(n.data.label) as WorkflowNodeType,
+    type: n.data.nodeType,
+    position: n.position,
+    data: sanitizeNodeData(n.data)
+  }));
+}
+
+function toWorkflowNodes(nodes: Node<WorkflowEditorNodeData>[]): WorkflowGraphNode[] {
+  return nodes.map((n) => ({
+    id: n.id,
+    type: n.data.nodeType,
+    position: n.position,
+    data: sanitizeNodeData(n.data)
   }));
 }
 
@@ -80,34 +142,76 @@ function toWorkflowEdges(edges: Edge[]) {
 }
 
 export function WorkflowEditorPage() {
-  const [nodes, setNodes] = useState<Node[]>(INITIAL_NODES);
+  const [nodes, setNodes] = useState<Node<WorkflowEditorNodeData>[]>(INITIAL_NODES);
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [saving, setSaving] = useState(false);
   const [loadingApi, setLoadingApi] = useState(false);
+  const [loadingWorkflows, setLoadingWorkflows] = useState(false);
   const [services, setServices] = useState<MonitoredService[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowGraph[]>([]);
   const [selectedServiceId, setSelectedServiceId] = useState<string>("");
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
-  const [testRunResult, setTestRunResult] = useState<string[] | null>(null);
+  const [testRunResult, setTestRunResult] = useState<{ nodeId: string; nodeType: string; success: boolean; output?: string }[] | null>(null);
   const [paletteFilter, setPaletteFilter] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-
-  const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  const [reactFlow, setReactFlow] = useState<ReactFlowInstance<Node<WorkflowEditorNodeData>, Edge> | null>(null);
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) ?? null : null;
+  const selectedService = services.find((svc) => svc.id === selectedServiceId);
+  const serviceWorkflows = useMemo(() => {
+    return workflows
+      .filter((graph) => graph.serviceId === selectedServiceId)
+      .sort((a, b) => b.version - a.version);
+  }, [workflows, selectedServiceId]);
+
+  const refreshWorkflows = useCallback(async () => {
+    setLoadingWorkflows(true);
+    try {
+      const res = await api.listWorkflows();
+      setWorkflows(res.graphs);
+    } catch {
+      setWorkflows([]);
+    } finally {
+      setLoadingWorkflows(false);
+    }
+  }, []);
+
+  const refreshServices = useCallback(async () => {
+    try {
+      const res = await api.listServices();
+      setServices(res.services);
+      setSelectedServiceId((prev) => prev || res.services[0]?.id || "");
+    } catch {
+      setServices([]);
+      setSelectedServiceId("");
+    }
+  }, []);
 
   useEffect(() => {
-    api
-      .listServices()
-      .then((res) => {
-        setServices(res.services);
-        setSelectedServiceId((prev) => prev || res.services[0]?.id || "");
-      })
-      .catch(() => {
-        setServices([]);
-        setSelectedServiceId("");
-      });
-  }, []);
+    void refreshServices();
+    void refreshWorkflows();
+  }, [refreshServices, refreshWorkflows]);
+
+  useEffect(() => {
+    if (!selectedServiceId) {
+      setSelectedWorkflowId("");
+      return;
+    }
+    if (serviceWorkflows.length === 0) {
+      setSelectedWorkflowId("");
+      return;
+    }
+    const preferredWorkflowId = selectedService?.workflowGraphId;
+    if (preferredWorkflowId && serviceWorkflows.some((graph) => graph.id === preferredWorkflowId)) {
+      setSelectedWorkflowId(preferredWorkflowId);
+      return;
+    }
+    setSelectedWorkflowId((current) =>
+      serviceWorkflows.some((graph) => graph.id === current) ? current : serviceWorkflows[0].id
+    );
+  }, [selectedServiceId, selectedService, serviceWorkflows]);
 
   const handleSave = useCallback(async () => {
     if (!selectedServiceId) {
@@ -118,12 +222,14 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setValidationErrors([]);
     try {
-      await api.createWorkflow({
+      const graph = await api.createWorkflow({
         serviceId: selectedServiceId,
         nodes: toWorkflowNodes(nodes),
         edges: toWorkflowEdges(edges),
       });
-      setStatusMessage({ type: "success", text: "Workflow saved successfully" });
+      setWorkflows((prev) => [graph, ...prev.filter((existing) => existing.id !== graph.id)]);
+      setSelectedWorkflowId(graph.id);
+      setStatusMessage({ type: "success", text: `Workflow v${graph.version} saved successfully` });
     } catch (err) {
       setStatusMessage({ type: "error", text: (err as Error).message });
     } finally {
@@ -132,24 +238,45 @@ export function WorkflowEditorPage() {
   }, [nodes, edges, selectedServiceId]);
 
   const handleLoad = useCallback(async () => {
+    if (!selectedServiceId) {
+      setStatusMessage({ type: "error", text: "Select a service before loading workflow" });
+      return;
+    }
     setLoadingApi(true);
     setStatusMessage(null);
     setValidationErrors([]);
     try {
-      const res = await api.listWorkflows();
-      if (res.graphs.length === 0) {
-        setStatusMessage({ type: "info", text: "No saved workflows found" });
+      let available = serviceWorkflows;
+      if (available.length === 0) {
+        const res = await api.listWorkflows();
+        setWorkflows(res.graphs);
+        available = res.graphs.filter((graph) => graph.serviceId === selectedServiceId).sort((a, b) => b.version - a.version);
+      }
+      if (available.length === 0) {
+        setStatusMessage({ type: "info", text: "No saved workflows found for this service" });
         return;
       }
-      const graph = res.graphs[0] as WorkflowGraph;
+      const graph =
+        available.find((candidate) => candidate.id === selectedWorkflowId) ??
+        available[0];
+
       setNodes(
-        graph.nodes.map((n, i) => ({
+        graph.nodes.map((n, i) => {
+          const nodeType = isWorkflowNodeType(n.type) ? n.type : "runShell";
+          const data = (n.data ?? {}) as Record<string, unknown>;
+          const displayName = typeof data.displayName === "string" ? data.displayName : "";
+          const mergedData: WorkflowEditorNodeData = {
+            ...data,
+            nodeType,
+            displayName,
+            label: displayName.trim() || nodeType
+          };
+          return {
           id: n.id,
-          position: { x: i * 200, y: 120 },
-          data: { label: n.type },
-          ...(i === 0 ? { type: "input" as const } : {}),
-          ...(i === graph.nodes.length - 1 ? { type: "output" as const } : {}),
-        }))
+            position: n.position ?? { x: i * 220, y: 120 },
+            data: mergedData
+          };
+        })
       );
       setEdges(
         graph.edges.map((e, i) => ({
@@ -158,18 +285,19 @@ export function WorkflowEditorPage() {
           target: e.to,
         }))
       );
-      setStatusMessage({ type: "success", text: `Loaded workflow (${graph.nodes.length} nodes)` });
+      setSelectedWorkflowId(graph.id);
+      setStatusMessage({ type: "success", text: `Loaded workflow v${graph.version} (${graph.nodes.length} nodes)` });
     } catch (err) {
       setStatusMessage({ type: "error", text: (err as Error).message });
     } finally {
       setLoadingApi(false);
     }
-  }, []);
+  }, [selectedServiceId, selectedWorkflowId, serviceWorkflows]);
 
   const handleValidate = useCallback(() => {
     setStatusMessage(null);
     const errors = validateWorkflowGraph(
-      toWorkflowNodes(nodes),
+      toDomainNodes(nodes),
       toWorkflowEdges(edges),
     );
     if (errors.length === 0) {
@@ -181,21 +309,37 @@ export function WorkflowEditorPage() {
   }, [nodes, edges]);
 
   const handleTestRun = useCallback(() => {
+    if (!selectedServiceId) {
+      setStatusMessage({ type: "error", text: "Select a service before test run" });
+      return;
+    }
     setStatusMessage(null);
     setTestRunResult(null);
     setValidationErrors([]);
     const errors = validateWorkflowGraph(
-      toWorkflowNodes(nodes),
+      toDomainNodes(nodes),
       toWorkflowEdges(edges),
     );
     if (errors.length > 0) {
       setValidationErrors(errors.map((e) => e.message));
       return;
     }
-    const stepLabels = nodes.map((n) => `✓ ${String(n.data.label)}`);
-    setTestRunResult(stepLabels);
-    setStatusMessage({ type: "info", text: "Test run complete — simulated execution below" });
-  }, [nodes, edges]);
+    void api.dryRunWorkflow({
+      serviceId: selectedServiceId,
+      nodes: toWorkflowNodes(nodes),
+      edges: toWorkflowEdges(edges)
+    })
+      .then((result) => {
+        setTestRunResult(result.steps);
+        setStatusMessage({
+          type: result.success ? "success" : "error",
+          text: result.success ? "Dry run completed successfully" : "Dry run finished with failures"
+        });
+      })
+      .catch((err) => {
+        setStatusMessage({ type: "error", text: (err as Error).message });
+      });
+  }, [nodes, edges, selectedServiceId]);
 
   const handleExecuteOnAgent = useCallback(async () => {
     if (!selectedServiceId) {
@@ -222,6 +366,24 @@ export function WorkflowEditorPage() {
     }
   }, [nodes, edges, selectedServiceId]);
 
+  const handleSetActiveWorkflow = useCallback(async () => {
+    if (!selectedServiceId) {
+      setStatusMessage({ type: "error", text: "Select a service before setting active workflow" });
+      return;
+    }
+    if (!selectedWorkflowId) {
+      setStatusMessage({ type: "error", text: "Select a saved workflow before setting active" });
+      return;
+    }
+    try {
+      const svc = await api.setServiceWorkflow(selectedServiceId, selectedWorkflowId);
+      setServices((prev) => prev.map((existing) => (existing.id === svc.id ? svc : existing)));
+      setStatusMessage({ type: "success", text: `Service now uses workflow ${selectedWorkflowId}` });
+    } catch (err) {
+      setStatusMessage({ type: "error", text: (err as Error).message });
+    }
+  }, [selectedServiceId, selectedWorkflowId]);
+
   const handleDragOver = useCallback((e: DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -233,27 +395,26 @@ export function WorkflowEditorPage() {
       const nodeType = e.dataTransfer.getData("application/reactflow");
       if (!nodeType) return;
 
-      const bounds = reactFlowWrapper.current?.getBoundingClientRect();
-      if (!bounds) return;
-
-      const position = {
-        x: e.clientX - bounds.left,
-        y: e.clientY - bounds.top,
-      };
+      const position = reactFlow
+        ? reactFlow.screenToFlowPosition({ x: e.clientX, y: e.clientY })
+        : { x: e.clientX, y: e.clientY };
 
       const newId = `node_${Date.now()}`;
-      const newNode: Node = {
+      const newNode: Node<WorkflowEditorNodeData> = {
         id: newId,
         position,
-        data: { label: nodeType },
+        data: {
+          nodeType: nodeType as WorkflowNodeType,
+          label: nodeType
+        },
       };
 
       setNodes((prev) => [...prev, newNode]);
     },
-    []
+    [reactFlow]
   );
 
-  const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+  const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node<WorkflowEditorNodeData>) => {
     setSelectedNodeId(node.id);
   }, []);
 
@@ -264,19 +425,41 @@ export function WorkflowEditorPage() {
   const updateNodeData = useCallback((nodeId: string, key: string, value: string) => {
     setNodes((prev) =>
       prev.map((n) =>
-        n.id === nodeId ? { ...n, data: { ...n.data, [key]: value } } : n
+        n.id === nodeId
+          ? (() => {
+            const nextData = { ...n.data, [key]: value } as WorkflowEditorNodeData;
+            if (key === "nodeType") {
+              const nextType = value as WorkflowNodeType;
+              nextData.nodeType = nextType;
+            }
+            nextData.label = getNodeLabel(nextData);
+            return { ...n, data: nextData };
+          })()
+          : n
       )
     );
+  }, []);
+
+  const handleNodesChange = useCallback((changes: NodeChange<Node<WorkflowEditorNodeData>>[]) => {
+    setNodes((current) => applyNodeChanges(changes, current));
+  }, []);
+
+  const handleEdgesChange = useCallback((changes: EdgeChange<Edge>[]) => {
+    setEdges((current) => applyEdgeChanges(changes, current));
+  }, []);
+
+  const handleConnect = useCallback((connection: Connection) => {
+    setEdges((current) => addEdge({ ...connection, id: `e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }, current));
   }, []);
 
   const statusColorMap = { success: "var(--color-success)", error: "var(--color-danger)", info: "var(--color-info)" };
   const statusBgMap = { success: "var(--color-success-bg)", error: "var(--color-danger-bg)", info: "var(--color-info-bg)" };
 
-  const isTrigger = selectedNode ? TRIGGER_TYPES.has(String(selectedNode.data.label)) : false;
+  const isTrigger = selectedNode ? TRIGGER_TYPES.has(String(selectedNode.data.nodeType)) : false;
 
   return (
     <section>
-      <h2 style={{ margin: "0 0 1rem" }}>Workflow Editor (MVP)</h2>
+      <h2 style={{ margin: "0 0 1rem" }}>Workflow Editor</h2>
       <div style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: 12 }}>
         <div style={{ padding: "0.75rem 1rem", borderBottom: "1px solid var(--color-border)", display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
           <span style={{ fontSize: "0.85rem", color: "var(--color-text-secondary)", marginRight: "auto" }}>
@@ -286,7 +469,10 @@ export function WorkflowEditorPage() {
             Service
             <select
               value={selectedServiceId}
-              onChange={(e) => setSelectedServiceId(e.target.value)}
+              onChange={(e) => {
+                setSelectedServiceId(e.target.value);
+                setSelectedWorkflowId("");
+              }}
               style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)" }}
             >
               <option value="">{services.length === 0 ? "No services available" : "Select service"}</option>
@@ -297,17 +483,39 @@ export function WorkflowEditorPage() {
               ))}
             </select>
           </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+            Saved
+            <select
+              value={selectedWorkflowId}
+              onChange={(e) => setSelectedWorkflowId(e.target.value)}
+              disabled={serviceWorkflows.length === 0}
+              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", minWidth: 160 }}
+            >
+              <option value="">{serviceWorkflows.length === 0 ? "No workflows for service" : "Select workflow"}</option>
+              {serviceWorkflows.map((graph) => (
+                <option key={graph.id} value={graph.id}>
+                  v{graph.version} - {graph.id.slice(0, 8)}{selectedService?.workflowGraphId === graph.id ? " (active)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
           <Button size="sm" variant="secondary" onClick={handleValidate}>
             Validate
           </Button>
           <Button size="sm" variant="secondary" onClick={handleLoad} loading={loadingApi}>
-            Load from API
+            Load selected
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => void refreshWorkflows()} loading={loadingWorkflows}>
+            Refresh list
           </Button>
           <Button size="sm" onClick={handleSave} loading={saving}>
             Save Workflow
           </Button>
+          <Button size="sm" variant="secondary" onClick={handleSetActiveWorkflow}>
+            Set active
+          </Button>
           <Button size="sm" variant="secondary" onClick={handleTestRun} style={{ background: "var(--color-info)", color: "var(--color-primary-foreground)", borderColor: "var(--color-info)" }}>
-            Validate / Test Run
+            Validate / Dry run
           </Button>
           <Button size="sm" variant="danger" onClick={handleExecuteOnAgent} loading={saving}>
             Queue on Agent
@@ -331,31 +539,34 @@ export function WorkflowEditorPage() {
 
         {testRunResult && (
           <div style={{ padding: "0.5rem 1rem", background: "var(--color-info-bg)", fontSize: "0.85rem", borderBottom: "1px solid var(--color-border)" }}>
-            <div style={{ fontWeight: 600, color: "var(--color-info)", marginBottom: "0.25rem" }}>Simulated step execution:</div>
+            <div style={{ fontWeight: 600, color: "var(--color-info)", marginBottom: "0.25rem" }}>Dry-run execution:</div>
             <ol style={{ margin: 0, paddingLeft: "1.25rem", color: "var(--color-info)" }}>
-              {testRunResult.map((step, i) => <li key={i}>{step}</li>)}
+              {testRunResult.map((step) => (
+                <li key={step.nodeId}>
+                  {step.success ? "PASS" : "FAIL"} {step.nodeType} ({step.nodeId})
+                  {step.output ? ` - ${step.output}` : ""}
+                </li>
+              ))}
             </ol>
           </div>
         )}
 
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px" }}>
-          <div ref={reactFlowWrapper} style={{ height: 360 }} onDragOver={handleDragOver} onDrop={handleDrop}>
+          <div style={{ height: 360 }} onDragOver={handleDragOver} onDrop={handleDrop}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
-              onNodesChange={(changes) => setNodes((nds) => {
-                const updated = [...nds];
-                for (const change of changes) {
-                  if (change.type === "position" && change.position) {
-                    const idx = updated.findIndex((n) => n.id === change.id);
-                    if (idx >= 0) updated[idx] = { ...updated[idx], position: change.position };
-                  }
-                }
-                return updated;
-              })}
+              onInit={setReactFlow}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={handleEdgesChange}
+              onConnect={handleConnect}
               onNodeClick={handleNodeClick}
               onPaneClick={handlePaneClick}
+              deleteKeyCode={["Backspace", "Delete"]}
               fitView
+              fitViewOptions={{ maxZoom: 1.2 }}
+              snapToGrid
+              snapGrid={[20, 20]}
             >
               <Background />
               <MiniMap />
@@ -390,7 +601,7 @@ function NodeConfigPanel({
   onUpdate,
   onClose,
 }: {
-  node: Node;
+  node: Node<WorkflowEditorNodeData>;
   isTrigger: boolean;
   onUpdate: (nodeId: string, key: string, value: string) => void;
   onClose: () => void;
@@ -407,17 +618,96 @@ function NodeConfigPanel({
         ID: {node.id}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+          <span style={{ color: "var(--color-text-secondary)" }}>Node type</span>
+          <select
+            value={String(node.data.nodeType)}
+            onChange={(e) => onUpdate(node.id, "nodeType", e.target.value)}
+            style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.3rem", background: "var(--color-surface)", color: "var(--color-text-primary)" }}
+          >
+            {WORKFLOW_NODE_TYPES.map((nodeType) => (
+              <option key={nodeType} value={nodeType}>
+                {nodeType}
+              </option>
+            ))}
+          </select>
+        </label>
         <Input
-          label="Label"
-          value={String(node.data.label ?? "")}
-          onChange={(e) => onUpdate(node.id, "label", e.target.value)}
+          label="Display name"
+          value={String(node.data.displayName ?? "")}
+          onChange={(e) => onUpdate(node.id, "displayName", e.target.value)}
+          placeholder={String(node.data.nodeType)}
         />
         {isTrigger && (
+          <>
+            <Input
+              label="Filter"
+              placeholder="e.g. severity=critical"
+              value={String(node.data.filter ?? "")}
+              onChange={(e) => onUpdate(node.id, "filter", e.target.value)}
+            />
+            <Input
+              label="Schedule (cron)"
+              placeholder="*/5 * * * *"
+              value={String(node.data.schedule ?? "")}
+              onChange={(e) => onUpdate(node.id, "schedule", e.target.value)}
+            />
+          </>
+        )}
+        {node.data.nodeType === "runShell" && (
           <Input
-            label="Filter"
-            placeholder="e.g. severity=critical"
-            value={String(node.data.filter ?? "")}
-            onChange={(e) => onUpdate(node.id, "filter", e.target.value)}
+            label="Command"
+            placeholder="npm test"
+            value={String(node.data.command ?? "")}
+            onChange={(e) => onUpdate(node.id, "command", e.target.value)}
+          />
+        )}
+        {node.data.nodeType === "httpRequest" && (
+          <>
+            <Input
+              label="HTTP method"
+              placeholder="GET"
+              value={String(node.data.method ?? "")}
+              onChange={(e) => onUpdate(node.id, "method", e.target.value)}
+            />
+            <Input
+              label="URL"
+              placeholder="https://example.com/hook"
+              value={String(node.data.url ?? "")}
+              onChange={(e) => onUpdate(node.id, "url", e.target.value)}
+            />
+          </>
+        )}
+        {node.data.nodeType === "slackNotify" && (
+          <>
+            <Input
+              label="Channel"
+              placeholder="#alerts"
+              value={String(node.data.channel ?? "")}
+              onChange={(e) => onUpdate(node.id, "channel", e.target.value)}
+            />
+            <Input
+              label="Webhook ref"
+              placeholder="secret://slack/webhook"
+              value={String(node.data.webhookRef ?? "")}
+              onChange={(e) => onUpdate(node.id, "webhookRef", e.target.value)}
+            />
+          </>
+        )}
+        {node.data.nodeType === "branchIf" && (
+          <Input
+            label="Condition"
+            placeholder="severity=critical"
+            value={String(node.data.condition ?? "")}
+            onChange={(e) => onUpdate(node.id, "condition", e.target.value)}
+          />
+        )}
+        {node.data.nodeType === "template" && (
+          <Input
+            label="Template"
+            placeholder="{{ incident.message }}"
+            value={String(node.data.template ?? "")}
+            onChange={(e) => onUpdate(node.id, "template", e.target.value)}
           />
         )}
       </div>
@@ -439,7 +729,7 @@ function PalettePanel({
 
   return (
     <>
-      <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>MVP node palette</div>
+      <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Node palette</div>
       <input
         type="text"
         placeholder="Search nodes..."

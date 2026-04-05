@@ -94,7 +94,7 @@ export function ServicesPage() {
                   {svc.agentId ?? "\u2014"}
                 </td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
-                  {"\u2014"}
+                  {svc.workflowGraphId ?? "\u2014"}
                 </td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
                   Default

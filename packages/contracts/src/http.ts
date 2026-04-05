@@ -148,15 +148,32 @@ export const executeWorkflowResponseSchema = z.object({
   dispatchState: z.enum(["queued_for_dispatch"])
 });
 
+export const workflowDryRunStepSchema = z.object({
+  nodeId: z.string(),
+  nodeType: z.string(),
+  success: z.boolean(),
+  output: z.string().optional()
+});
+
+export const workflowDryRunResponseSchema = z.object({
+  success: z.boolean(),
+  steps: z.array(workflowDryRunStepSchema)
+});
+
 export const monitoredServiceSchema = z.object({
   id: z.string(),
   tenantId: z.string(),
   agentId: z.string().nullable(),
+  workflowGraphId: z.string().nullable().optional(),
   name: z.string(),
   repo: z.string(),
   branch: z.string(),
   dockerImage: z.string().nullable().optional(),
   composePath: z.string().nullable().optional()
+});
+
+export const setServiceWorkflowRequestSchema = z.object({
+  workflowGraphId: z.string().nullable()
 });
 
 export const createMonitoredServiceRequestSchema = z.object({
@@ -202,7 +219,9 @@ export type WorkflowGraphNode = z.infer<typeof workflowGraphNodeSchema>;
 export type WorkflowGraphEdge = z.infer<typeof workflowGraphEdgeSchema>;
 export type ExecuteWorkflowRequest = z.infer<typeof executeWorkflowRequestSchema>;
 export type ExecuteWorkflowResponse = z.infer<typeof executeWorkflowResponseSchema>;
+export type WorkflowDryRunResponse = z.infer<typeof workflowDryRunResponseSchema>;
 export type MonitoredService = z.infer<typeof monitoredServiceSchema>;
+export type SetServiceWorkflowRequest = z.infer<typeof setServiceWorkflowRequestSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 
 // ---------------------------------------------------------------------------

@@ -61,6 +61,8 @@ export function isWorkflowTriggerType(type: WorkflowNodeType): boolean {
 export interface WorkflowNode {
   id: string;
   type: WorkflowNodeType;
+  position?: { x: number; y: number };
+  data?: Record<string, unknown>;
 }
 
 export interface WorkflowEdge {
@@ -115,6 +117,43 @@ export function validateWorkflowGraph(
     topologicalWaves(nodes, edges);
   } catch {
     errors.push({ code: "CYCLE", message: "Workflow graph contains a cycle" });
+  }
+
+  const outgoing = new Map<string, string[]>();
+  for (const node of nodes) {
+    outgoing.set(node.id, []);
+  }
+  for (const edge of edges) {
+    outgoing.get(edge.from)?.push(edge.to);
+  }
+
+  const reachable = new Set<string>();
+  const queue: string[] = [];
+  for (const trigger of nodes) {
+    if (TRIGGER_SET.has(trigger.type) && !reachable.has(trigger.id)) {
+      reachable.add(trigger.id);
+      queue.push(trigger.id);
+    }
+  }
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const target of outgoing.get(current) ?? []) {
+      if (!reachable.has(target)) {
+        reachable.add(target);
+        queue.push(target);
+      }
+    }
+  }
+
+  for (const node of nodes) {
+    if (!TRIGGER_SET.has(node.type) && !reachable.has(node.id)) {
+      errors.push({
+        code: "UNREACHABLE_NODE",
+        message: `Node "${node.id}" is not reachable from any trigger`,
+        nodeId: node.id
+      });
+    }
   }
 
   return errors;

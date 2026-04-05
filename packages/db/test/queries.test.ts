@@ -228,6 +228,7 @@ describe("listServices", () => {
         id: "s1",
         tenantId: "t1",
         agentId: "a1",
+        workflowGraphId: null,
         name: "web",
         repo: "r",
         branch: "main",
