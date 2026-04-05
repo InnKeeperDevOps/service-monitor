@@ -34,7 +34,7 @@ describe("oauth SSRF protections", () => {
 
   it("blocks redirect from public token endpoint to private address", async () => {
     const fetchMock = vi
-      .fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>()
+      .fn<typeof fetch>()
       .mockResolvedValueOnce(
         new Response("", {
           status: 302,
@@ -50,7 +50,7 @@ describe("oauth SSRF protections", () => {
   });
 
   it("blocks OIDC discovery against private hostnames before network request", async () => {
-    const fetchMock = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>();
+    const fetchMock = vi.fn<typeof fetch>();
     await expect(discoverOIDC("http://localhost:8080", fetchMock)).rejects.toThrow(/private or blocked host/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });

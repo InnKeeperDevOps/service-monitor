@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, type DragEvent } from "react"
 import {
   WORKFLOW_TRIGGER_TYPES,
   validateWorkflowGraph,
+  type WorkflowNode,
   type WorkflowNodeType
 } from "@sm/domain";
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from "@xyflow/react";
@@ -67,8 +68,11 @@ const INITIAL_EDGES: Edge[] = [
 
 const TRIGGER_TYPES = new Set<string>(WORKFLOW_TRIGGER_TYPES);
 
-function toWorkflowNodes(nodes: Node[]) {
-  return nodes.map((n) => ({ id: n.id, type: String(n.data.label) }));
+function toWorkflowNodes(nodes: Node[]): WorkflowNode[] {
+  return nodes.map((n) => ({
+    id: n.id,
+    type: String(n.data.label) as WorkflowNodeType,
+  }));
 }
 
 function toWorkflowEdges(edges: Edge[]) {
