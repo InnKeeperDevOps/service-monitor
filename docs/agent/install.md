@@ -17,6 +17,34 @@ You do **not** open an inbound port from the internet for the SaaS path: the age
 
 ## Install the binary
 
+### Release binaries (CI builds)
+
+Official **static** binaries are attached to [GitHub Releases](https://github.com/InnKeeperDevOps/kaiad/releases) for each **annotated version tag** matching `v*` (for example `v1.2.3`). The [`go-release`](https://github.com/InnKeeperDevOps/kaiad/blob/main/.github/workflows/go-release.yml) workflow cross-compiles the agent with `CGO_ENABLED=0` and publishes artifacts plus **`checksums.txt`**.
+
+Download the file that matches your OS and CPU, verify it against `checksums.txt`, make it executable (on Unix), and install it as `agent` (or keep the release name and point `ExecStart` at that path):
+
+| Asset | Platform |
+|-------|----------|
+| `agent-agent_linux_amd64` | Linux x86_64 |
+| `agent-agent_linux_arm64` | Linux ARM64 |
+| `agent-agent_darwin_amd64` | macOS Intel |
+| `agent-agent_darwin_arm64` | macOS Apple silicon |
+| `agent-agent_windows_amd64.exe` | Windows x86_64 |
+
+Example (Linux amd64, replace `vX.Y.Z` with a real tag):
+
+```bash
+curl -fsSL -O "https://github.com/InnKeeperDevOps/kaiad/releases/download/vX.Y.Z/agent-agent_linux_amd64" \
+  -O "https://github.com/InnKeeperDevOps/kaiad/releases/download/vX.Y.Z/checksums.txt"
+# Checksums are produced for paths under dist/; strip that prefix so sha256sum matches downloaded filenames.
+sed 's| dist/| |' checksums.txt | sha256sum -c --ignore-missing
+chmod +x agent-agent_linux_amd64
+sudo install -m 0755 agent-agent_linux_amd64 /usr/local/bin/agent
+```
+
+On macOS, use `shasum -a 256` instead of `sha256sum` if the latter is not installed:  
+`sed 's| dist/| |' checksums.txt | shasum -a 256 -c --ignore-missing`
+
 ### Build from source
 
 From the monorepo root:

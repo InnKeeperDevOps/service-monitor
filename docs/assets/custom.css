@@ -32,3 +32,14 @@ div.highlighter-rouge .highlight code {
   background: transparent;
   padding: 0;
 }
+
+/* Mermaid diagrams (see index and pages using div.mermaid) */
+.mermaid {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
