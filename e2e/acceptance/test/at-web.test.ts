@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
+const acceptanceEnabled = process.env.RUN_ACCEPTANCE === "1";
+const describeAcceptance = acceptanceEnabled ? describe : describe.skip;
 const webBase = process.env.WEB_BASE ?? "http://localhost:4173";
 
 /** Poll until the static web server returns HTML from GET /. */
@@ -27,7 +29,7 @@ async function waitForWebHtml(base: string, maxMs = 120_000): Promise<void> {
   throw new Error(`Timed out waiting for HTML from ${base}/ (last error: ${String(lastErr)})`);
 }
 
-describe("AT web suite", () => {
+describeAcceptance("AT web suite", () => {
   beforeAll(async () => {
     await waitForWebHtml(webBase);
   }, 130_000);

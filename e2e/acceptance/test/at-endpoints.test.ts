@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 
+const acceptanceEnabled = process.env.RUN_ACCEPTANCE === "1";
+const describeAcceptance = acceptanceEnabled ? describe : describe.skip;
 const apiBase = process.env.API_BASE ?? "http://localhost:3001";
 
 function httpToWsBase(base: string): string {
@@ -28,7 +30,7 @@ async function waitForReady(base: string, maxMs = 120_000): Promise<void> {
   throw new Error(`Timed out waiting for ${base}/ready (last error: ${String(lastErr)})`);
 }
 
-describe("AT endpoint suite", () => {
+describeAcceptance("AT endpoint suite", () => {
   beforeAll(async () => {
     await waitForReady(apiBase);
   }, 130_000);

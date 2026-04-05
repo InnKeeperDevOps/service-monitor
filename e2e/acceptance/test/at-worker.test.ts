@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
+const acceptanceEnabled = process.env.RUN_ACCEPTANCE === "1";
+const describeAcceptance = acceptanceEnabled ? describe : describe.skip;
 const workerBase = process.env.WORKER_BASE ?? "http://localhost:9090";
 
 /** Poll until worker health is reachable (CI docker compose --wait, or local stack). */
@@ -20,7 +22,7 @@ async function waitForWorkerHealth(base: string, maxMs = 120_000): Promise<void>
   throw new Error(`Timed out waiting for ${base}/health (last error: ${String(lastErr)})`);
 }
 
-describe("AT worker suite", () => {
+describeAcceptance("AT worker suite", () => {
   beforeAll(async () => {
     await waitForWorkerHealth(workerBase);
   }, 130_000);
