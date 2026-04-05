@@ -24,35 +24,7 @@ Kaiad is **not** a generic observability backend (it is not a full replacement f
 
 Operators use the **browser UI** and the **REST API** (`/api/v1`). **Agents** never require a public **inbound** port from the internet for the SaaS path—they **dial out** over **WSS** to the **realtime** endpoint on the API tier. **Workers** share **Redis** with the API for **BullMQ** jobs (remediation, GitHub work, **agent commands**, log ingestion). **Postgres** holds durable tenant and domain data when configured.
 
-<div class="mermaid">
-flowchart TB
-  subgraph gh [GitHub]
-    GHC[Repositories and checks]
-  end
-
-  subgraph plane [Kaiad control plane]
-    WEB[Web SPA]
-    API["API: REST + WSS /realtime"]
-    WK[Workers]
-    PG[(Postgres)]
-    RD[(Redis / BullMQ)]
-  end
-
-  subgraph cust [Customer environment]
-    AG[Agent]
-    APP[Workloads / Docker]
-  end
-
-  WEB -->|HTTPS| API
-  API --> PG
-  API --> RD
-  WK --> RD
-  WK --> PG
-  WK -->|GitHub App API| GHC
-  GHC -->|signed webhooks| API
-  AG -->|outbound WSS| API
-  AG --> APP
-</div>
+{% include mermaid-architecture.html %}
 
 **Reading the diagram:** GitHub pushes events into the API; workers pull work from Redis, may call GitHub, and coordinate **agent commands** and other jobs through the same control plane stack. The **realtime gateway** (WebSocket path used by agents) may live in the API process or behind a load balancer—see [Realtime gateway]({% link runbooks/realtime-gateway.md %}) for operations detail.
 

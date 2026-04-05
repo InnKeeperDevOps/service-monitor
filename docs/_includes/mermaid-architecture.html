@@ -1,0 +1,29 @@
+<div class="mermaid">
+flowchart TB
+  subgraph gh[GitHub]
+    GHC[Repositories and checks]
+  end
+
+  subgraph plane[Kaiad control plane]
+    WEB[Web SPA]
+    APINode["API: REST + WSS /realtime"]
+    WK[Workers]
+    PG[(Postgres)]
+    RD[(Redis / BullMQ)]
+  end
+
+  subgraph cust[Customer environment]
+    AG[Agent]
+    APP[Workloads / Docker]
+  end
+
+  WEB -->|HTTPS| APINode
+  APINode --> PG
+  APINode --> RD
+  WK --> RD
+  WK --> PG
+  WK -->|GitHub App API| GHC
+  GHC -->|signed webhooks| APINode
+  AG -->|outbound WSS| APINode
+  AG --> APP
+</div>
