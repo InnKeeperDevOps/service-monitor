@@ -2,7 +2,15 @@ import { useEffect, useState } from "react";
 import { Settings, Key, Shield, GitBranch, Cpu, Lock } from "lucide-react";
 import { api } from "../../lib/api.js";
 
-type TokenInfo = { id: string; tenantId: string; expiresAt: string; createdBy: string; createdAt: string; usedAt: string | null };
+type TokenInfo = {
+  id: string;
+  tenantId: string;
+  expiresAt: string;
+  createdBy: string;
+  createdAt: string;
+  usedAt: string | null;
+  isActive: boolean;
+};
 type GithubInstallation = { installationId: number; accountLogin: string; repos?: string[] };
 type EnrollmentTokenPreset = "1h" | "24h" | "7d" | "30d";
 
@@ -38,6 +46,14 @@ function toPresetExpiration(preset: EnrollmentTokenPreset): string {
   return formatDateTimeLocal(new Date(Date.now() + ENROLLMENT_PRESET_SECONDS[preset] * 1000));
 }
 
+function buildAgentStartCommand(token: string): string {
+  const realtimeUrl =
+    typeof window === "undefined"
+      ? "wss://your-kaiad.example.com/realtime"
+      : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/realtime`;
+  return `SM_REALTIME_URL=${realtimeUrl} NODE_ENV=production SM_ENROLLMENT_TOKEN=${token} /usr/local/bin/agent`;
+}
+
 export function SettingsPage() {
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
@@ -47,9 +63,11 @@ export function SettingsPage() {
   const [selectedPreset, setSelectedPreset] = useState<EnrollmentTokenPreset>("24h");
   const [expiresAtInput, setExpiresAtInput] = useState<string>(() => toPresetExpiration("24h"));
   const [isGeneratingToken, setIsGeneratingToken] = useState(false);
+  const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [latestToken, setLatestToken] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const [commandCopyMessage, setCommandCopyMessage] = useState<string | null>(null);
 
   useEffect(() => {
     api.listEnrollmentTokens().then((r) => setTokens(r.tokens)).catch(() => {});
@@ -87,6 +105,7 @@ export function SettingsPage() {
     setTokenError(null);
     setLatestToken(null);
     setCopyMessage(null);
+    setCommandCopyMessage(null);
 
     const expiration = new Date(expiresAtInput);
     if (!expiresAtInput || Number.isNaN(expiration.getTime())) {
@@ -130,6 +149,43 @@ export function SettingsPage() {
       setCopyMessage("Copied token to clipboard.");
     } catch {
       setCopyMessage("Unable to copy token automatically.");
+    }
+  }
+
+  async function handleCopyStartCommand() {
+    if (!latestToken) {
+      return;
+    }
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(buildAgentStartCommand(latestToken));
+      setCommandCopyMessage("Copied command to clipboard.");
+    } catch {
+      setCommandCopyMessage("Unable to copy command automatically.");
+    }
+  }
+
+  async function handleDeleteEnrollmentToken(tokenId: string) {
+    const token = tokens.find((entry) => entry.id === tokenId);
+    if (!token || token.isActive) {
+      return;
+    }
+    const confirmed = window.confirm("Delete this inactive enrollment token?");
+    if (!confirmed) {
+      return;
+    }
+    setTokenError(null);
+    setDeletingTokenId(tokenId);
+    try {
+      await api.deleteEnrollmentToken(tokenId);
+      setTokens((prev) => prev.filter((token) => token.id !== tokenId));
+      setError(null);
+    } catch (e) {
+      setTokenError((e as Error).message);
+    } finally {
+      setDeletingTokenId(null);
     }
   }
 
@@ -240,15 +296,52 @@ export function SettingsPage() {
                 </span>
               )}
             </div>
+            <div style={{ marginTop: "0.65rem" }}>
+              <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", marginBottom: "0.35rem" }}>
+                Start command:
+              </div>
+              <code style={{ display: "block", fontSize: "0.8rem", wordBreak: "break-all" }}>
+                {buildAgentStartCommand(latestToken)}
+              </code>
+              <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyStartCommand()}
+                  style={{
+                    background: "var(--color-surface)",
+                    color: "var(--color-text-primary)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: 6,
+                    padding: "0.35rem 0.65rem",
+                    fontSize: "0.8rem",
+                    cursor: "pointer"
+                  }}
+                >
+                  Copy start command
+                </button>
+                {commandCopyMessage && (
+                  <span
+                    style={{
+                      fontSize: "0.8rem",
+                      color: commandCopyMessage.startsWith("Copied")
+                        ? "var(--color-success)"
+                        : "var(--color-danger)"
+                    }}
+                  >
+                    {commandCopyMessage}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
         )}
         {tokens.length === 0 ? (
-          <p style={mutedText}>No enrollment tokens created.</p>
+          <p style={mutedText}>No enrollment tokens found.</p>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                {["ID", "Expires", "Created By", "Used"].map((h) => (
+                {["ID", "Status", "Expires", "Created By", "Used", "Actions"].map((h) => (
                   <th key={h} style={{ textAlign: "left", padding: "0.4rem", borderBottom: "1px solid var(--color-border)", color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>
                     {h}
                   </th>
@@ -259,9 +352,30 @@ export function SettingsPage() {
               {tokens.map((t) => (
                 <tr key={t.id}>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem", fontFamily: "monospace" }}>{t.id.slice(0, 12)}...</td>
+                  <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{t.isActive ? "Active" : "Inactive"}</td>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{new Date(t.expiresAt).toLocaleString()}</td>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{t.createdBy}</td>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{t.usedAt ? "Yes" : "No"}</td>
+                  <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>
+                    <button
+                      type="button"
+                      aria-label={`Delete token ${t.id}`}
+                      onClick={() => void handleDeleteEnrollmentToken(t.id)}
+                      disabled={deletingTokenId === t.id || t.isActive}
+                      style={{
+                        background: "var(--color-danger-bg)",
+                        color: "var(--color-danger)",
+                        border: "1px solid var(--color-border)",
+                        borderRadius: 6,
+                        padding: "0.3rem 0.55rem",
+                        fontSize: "0.75rem",
+                        cursor: deletingTokenId === t.id || t.isActive ? "not-allowed" : "pointer",
+                        opacity: deletingTokenId === t.id || t.isActive ? 0.7 : 1
+                      }}
+                    >
+                      {deletingTokenId === t.id ? "Deleting..." : "Delete"}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

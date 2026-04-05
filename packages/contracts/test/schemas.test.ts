@@ -333,7 +333,8 @@ describe("http.ts", () => {
           expiresAt: iso,
           createdBy: "u-1",
           createdAt: iso,
-          usedAt: null
+          usedAt: null,
+          isActive: true
         })
       ).not.toThrow();
     });
@@ -362,7 +363,8 @@ describe("http.ts", () => {
           expiresAt: iso,
           createdBy: "u-1",
           createdAt: iso,
-          usedAt: null
+          usedAt: null,
+          isActive: true
         })
       ).not.toThrow();
     });
@@ -376,7 +378,8 @@ describe("http.ts", () => {
           expiresAt: iso,
           createdBy: "u-1",
           createdAt: iso,
-          usedAt: null
+          usedAt: null,
+          isActive: true
         })
       ).toThrow();
     });
@@ -393,7 +396,8 @@ describe("http.ts", () => {
               expiresAt: iso,
               createdBy: "u-1",
               createdAt: iso,
-              usedAt: null
+              usedAt: null,
+              isActive: true
             }
           ]
         })
@@ -545,6 +549,38 @@ describe("http.ts", () => {
           nodes: baseNodes,
           edges: baseEdges,
           isActive: false
+        })
+      ).toThrow();
+    });
+  });
+
+  describe("workflowGraphNodeSchema trigger data rules", () => {
+    it("accepts onSchedule with schedule", () => {
+      expect(() =>
+        workflowGraphNodeSchema.parse({
+          id: "n1",
+          type: "onSchedule",
+          data: { schedule: "*/5 * * * *" }
+        })
+      ).not.toThrow();
+    });
+
+    it("rejects onCrash with schedule", () => {
+      expect(() =>
+        workflowGraphNodeSchema.parse({
+          id: "n1",
+          type: "onCrash",
+          data: { schedule: "*/5 * * * *" }
+        })
+      ).toThrow();
+    });
+
+    it("rejects onLogPattern without filter", () => {
+      expect(() =>
+        workflowGraphNodeSchema.parse({
+          id: "n1",
+          type: "onLogPattern",
+          data: {}
         })
       ).toThrow();
     });

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   createEnrollmentToken,
   listEnrollmentTokens,
+  deleteEnrollmentToken,
   getSettings,
   listGithubInstallations,
   syncGithubInstallation,
@@ -11,6 +12,7 @@ const {
 } = vi.hoisted(() => ({
   createEnrollmentToken: vi.fn(),
   listEnrollmentTokens: vi.fn(),
+  deleteEnrollmentToken: vi.fn(),
   getSettings: vi.fn(),
   listGithubInstallations: vi.fn(),
   syncGithubInstallation: vi.fn(),
@@ -21,6 +23,7 @@ vi.mock("../src/lib/api.js", () => ({
   api: {
     createEnrollmentToken,
     listEnrollmentTokens,
+    deleteEnrollmentToken,
     getSettings,
     listGithubInstallations,
     syncGithubInstallation,
@@ -38,6 +41,7 @@ describe("SettingsPage enrollment token generation", () => {
   beforeEach(() => {
     createEnrollmentToken.mockReset();
     listEnrollmentTokens.mockReset();
+    deleteEnrollmentToken.mockReset();
     getSettings.mockReset();
     listGithubInstallations.mockReset();
     syncGithubInstallation.mockReset();
@@ -59,7 +63,8 @@ describe("SettingsPage enrollment token generation", () => {
       createdBy: "user_1",
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      usedAt: null
+      usedAt: null,
+      isActive: true
     });
 
     const expiration = new Date(Date.now() + 60 * 60 * 1000);
@@ -84,6 +89,11 @@ describe("SettingsPage enrollment token generation", () => {
     expect(calledWithTtl).toBeGreaterThan(3500);
     expect(calledWithTtl).toBeLessThanOrEqual(3600);
     expect(await screen.findByText("enroll-secret-token")).toBeInTheDocument();
+    expect(
+      await screen.findByText((text) =>
+        text.includes("SM_ENROLLMENT_TOKEN=enroll-secret-token")
+      )
+    ).toBeInTheDocument();
   });
 
   it("shows validation when expiration is in the past", async () => {
@@ -113,7 +123,8 @@ describe("SettingsPage enrollment token generation", () => {
       createdBy: "user_1",
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      usedAt: null
+      usedAt: null,
+      isActive: true
     });
 
     render(<SettingsPage />);
@@ -126,5 +137,112 @@ describe("SettingsPage enrollment token generation", () => {
 
     expect(clipboardWriteText).toHaveBeenCalledWith("copy-me-token");
     expect(await screen.findByText("Copied token to clipboard.")).toBeInTheDocument();
+  });
+
+  it("shows active status for listed tokens", async () => {
+    listEnrollmentTokens.mockResolvedValue({
+      tokens: [
+        {
+          id: "tok_active",
+          tenantId: "tenant_1",
+          createdBy: "user_1",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          usedAt: null,
+          isActive: true
+        },
+        {
+          id: "tok_inactive",
+          tenantId: "tenant_1",
+          createdBy: "user_2",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          usedAt: null,
+          isActive: false
+        }
+      ]
+    });
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(await screen.findByText("Inactive")).toBeInTheDocument();
+  });
+
+  it("deletes an enrollment token from the table", async () => {
+    listEnrollmentTokens.mockResolvedValue({
+      tokens: [
+        {
+          id: "tok_delete_me",
+          tenantId: "tenant_1",
+          createdBy: "user_1",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          usedAt: null,
+          isActive: false
+        }
+      ]
+    });
+    deleteEnrollmentToken.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<SettingsPage />);
+
+    const deleteButton = await screen.findByRole("button", { name: "Delete token tok_delete_me" });
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => {
+      expect(deleteEnrollmentToken).toHaveBeenCalledWith("tok_delete_me");
+    });
+    expect(screen.queryByRole("button", { name: "Delete token tok_delete_me" })).not.toBeInTheDocument();
+    expect(confirmSpy).toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("does not delete token when confirmation is canceled", async () => {
+    listEnrollmentTokens.mockResolvedValue({
+      tokens: [
+        {
+          id: "tok_keep_me",
+          tenantId: "tenant_1",
+          createdBy: "user_1",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          usedAt: null,
+          isActive: false
+        }
+      ]
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<SettingsPage />);
+
+    const deleteButton = await screen.findByRole("button", { name: "Delete token tok_keep_me" });
+    fireEvent.click(deleteButton);
+
+    expect(deleteEnrollmentToken).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "Delete token tok_keep_me" })).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
+  it("disables delete button for active tokens", async () => {
+    listEnrollmentTokens.mockResolvedValue({
+      tokens: [
+        {
+          id: "tok_active_blocked",
+          tenantId: "tenant_1",
+          createdBy: "user_1",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          usedAt: null,
+          isActive: true
+        }
+      ]
+    });
+
+    render(<SettingsPage />);
+
+    const deleteButton = await screen.findByRole("button", { name: "Delete token tok_active_blocked" });
+    expect(deleteButton).toBeDisabled();
   });
 });

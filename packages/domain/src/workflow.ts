@@ -53,9 +53,27 @@ export const WORKFLOW_TRIGGER_TYPES = [
 ] as const satisfies readonly WorkflowNodeType[];
 
 const TRIGGER_SET = new Set<string>(WORKFLOW_TRIGGER_TYPES);
+const CRON_SCHEDULE_REGEX = /^(\S+\s+){4}\S+$/;
+
+export const WORKFLOW_TRIGGER_DATA_SPEC: Record<
+  (typeof WORKFLOW_TRIGGER_TYPES)[number],
+  { optionalKeys: readonly string[]; requiredKeys: readonly string[] }
+> = {
+  onBuild: { optionalKeys: [], requiredKeys: [] },
+  onStartup: { optionalKeys: [], requiredKeys: [] },
+  onCrash: { optionalKeys: [], requiredKeys: [] },
+  onShutdown: { optionalKeys: [], requiredKeys: [] },
+  onLogPattern: { optionalKeys: [], requiredKeys: ["filter"] },
+  onSchedule: { optionalKeys: [], requiredKeys: ["schedule"] }
+};
 
 export function isWorkflowTriggerType(type: WorkflowNodeType): boolean {
   return TRIGGER_SET.has(type);
+}
+
+export function allowedTriggerDataKeys(type: (typeof WORKFLOW_TRIGGER_TYPES)[number]): Set<string> {
+  const spec = WORKFLOW_TRIGGER_DATA_SPEC[type];
+  return new Set(["displayName", ...spec.optionalKeys, ...spec.requiredKeys]);
 }
 
 export interface WorkflowNode {
@@ -95,6 +113,44 @@ export function validateWorkflowGraph(
   for (const node of nodes) {
     if (!NODE_TYPE_SET.has(node.type)) {
       errors.push({ code: "INVALID_NODE_TYPE", message: `Unknown node type "${node.type}"`, nodeId: node.id });
+    }
+
+    if (TRIGGER_SET.has(node.type)) {
+      const triggerType = node.type as (typeof WORKFLOW_TRIGGER_TYPES)[number];
+      const allowedKeys = allowedTriggerDataKeys(triggerType);
+      const data = node.data ?? {};
+      for (const key of Object.keys(data)) {
+        if (!allowedKeys.has(key)) {
+          errors.push({
+            code: "INVALID_TRIGGER_DATA",
+            message: `Trigger "${node.type}" does not allow data key "${key}"`,
+            nodeId: node.id
+          });
+        }
+      }
+
+      const spec = WORKFLOW_TRIGGER_DATA_SPEC[triggerType];
+      for (const requiredKey of spec.requiredKeys) {
+        const value = data[requiredKey];
+        if (typeof value !== "string" || value.trim().length === 0) {
+          errors.push({
+            code: "MISSING_TRIGGER_DATA",
+            message: `Trigger "${node.type}" requires non-empty "${requiredKey}"`,
+            nodeId: node.id
+          });
+        }
+      }
+
+      if (triggerType === "onSchedule") {
+        const scheduleValue = data.schedule;
+        if (typeof scheduleValue === "string" && scheduleValue.trim().length > 0 && !CRON_SCHEDULE_REGEX.test(scheduleValue.trim())) {
+          errors.push({
+            code: "INVALID_TRIGGER_DATA",
+            message: `Trigger "onSchedule" has invalid cron schedule "${scheduleValue}"`,
+            nodeId: node.id
+          });
+        }
+      }
     }
   }
 

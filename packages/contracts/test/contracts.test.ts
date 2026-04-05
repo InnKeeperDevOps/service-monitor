@@ -70,7 +70,8 @@ describe("contracts", () => {
       expiresAt: "2026-01-01T00:00:00.000Z",
       createdBy: "u-1",
       createdAt: "2025-12-31T00:00:00.000Z",
-      usedAt: null
+      usedAt: null,
+      isActive: true
     });
     expect(created.token).toBe("plaintext-secret");
 
@@ -82,7 +83,8 @@ describe("contracts", () => {
           expiresAt: "2026-01-01T00:00:00.000Z",
           createdBy: "u-1",
           createdAt: "2025-12-31T00:00:00.000Z",
-          usedAt: null
+          usedAt: null,
+          isActive: true
         }
       ]
     });

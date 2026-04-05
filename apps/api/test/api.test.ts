@@ -514,6 +514,11 @@ describe("api", () => {
       expect(response.statusCode).toBe(401);
     });
 
+    it("returns 401 for DELETE when unauthenticated", async () => {
+      const response = await app.inject({ method: "DELETE", url: "/api/v1/agents/enrollment-tokens/tok_unauthorized" });
+      expect(response.statusCode).toBe(401);
+    });
+
     it("creates a token and returns plaintext once with metadata", async () => {
       const response = await app.inject({
         method: "POST",
@@ -529,9 +534,10 @@ describe("api", () => {
       expect(body.tenantId).toBe("t-1");
       expect(body.createdBy).toBe("u-1");
       expect(body.usedAt).toBeNull();
+      expect(body.isActive).toBe(true);
     });
 
-    it("lists active tokens without plaintext token field", async () => {
+    it("lists enrollment tokens (active and inactive) without plaintext token field", async () => {
       await app.inject({
         method: "POST",
         url: "/api/v1/agents/enrollment-tokens",
@@ -550,6 +556,60 @@ describe("api", () => {
       expect(row).not.toHaveProperty("token");
       expect(row.id).toBeTruthy();
       expect(row.tenantId).toBe("t-1");
+      expect(row.isActive).toBe(true);
+    });
+
+    it("marks a token inactive after it is consumed", async () => {
+      const createdResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/agents/enrollment-tokens",
+        headers: { authorization: "Bearer dev-token" },
+        payload: { ttlSeconds: 3600 }
+      });
+      const created = createdResponse.json() as { token: string; id: string };
+
+      const ws = await app.injectWS(`/realtime?token=${encodeURIComponent(created.token)}`);
+      ws.close();
+
+      const listedResponse = await app.inject({
+        method: "GET",
+        url: "/api/v1/agents/enrollment-tokens",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(listedResponse.statusCode).toBe(200);
+      const listed = listedResponse.json() as {
+        tokens: { id: string; isActive: boolean; usedAt: string | null }[];
+      };
+      expect(listed.tokens).toHaveLength(1);
+      expect(listed.tokens[0]?.id).toBe(created.id);
+      expect(listed.tokens[0]?.isActive).toBe(false);
+      expect(listed.tokens[0]?.usedAt).not.toBeNull();
+    });
+
+    it("deletes enrollment token by id", async () => {
+      const createdResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/agents/enrollment-tokens",
+        headers: { authorization: "Bearer dev-token" },
+        payload: { ttlSeconds: 3600 }
+      });
+      const created = createdResponse.json() as { id: string };
+
+      const deleteResponse = await app.inject({
+        method: "DELETE",
+        url: `/api/v1/agents/enrollment-tokens/${created.id}`,
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(deleteResponse.statusCode).toBe(204);
+
+      const listedResponse = await app.inject({
+        method: "GET",
+        url: "/api/v1/agents/enrollment-tokens",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(listedResponse.statusCode).toBe(200);
+      const listed = listedResponse.json() as { tokens: { id: string }[] };
+      expect(listed.tokens).toHaveLength(0);
     });
 
     it("fails closed when durable enrollment store is not configured", async () => {

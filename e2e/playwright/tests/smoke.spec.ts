@@ -41,12 +41,21 @@ test("E2E-004 Services create form includes Docker fields", async ({ page }) => 
   await expect(page.getByLabel("Compose Path (optional)")).toBeVisible();
 });
 
-test("E2E-005 Workflow editor validates graph", async ({ page }) => {
+test("E2E-005 Workflow editor graph actions and trigger params", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("link", { name: "Workflows" }).click();
   await expect(page).toHaveURL(/#workflows/);
+  await page.getByText("onCrash").first().click();
+  await expect(page.getByRole("button", { name: "Disconnect node" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Delete node" })).toBeVisible();
+  await expect(page.getByLabel("Schedule (cron)")).toHaveCount(0);
+  await page.getByLabel("Node type").selectOption("onSchedule");
+  await expect(page.getByLabel("Schedule (cron)")).toBeVisible();
+  await page.getByLabel("Node type").selectOption("onCrash");
+  await expect(page.getByLabel("Schedule (cron)")).toHaveCount(0);
+  await page.getByRole("button", { name: "Disconnect node" }).click();
   await page.getByRole("button", { name: "Validate" }).click();
-  await expect(page.getByText("Workflow graph is valid")).toBeVisible();
+  await expect(page.getByText("Validation errors:")).toBeVisible();
 });
 
 test("E2E-006 Settings exposes automation kill switch", async ({ page }) => {

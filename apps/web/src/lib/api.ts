@@ -17,6 +17,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({ code: "UNKNOWN", message: res.statusText }));
     throw new Error(body.message ?? `API ${res.status}`);
   }
+  if (res.status === 204) {
+    return undefined as T;
+  }
   return res.json() as Promise<T>;
 }
 
@@ -160,18 +163,31 @@ export const api = {
       body: JSON.stringify(data)
     }),
   listEnrollmentTokens: () =>
-    apiFetch<{ tokens: { id: string; tenantId: string; expiresAt: string; createdBy: string; createdAt: string; usedAt: string | null }[] }>(
+    apiFetch<{ tokens: { id: string; tenantId: string; expiresAt: string; createdBy: string; createdAt: string; usedAt: string | null; isActive: boolean }[] }>(
       "/api/v1/agents/enrollment-tokens"
     ),
 
   createEnrollmentToken: (data: { ttlSeconds: number }) =>
-    apiFetch<{ id: string; tenantId: string; token: string; expiresAt: string; createdBy: string; createdAt: string; usedAt: string | null }>(
+    apiFetch<{
+      id: string;
+      tenantId: string;
+      token: string;
+      expiresAt: string;
+      createdBy: string;
+      createdAt: string;
+      usedAt: string | null;
+      isActive: boolean;
+    }>(
       "/api/v1/agents/enrollment-tokens",
       {
         method: "POST",
         body: JSON.stringify(data)
       }
     ),
+  deleteEnrollmentToken: (tokenId: string) =>
+    apiFetch<void>(`/api/v1/agents/enrollment-tokens/${encodeURIComponent(tokenId)}`, {
+      method: "DELETE"
+    }),
 
   listGithubInstallations: () =>
     apiFetch<{ installations: { installationId: number; accountLogin: string; repos?: string[] }[] }>(

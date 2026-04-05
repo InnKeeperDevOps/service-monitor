@@ -286,4 +286,24 @@ describe("workflows API", () => {
       })
     );
   });
+
+  it("rejects invalid trigger parameters", async () => {
+    const svc = await domainStore.createService("t-1", { name: "invalid-trigger-data", repo: "o/r", branch: "main" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/workflows",
+      headers: AUTH,
+      payload: {
+        serviceId: svc.id,
+        nodes: [{ id: "n1", type: "onCrash", data: { schedule: "*/5 * * * *" } }],
+        edges: []
+      }
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual(
+      expect.objectContaining({
+        code: "BAD_REQUEST"
+      })
+    );
+  });
 });

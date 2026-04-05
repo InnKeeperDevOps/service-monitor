@@ -66,7 +66,12 @@ import {
 import { createMemoryDomainStore, type DomainStore } from "./domainStore.js";
 import { createPostgresDomainStore } from "./postgresDomainStore.js";
 import { resolveTenantStoreBackend } from "./storeAdapter.js";
-import { createEnrollmentTokenForTenant, listActiveEnrollmentTokensForTenant, validateEnrollmentToken } from "./enrollmentStore.js";
+import {
+  createEnrollmentTokenForTenant,
+  deleteEnrollmentTokenForTenant,
+  listEnrollmentTokensForTenant,
+  validateEnrollmentToken
+} from "./enrollmentStore.js";
 import { createMemoryAuthStore, seedDevUser } from "./memoryAuthStore.js";
 import { createPostgresAuthStore } from "./postgresAuthStore.js";
 import type { KaiadConfig } from "./configPersistence.js";
@@ -865,8 +870,42 @@ export function buildServer(opts: BuildServerOptions = {}) {
       );
     }
     try {
-      const tokens = await listActiveEnrollmentTokensForTenant(session.tenantId);
+      const tokens = await listEnrollmentTokensForTenant(session.tenantId);
       return listEnrollmentTokensResponseSchema.parse({ tokens });
+    } catch (err) {
+      return reply.status(503).send(
+        apiErrorSchema.parse({
+          code: "ENROLLMENT_STORE_UNAVAILABLE",
+          message: err instanceof Error ? err.message : "Enrollment token store unavailable",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+  });
+
+  app.delete<{ Params: { tokenId: string } }>("/api/v1/agents/enrollment-tokens/:tokenId", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Missing or invalid bearer token",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    try {
+      const deleted = await deleteEnrollmentTokenForTenant(session.tenantId, req.params.tokenId);
+      if (!deleted) {
+        return reply.status(404).send(
+          apiErrorSchema.parse({
+            code: "NOT_FOUND",
+            message: "Enrollment token not found",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      return reply.status(204).send();
     } catch (err) {
       return reply.status(503).send(
         apiErrorSchema.parse({
@@ -1207,7 +1246,29 @@ export function buildServer(opts: BuildServerOptions = {}) {
     if (!session) {
       return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
     }
-    const body = createWorkflowGraphRequestSchema.parse(req.body);
+    const parsedBody = createWorkflowGraphRequestSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: parsedBody.error.issues[0]?.message ?? "Invalid workflow graph payload",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const body = parsedBody.data;
+    const nodes = toEngineWorkflowNodes(body.nodes);
+    const edges = body.edges.map((edge) => ({ from: edge.from, to: edge.to }));
+    const validationErrors = validateDomainWorkflowGraph(nodes, edges);
+    if (validationErrors.length > 0) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: validationErrors[0].message,
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
     const graph = await domainStore.createWorkflowGraph(session.tenantId, body);
     return reply.status(201).send(graph);
   });
@@ -1217,7 +1278,29 @@ export function buildServer(opts: BuildServerOptions = {}) {
     if (!session) {
       return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
     }
-    const body = executeWorkflowRequestSchema.parse(req.body);
+    const parsedBody = executeWorkflowRequestSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: parsedBody.error.issues[0]?.message ?? "Invalid workflow execute payload",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const body = parsedBody.data;
+    const nodes = toEngineWorkflowNodes(body.nodes);
+    const edges = body.edges.map((edge) => ({ from: edge.from, to: edge.to }));
+    const validationErrors = validateDomainWorkflowGraph(nodes, edges);
+    if (validationErrors.length > 0) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: validationErrors[0].message,
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
     const service = await domainStore.getService(session.tenantId, body.serviceId);
     if (!service) {
       return reply.status(404).send(
@@ -1282,7 +1365,17 @@ export function buildServer(opts: BuildServerOptions = {}) {
     if (!session) {
       return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
     }
-    const body = executeWorkflowRequestSchema.parse(req.body);
+    const parsedBody = executeWorkflowRequestSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: parsedBody.error.issues[0]?.message ?? "Invalid workflow dry-run payload",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const body = parsedBody.data;
     const invalidNodeType = body.nodes.find((node) => !WORKFLOW_NODE_TYPE_SET.has(node.type));
     if (invalidNodeType) {
       return reply.status(400).send(

@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, type DragEvent } from "react";
 import {
+  allowedTriggerDataKeys,
   WORKFLOW_NODE_TYPES,
   WORKFLOW_TRIGGER_TYPES,
+  isWorkflowTriggerType,
   validateWorkflowGraph,
   type WorkflowNode,
   type WorkflowNodeType
@@ -99,7 +101,31 @@ const INITIAL_EDGES: Edge[] = [
   { id: "e5", source: "jn", target: "sl" }
 ];
 
-const TRIGGER_TYPES = new Set<string>(WORKFLOW_TRIGGER_TYPES);
+const TRIGGER_PARAM_KEYS = new Set(["filter", "schedule"]);
+
+function isTriggerNodeType(nodeType: WorkflowNodeType): nodeType is (typeof WORKFLOW_TRIGGER_TYPES)[number] {
+  return isWorkflowTriggerType(nodeType);
+}
+
+function sanitizeDataForNodeType(nodeType: WorkflowNodeType, data: WorkflowEditorNodeData): WorkflowEditorNodeData {
+  const nextData = { ...data };
+  if (isTriggerNodeType(nodeType)) {
+    const allowedKeys = allowedTriggerDataKeys(nodeType);
+    for (const key of Object.keys(nextData)) {
+      if (key === "nodeType" || key === "label") {
+        continue;
+      }
+      if (!allowedKeys.has(key)) {
+        delete nextData[key];
+      }
+    }
+    return nextData;
+  }
+  for (const key of TRIGGER_PARAM_KEYS) {
+    delete nextData[key];
+  }
+  return nextData;
+}
 
 function getNodeLabel(data: WorkflowEditorNodeData): string {
   const custom = typeof data.displayName === "string" ? data.displayName.trim() : "";
@@ -156,9 +182,11 @@ export function WorkflowEditorPage() {
   const [testRunResult, setTestRunResult] = useState<{ nodeId: string; nodeType: string; success: boolean; output?: string }[] | null>(null);
   const [paletteFilter, setPaletteFilter] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [reactFlow, setReactFlow] = useState<ReactFlowInstance<Node<WorkflowEditorNodeData>, Edge> | null>(null);
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) ?? null : null;
+  const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) ?? null : null;
   const selectedService = services.find((svc) => svc.id === selectedServiceId);
   const serviceWorkflows = useMemo(() => {
     return workflows
@@ -416,10 +444,17 @@ export function WorkflowEditorPage() {
 
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node<WorkflowEditorNodeData>) => {
     setSelectedNodeId(node.id);
+    setSelectedEdgeId(null);
+  }, []);
+
+  const handleEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    setSelectedEdgeId(edge.id);
+    setSelectedNodeId(null);
   }, []);
 
   const handlePaneClick = useCallback(() => {
     setSelectedNodeId(null);
+    setSelectedEdgeId(null);
   }, []);
 
   const updateNodeData = useCallback((nodeId: string, key: string, value: string) => {
@@ -427,10 +462,10 @@ export function WorkflowEditorPage() {
       prev.map((n) =>
         n.id === nodeId
           ? (() => {
-            const nextData = { ...n.data, [key]: value } as WorkflowEditorNodeData;
+            let nextData = { ...n.data, [key]: value } as WorkflowEditorNodeData;
             if (key === "nodeType") {
               const nextType = value as WorkflowNodeType;
-              nextData.nodeType = nextType;
+              nextData = sanitizeDataForNodeType(nextType, { ...nextData, nodeType: nextType });
             }
             nextData.label = getNodeLabel(nextData);
             return { ...n, data: nextData };
@@ -442,20 +477,78 @@ export function WorkflowEditorPage() {
 
   const handleNodesChange = useCallback((changes: NodeChange<Node<WorkflowEditorNodeData>>[]) => {
     setNodes((current) => applyNodeChanges(changes, current));
+    if (selectedNodeId && changes.some((change) => change.type === "remove" && change.id === selectedNodeId)) {
+      setSelectedNodeId(null);
+    }
+  }, [selectedNodeId]);
+
+  const handleNodesDelete = useCallback((deleted: Node[]) => {
+    const deletedIds = new Set(deleted.map((node) => node.id));
+    setSelectedNodeId((current) => (current && deletedIds.has(current) ? null : current));
+    setSelectedEdgeId((current) => {
+      if (!current) return current;
+      const deletedSelectedEdge = edges.find((edge) => edge.id === current);
+      if (!deletedSelectedEdge) return null;
+      return deletedIds.has(deletedSelectedEdge.source) || deletedIds.has(deletedSelectedEdge.target) ? null : current;
+    });
   }, []);
 
   const handleEdgesChange = useCallback((changes: EdgeChange<Edge>[]) => {
     setEdges((current) => applyEdgeChanges(changes, current));
+    if (selectedEdgeId && changes.some((change) => change.type === "remove" && change.id === selectedEdgeId)) {
+      setSelectedEdgeId(null);
+    }
+  }, [selectedEdgeId]);
+
+  const handleEdgesDelete = useCallback((deleted: Edge[]) => {
+    const deletedIds = new Set(deleted.map((edge) => edge.id));
+    setSelectedEdgeId((current) => (current && deletedIds.has(current) ? null : current));
   }, []);
 
   const handleConnect = useCallback((connection: Connection) => {
-    setEdges((current) => addEdge({ ...connection, id: `e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }, current));
+    if (!connection.source || !connection.target) {
+      return;
+    }
+    if (connection.source === connection.target) {
+      return;
+    }
+    setEdges((current) => {
+      const exists = current.some(
+        (edge) =>
+          edge.source === connection.source &&
+          edge.target === connection.target &&
+          (edge.sourceHandle ?? null) === (connection.sourceHandle ?? null) &&
+          (edge.targetHandle ?? null) === (connection.targetHandle ?? null)
+      );
+      if (exists) {
+        return current;
+      }
+      return addEdge({ ...connection, id: `e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }, current);
+    });
   }, []);
+
+  const handleDeleteSelectedNode = useCallback(() => {
+    if (!selectedNodeId) return;
+    setNodes((current) => current.filter((node) => node.id !== selectedNodeId));
+    setEdges((current) => current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  }, [selectedNodeId]);
+
+  const handleDisconnectSelectedNode = useCallback(() => {
+    if (!selectedNodeId) return;
+    setEdges((current) => current.filter((edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId));
+    setSelectedEdgeId(null);
+  }, [selectedNodeId]);
+
+  const handleDeleteSelectedEdge = useCallback(() => {
+    if (!selectedEdgeId) return;
+    setEdges((current) => current.filter((edge) => edge.id !== selectedEdgeId));
+    setSelectedEdgeId(null);
+  }, [selectedEdgeId]);
 
   const statusColorMap = { success: "var(--color-success)", error: "var(--color-danger)", info: "var(--color-info)" };
   const statusBgMap = { success: "var(--color-success-bg)", error: "var(--color-danger-bg)", info: "var(--color-info-bg)" };
-
-  const isTrigger = selectedNode ? TRIGGER_TYPES.has(String(selectedNode.data.nodeType)) : false;
 
   return (
     <section>
@@ -559,8 +652,11 @@ export function WorkflowEditorPage() {
               onInit={setReactFlow}
               onNodesChange={handleNodesChange}
               onEdgesChange={handleEdgesChange}
+              onNodesDelete={handleNodesDelete}
+              onEdgesDelete={handleEdgesDelete}
               onConnect={handleConnect}
               onNodeClick={handleNodeClick}
+              onEdgeClick={handleEdgeClick}
               onPaneClick={handlePaneClick}
               deleteKeyCode={["Backspace", "Delete"]}
               fitView
@@ -581,10 +677,13 @@ export function WorkflowEditorPage() {
             {selectedNode ? (
               <NodeConfigPanel
                 node={selectedNode}
-                isTrigger={isTrigger}
                 onUpdate={updateNodeData}
+                onDeleteNode={handleDeleteSelectedNode}
+                onDisconnectNode={handleDisconnectSelectedNode}
                 onClose={() => setSelectedNodeId(null)}
               />
+            ) : selectedEdge ? (
+              <EdgeConfigPanel edge={selectedEdge} onDeleteEdge={handleDeleteSelectedEdge} onClose={() => setSelectedEdgeId(null)} />
             ) : (
               <PalettePanel filter={paletteFilter} onFilterChange={setPaletteFilter} />
             )}
@@ -597,15 +696,21 @@ export function WorkflowEditorPage() {
 
 function NodeConfigPanel({
   node,
-  isTrigger,
   onUpdate,
+  onDeleteNode,
+  onDisconnectNode,
   onClose,
 }: {
   node: Node<WorkflowEditorNodeData>;
-  isTrigger: boolean;
   onUpdate: (nodeId: string, key: string, value: string) => void;
+  onDeleteNode: () => void;
+  onDisconnectNode: () => void;
   onClose: () => void;
 }) {
+  const nodeType = node.data.nodeType;
+  const showFilterField = nodeType === "onLogPattern";
+  const showScheduleField = nodeType === "onSchedule";
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
@@ -616,6 +721,14 @@ function NodeConfigPanel({
       </div>
       <div style={{ marginBottom: "0.5rem", color: "var(--color-text-secondary)", fontSize: "0.75rem" }}>
         ID: {node.id}
+      </div>
+      <div style={{ display: "flex", gap: "0.35rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+        <Button size="sm" variant="secondary" onClick={onDisconnectNode}>
+          Disconnect node
+        </Button>
+        <Button size="sm" variant="danger" onClick={onDeleteNode}>
+          Delete node
+        </Button>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
         <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
@@ -638,21 +751,21 @@ function NodeConfigPanel({
           onChange={(e) => onUpdate(node.id, "displayName", e.target.value)}
           placeholder={String(node.data.nodeType)}
         />
-        {isTrigger && (
-          <>
-            <Input
-              label="Filter"
-              placeholder="e.g. severity=critical"
-              value={String(node.data.filter ?? "")}
-              onChange={(e) => onUpdate(node.id, "filter", e.target.value)}
-            />
-            <Input
-              label="Schedule (cron)"
-              placeholder="*/5 * * * *"
-              value={String(node.data.schedule ?? "")}
-              onChange={(e) => onUpdate(node.id, "schedule", e.target.value)}
-            />
-          </>
+        {showFilterField && (
+          <Input
+            label="Filter"
+            placeholder="e.g. severity=critical"
+            value={String(node.data.filter ?? "")}
+            onChange={(e) => onUpdate(node.id, "filter", e.target.value)}
+          />
+        )}
+        {showScheduleField && (
+          <Input
+            label="Schedule (cron)"
+            placeholder="*/5 * * * *"
+            value={String(node.data.schedule ?? "")}
+            onChange={(e) => onUpdate(node.id, "schedule", e.target.value)}
+          />
         )}
         {node.data.nodeType === "runShell" && (
           <Input
@@ -711,6 +824,33 @@ function NodeConfigPanel({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+function EdgeConfigPanel({
+  edge,
+  onDeleteEdge,
+  onClose,
+}: {
+  edge: Edge;
+  onDeleteEdge: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+        <div style={{ fontWeight: 600 }}>Edge Config</div>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          ✕
+        </Button>
+      </div>
+      <div style={{ marginBottom: "0.75rem", color: "var(--color-text-secondary)", fontSize: "0.75rem" }}>
+        {edge.source} → {edge.target}
+      </div>
+      <Button size="sm" variant="danger" onClick={onDeleteEdge}>
+        Delete edge
+      </Button>
     </div>
   );
 }

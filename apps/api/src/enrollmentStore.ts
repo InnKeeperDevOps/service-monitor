@@ -15,7 +15,8 @@ export type EnrollmentTokenRow = {
 const tokensByTenant = new Map<string, EnrollmentTokenRow[]>();
 type EnrollmentStore = {
   create(input: { tenantId: string; createdBy: string; ttlSeconds: number }): Promise<EnrollmentTokenRow & { token: string }>;
-  listActive(tenantId: string): Promise<EnrollmentTokenRow[]>;
+  list(tenantId: string): Promise<EnrollmentTokenRow[]>;
+  delete(tenantId: string, tokenId: string): Promise<boolean>;
   consume(plaintext: string): Promise<{ tenantId: string; tokenId: string } | null>;
   resetForTests?(): void | Promise<void>;
 };
@@ -31,13 +32,15 @@ function hashToken(plaintext: string): string {
 }
 
 function toMetadata(row: EnrollmentTokenRow): EnrollmentTokenMetadata {
+  const isActive = row.usedAt === null && row.expiresAt.getTime() > Date.now();
   return {
     id: row.id,
     tenantId: row.tenantId,
     expiresAt: row.expiresAt.toISOString(),
     createdBy: row.createdBy,
     createdAt: row.createdAt.toISOString(),
-    usedAt: row.usedAt ? row.usedAt.toISOString() : null
+    usedAt: row.usedAt ? row.usedAt.toISOString() : null,
+    isActive
   };
 }
 
@@ -62,10 +65,23 @@ function createInMemoryEnrollmentStore(): EnrollmentStore {
       tokensByTenant.set(input.tenantId, list);
       return { ...row, token: plaintext };
     },
-    async listActive(tenantId) {
-      const now = new Date();
+    async list(tenantId) {
       const list = tokensByTenant.get(tenantId) ?? [];
-      return list.filter((row) => row.usedAt === null && row.expiresAt > now);
+      return [...list].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    },
+    async delete(tenantId, tokenId) {
+      const list = tokensByTenant.get(tenantId) ?? [];
+      const before = list.length;
+      const next = list.filter((row) => row.id !== tokenId);
+      if (next.length === before) {
+        return false;
+      }
+      if (next.length === 0) {
+        tokensByTenant.delete(tenantId);
+      } else {
+        tokensByTenant.set(tenantId, next);
+      }
+      return true;
     },
     async consume(plaintext) {
       const hash = hashToken(plaintext);
@@ -114,13 +130,11 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
         );
         return { ...row, token: plaintext };
       },
-      async listActive(tenantId) {
+      async list(tenantId) {
         const result = await pool.query(
           `select id, tenant_id, token_hash, expires_at, created_by, created_at, used_at
              from agent_enrollment_tokens
             where tenant_id = $1
-              and used_at is null
-              and expires_at > now()
             order by created_at desc`,
           [tenantId]
         );
@@ -133,6 +147,15 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
           createdAt: new Date(String(row.created_at)),
           usedAt: row.used_at ? new Date(String(row.used_at)) : null
         }));
+      },
+      async delete(tenantId, tokenId) {
+        const result = await pool.query(
+          `delete from agent_enrollment_tokens
+            where tenant_id = $1
+              and id = $2`,
+          [tenantId, tokenId]
+        );
+        return result.rowCount > 0;
       },
       async consume(plaintext) {
         const result = await pool.query(
@@ -186,10 +209,15 @@ export async function createEnrollmentTokenForTenant(input: {
   return { token: row.token, response: { ...metadata, token: row.token } };
 }
 
-export async function listActiveEnrollmentTokensForTenant(tenantId: string): Promise<EnrollmentTokenMetadata[]> {
+export async function listEnrollmentTokensForTenant(tenantId: string): Promise<EnrollmentTokenMetadata[]> {
   const store = await getEnrollmentStore();
-  const rows = await store.listActive(tenantId);
+  const rows = await store.list(tenantId);
   return rows.map(toMetadata);
+}
+
+export async function deleteEnrollmentTokenForTenant(tenantId: string, tokenId: string): Promise<boolean> {
+  const store = await getEnrollmentStore();
+  return store.delete(tenantId, tokenId);
 }
 
 export async function validateEnrollmentToken(plaintext: string): Promise<{ tenantId: string; tokenId: string } | null> {

@@ -1,0 +1,29 @@
+description: Run build and tests after any code change
+alwaysApply: true
+---
+
+# Build and Test On Every Code Change
+
+Whenever code changes are made, run build/typecheck and tests for the impacted area.
+This is mandatory for every change batch, not only before final completion.
+
+## Required checks
+
+- Run a build/typecheck command for impacted packages/apps immediately after the change.
+- Run tests for impacted packages/apps immediately after the change.
+- If full-repo checks are too expensive, run targeted checks that cover edited areas and state exactly what was run.
+
+## Enforcement (always)
+
+- Run build/typecheck + tests immediately after each code change batch.
+- Do not proceed as if work is complete for that batch until both checks pass.
+- Do not claim success or "done" status unless the latest build and test run passed for the changed scope.
+- If build or tests fail, fix issues and re-run both checks.
+- Always summarize the commands run and their outcomes.
+
+## Example
+
+```bash
+pnpm turbo run typecheck --filter=@sm/web --filter=@sm/api
+pnpm turbo run test --filter=@sm/web --filter=@sm/api
+```

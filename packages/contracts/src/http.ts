@@ -66,7 +66,8 @@ export const enrollmentTokenMetadataSchema = z.object({
   expiresAt: z.string().datetime(),
   createdBy: z.string(),
   createdAt: z.string().datetime(),
-  usedAt: z.string().datetime().nullable()
+  usedAt: z.string().datetime().nullable(),
+  isActive: z.boolean()
 });
 
 export const createEnrollmentTokenResponseSchema = enrollmentTokenMetadataSchema.extend({
@@ -104,12 +105,65 @@ export const updateIncidentStatusRequestSchema = z.object({
   status: incidentStatusSchema
 });
 
-export const workflowGraphNodeSchema = z.object({
+const workflowTriggerTypes = ["onBuild", "onStartup", "onCrash", "onShutdown", "onLogPattern", "onSchedule"] as const;
+const WORKFLOW_TRIGGER_TYPE_SET = new Set<string>(workflowTriggerTypes);
+const workflowNodeBaseShape = {
   id: z.string(),
-  type: z.string(),
-  position: z.object({ x: z.number(), y: z.number() }).optional(),
+  position: z.object({ x: z.number(), y: z.number() }).optional()
+};
+
+function triggerDataSchema(shape: z.ZodRawShape) {
+  return z.object({
+    displayName: z.string().optional(),
+    ...shape
+  }).strict();
+}
+
+const triggerNodeSchemas = [
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("onBuild"),
+    data: triggerDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("onStartup"),
+    data: triggerDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("onCrash"),
+    data: triggerDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("onShutdown"),
+    data: triggerDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("onLogPattern"),
+    data: triggerDataSchema({ filter: z.string().min(1) })
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("onSchedule"),
+    data: triggerDataSchema({ schedule: z.string().min(1) })
+  })
+] as const;
+
+const workflowNonTriggerNodeSchema = z.object({
+  ...workflowNodeBaseShape,
+  type: z.string().refine((type) => !WORKFLOW_TRIGGER_TYPE_SET.has(type), {
+    message: "Non-trigger schema does not accept trigger node types"
+  }),
   data: z.record(z.unknown()).optional()
 });
+
+export const workflowGraphNodeSchema = z.union([
+  z.discriminatedUnion("type", triggerNodeSchemas),
+  workflowNonTriggerNodeSchema
+]);
 
 export const workflowGraphEdgeSchema = z.object({
   from: z.string(),
