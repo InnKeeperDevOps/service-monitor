@@ -44,7 +44,7 @@ export function bootstrapEnv(): { setupComplete: boolean; configLoaded: boolean 
 
   for (const [jsonKey, envKey] of Object.entries(CONFIG_KEY_MAP)) {
     const value = config[jsonKey as keyof KaiadConfig];
-    if (typeof value === "string" && !(envKey in process.env)) {
+    if (typeof value === "string") {
       process.env[envKey] = value;
     }
   }
@@ -54,7 +54,7 @@ export function bootstrapEnv(): { setupComplete: boolean; configLoaded: boolean 
     if (nested && typeof nested === "object") {
       for (const [nestedKey, envKey] of Object.entries(mapping)) {
         const value = (nested as Record<string, unknown>)[nestedKey];
-        if (typeof value === "string" && !(envKey in process.env)) {
+        if (typeof value === "string") {
           process.env[envKey] = value;
         }
       }
