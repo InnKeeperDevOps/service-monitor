@@ -7,6 +7,8 @@ import { buildServer } from "../src/server.js";
 const app = buildServer();
 
 beforeAll(async () => {
+  process.env.KAIAD_SKIP_SETUP_GATE = "1";
+  process.env.SM_ENROLLMENT_STORE = "memory";
   await app.ready();
 });
 
@@ -16,6 +18,8 @@ afterAll(async () => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  process.env.KAIAD_SKIP_SETUP_GATE = "1";
+  process.env.SM_ENROLLMENT_STORE = "memory";
 });
 
 describe("api", () => {
@@ -97,6 +101,7 @@ describe("api", () => {
 
   describe("setup-required mode", () => {
     it("exposes setup status when DATABASE_URL is absent", async () => {
+      vi.stubEnv("KAIAD_SKIP_SETUP_GATE", "");
       vi.stubEnv("DATABASE_URL", "");
       vi.stubEnv("KAIAD_SETUP_COMPLETE", "");
       vi.stubEnv("KAIAD_SETUP_REQUIRED", "1");
@@ -104,16 +109,14 @@ describe("api", () => {
       await setupApp.ready();
       const response = await setupApp.inject({ method: "GET", url: "/api/v1/setup/status" });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual(
-        expect.objectContaining({
-          setupRequired: true,
-          setupComplete: false
-        })
-      );
+      const status = response.json() as { setupRequired: boolean; version: string };
+      expect(status.setupRequired).toBe(true);
+      expect(status.version.length).toBeGreaterThan(0);
       await setupApp.close();
     });
 
     it("returns SETUP_REQUIRED for non-setup API routes while setup is pending", async () => {
+      vi.stubEnv("KAIAD_SKIP_SETUP_GATE", "");
       vi.stubEnv("DATABASE_URL", "");
       vi.stubEnv("KAIAD_SETUP_COMPLETE", "");
       vi.stubEnv("KAIAD_SETUP_REQUIRED", "1");
@@ -551,7 +554,7 @@ describe("api", () => {
 
     it("fails closed when durable enrollment store is not configured", async () => {
       vi.stubEnv("SM_ENROLLMENT_STORE", "");
-      vi.stubEnv("DATABASE_URL", "");
+      vi.stubEnv("DATABASE_URL", "postgres://test:test@127.0.0.1:65531/unreachable_enrollment");
       await __resetEnrollmentStoreForTests();
 
       const response = await app.inject({

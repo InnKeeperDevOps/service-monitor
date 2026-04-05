@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/lib/api.js", () => ({
   api: {
+    getSetupStatus: vi.fn(() =>
+      Promise.resolve({ setupRequired: false, version: "0.0.0-test" })
+    ),
     listIncidents: vi.fn(() => Promise.resolve({ incidents: [] })),
     listAgents: vi.fn(() => Promise.resolve({ agents: [] })),
     listServices: vi.fn(() => Promise.resolve({ services: [] })),
@@ -21,7 +24,9 @@ beforeEach(() => {
 describe("web app", () => {
   it("renders sidebar with Kaiad branding", async () => {
     render(<App />);
-    expect(screen.getByText("Kaiad")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Kaiad")).toBeInTheDocument();
+    });
     await waitFor(() => {
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });

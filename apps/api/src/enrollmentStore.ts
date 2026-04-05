@@ -161,11 +161,12 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
 async function getEnrollmentStore(): Promise<EnrollmentStore> {
   if (!cachedStorePromise) {
     cachedStorePromise = (async () => {
-      const pgStore = await createPostgresEnrollmentStore();
-      if (pgStore) return pgStore;
+      // Explicit dev mode wins over DATABASE_URL so local tests / CI need not run Postgres.
       if (isExplicitInMemoryMode()) {
         return createInMemoryEnrollmentStore();
       }
+      const pgStore = await createPostgresEnrollmentStore();
+      if (pgStore) return pgStore;
       throw new Error(
         "Enrollment token store is not configured. Set DATABASE_URL for durable storage, or set SM_ENROLLMENT_STORE=memory for explicit dev mode."
       );

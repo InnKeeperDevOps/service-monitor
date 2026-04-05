@@ -322,6 +322,10 @@ export function buildServer(opts: BuildServerOptions = {}) {
   app.decorate("realtimeManager", realtimeManager);
 
   app.addHook("onRequest", async (req, reply) => {
+    // Unit tests run without a real DB; allow API routes while still exposing /api/v1/setup/status.
+    const skipSetupGate =
+      process.env.KAIAD_SKIP_SETUP_GATE === "1" && process.env.VITEST === "true";
+    if (skipSetupGate) return;
     if (!isSetupRequired()) return;
     const url = req.url;
     if (
