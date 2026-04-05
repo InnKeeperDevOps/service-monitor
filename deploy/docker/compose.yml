@@ -38,13 +38,16 @@ services:
         condition: service_healthy
     volumes:
       - ../..:/workspace
+      - kaiad-data:/data
     command: sh -c "corepack enable && pnpm exec turbo run build --filter=@sm/api && pnpm --filter @sm/api start"
     environment:
       - NODE_ENV=production
       # Acceptance stack + e2e use Bearer dev-token against production-mode API.
       - SM_ALLOW_DEV_TOKEN=1
       - PORT=3001
-      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/service_monitor
+      # Persist setup wizard config (including databaseUrl) across container restarts.
+      - KAIAD_DATA_DIR=/data
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-service_monitor}
       - REDIS_URL=redis://redis:6379
       - INTERNAL_API_TOKEN=dev-token
       - POSTGRES_HOST=postgres
@@ -76,13 +79,13 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_DB: service_monitor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-service_monitor}
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-service_monitor}"]
       interval: 3s
       timeout: 3s
       retries: 10
@@ -100,7 +103,7 @@ services:
     environment:
       - NODE_ENV=production
       - WORKER_HEALTH_PORT=9090
-      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/service_monitor
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-service_monitor}
       - REDIS_URL=redis://redis:6379
       - INTERNAL_API_URL=http://api:3001
       - INTERNAL_API_TOKEN=dev-token
@@ -116,3 +119,6 @@ services:
       timeout: 5s
       retries: 40
       start_period: 180s
+
+volumes:
+  kaiad-data:

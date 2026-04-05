@@ -88,8 +88,14 @@ Use one terminal per long-running process.
 ### 1) Start dependencies (Postgres + Redis)
 
 ```bash
+# Optional overrides (defaults: postgres/postgres/service_monitor)
+# export POSTGRES_USER=myuser
+# export POSTGRES_PASSWORD=mypassword
+# export POSTGRES_DB=mydb
 docker compose -f deploy/docker/compose.yml up -d postgres redis
 ```
+
+`compose.yml` now mounts a persistent API data volume at `/data` and sets `KAIAD_DATA_DIR=/data`, so setup wizard values (like `databaseUrl`) are persisted across container restarts.
 
 ### 2) Run API (`apps/api`)
 
