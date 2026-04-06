@@ -5,8 +5,10 @@
   "packageManager": "pnpm@10.5.0",
   "scripts": {
     "build": "turbo run build",
+    "build:apps": "pnpm --filter @sm/web build && pnpm --filter @sm/api build && pnpm --filter @sm/worker build && (cd apps/agent && if command -v go >/dev/null 2>&1; then go build ./...; elif [ \"${SM_REQUIRE_GO:-0}\" = \"1\" ]; then echo \"Go is required to build apps/agent\" && exit 1; else echo \"Skipping apps/agent build: Go toolchain not installed\"; fi)",
     "lint": "turbo run lint",
     "test": "turbo run test",
+    "test:apps": "pnpm --filter @sm/web test && pnpm --filter @sm/api test && pnpm --filter @sm/worker test && (cd apps/agent && if command -v go >/dev/null 2>&1; then go test ./...; elif [ \"${SM_REQUIRE_GO:-0}\" = \"1\" ]; then echo \"Go is required to test apps/agent\" && exit 1; else echo \"Skipping apps/agent tests: Go toolchain not installed\"; fi)",
     "test:coverage": "turbo run test:coverage",
     "typecheck": "turbo run typecheck",
     "contracts:openapi": "pnpm --filter @sm/contracts contracts:openapi",

@@ -155,7 +155,7 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
               and id = $2`,
           [tenantId, tokenId]
         );
-        return result.rowCount > 0;
+        return (result.rowCount ?? 0) > 0;
       },
       async consume(plaintext) {
         const result = await pool.query(
