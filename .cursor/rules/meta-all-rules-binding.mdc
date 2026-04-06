@@ -1,0 +1,15 @@
+---
+description: BINDING — every rule in this folder is mandatory; apply on every prompt in this repo
+alwaysApply: true
+---
+
+# All project rules are binding
+
+For **every** user message while this repository (`service-monitor` / kaiad) is the active workspace context:
+
+1. **`.cursor/rules/*.mdc`** — Treat every file here as **mandatory**, not advisory. `alwaysApply: true` rules apply to every turn; rules with **`globs`** apply whenever you touch matching paths (and you must still follow them when you choose to edit those files).
+2. **User Rules** in Cursor Settings still override where they conflict; otherwise stack these rules on top.
+3. **`.cursor/skills/`** — When the task matches a skill’s description, **read and follow** that skill before improvising.
+4. **Do not** skip steps because the prompt was short or “obviously” simple—short prompts inherit the same rules.
+
+If a rule cannot be followed (environment limitation), state that limitation in your reply; do not behave as if the rule did not exist.

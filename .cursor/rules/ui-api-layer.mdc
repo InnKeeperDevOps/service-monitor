@@ -1,7 +1,6 @@
 ---
 description: Web UI uses hooks/services over raw API calls; shared contracts for settings
-globs: apps/web/**/*.{ts,tsx}
-alwaysApply: false
+alwaysApply: true
 ---
 
 # UI layer over API transport
