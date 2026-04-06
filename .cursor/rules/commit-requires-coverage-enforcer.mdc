@@ -1,0 +1,21 @@
+---
+description: Require test-coverage-enforcer run before any commit
+alwaysApply: true
+---
+
+# Commit Gate: Coverage Enforcer Required
+
+Before creating any commit, run the `test-coverage-enforcer` subagent on the changed scope.
+
+## Required workflow before commit
+
+1. Invoke `test-coverage-enforcer`.
+2. Let it run coverage, identify gaps, and add/update unit tests.
+3. Re-run coverage and confirm improvement or document why improvement is blocked.
+4. Only proceed to `git commit` after the subagent reports results.
+
+## Commit message/report expectations
+
+- Include that `test-coverage-enforcer` was run.
+- Summarize coverage before/after (or explain why coverage could not run).
+- List remaining untested risk areas, if any.

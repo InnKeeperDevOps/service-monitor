@@ -1,0 +1,13 @@
+---
+description: Do not edit deploy Docker Compose YAML unless user-approved; compose.unified.yml is merge-conflict prone
+alwaysApply: true
+---
+
+# Docker Compose files — do not touch by default
+
+- **Do not modify** `deploy/docker/compose.unified.yml` or `deploy/docker/compose.yml` unless the user explicitly asked for a deploy/compose change **or** has approved a proposed change after you explain why it is needed.
+- **Default assumption:** work lives in application code (`apps/`, packages, tests). Compose churn causes **merge conflicts**; `compose.unified.yml` is especially sensitive.
+- **Before editing either file:** state **what** you would change, **why** it is required (not merely convenient), and **ask the user** for confirmation. If they did not ask for compose changes, prefer documenting env vars or steps in chat instead of editing YAML.
+- **Exception:** user explicitly requests edits to these files — then implement what they asked for.
+
+Read the project skill `docker-compose-change-gate` for the full workflow.

@@ -1,0 +1,76 @@
+---
+description: Enforce throw + logging for errors and invalid states
+alwaysApply: true
+---
+
+# Error Handling: Throw and Log
+
+For all project code (including TypeScript, TSX, Go, and Java), do not silently swallow errors or invalid states.
+
+## Required behavior
+
+- If an operation fails, log the error with useful context and then throw/return an error.
+- If an impossible or invalid state is detected, treat it as an error path (log + throw/return error).
+- Never use empty `catch` blocks or "ignore and continue" behavior for real failures.
+- Avoid returning success/fallback values that hide failures unless explicitly documented and approved.
+
+## Logging expectations
+
+- Include what failed, where it failed, and identifiers relevant for debugging.
+- Preserve root cause details (`cause`, wrapped error, status code, etc.) where language patterns allow.
+
+## Prohibited patterns
+
+- `catch {}` or `catch (e) {}` with no logging and no error propagation.
+- Suppressing parse/read/write/config errors without telemetry.
+- Treating corrupted/invalid state as normal behavior.
+
+## Language examples
+
+### TypeScript / TSX
+
+```ts
+// BAD
+try {
+  await loadConfig();
+} catch {}
+
+// GOOD
+try {
+  await loadConfig();
+} catch (err) {
+  console.error("[config] load failed", { serviceId, err });
+  throw err;
+}
+```
+
+### Go
+
+```go
+// BAD
+cfg, _ := readConfig(path)
+
+// GOOD
+cfg, err := readConfig(path)
+if err != nil {
+    logger.Error("config read failed", "path", path, "err", err)
+    return fmt.Errorf("read config %s: %w", path, err)
+}
+```
+
+### Java
+
+```java
+// BAD
+try {
+    configService.load(path);
+} catch (Exception ignored) {}
+
+// GOOD
+try {
+    configService.load(path);
+} catch (Exception e) {
+    log.error("Config load failed path={}", path, e);
+    throw new IllegalStateException("Failed to load config: " + path, e);
+}
+```
