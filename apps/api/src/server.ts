@@ -50,7 +50,14 @@ import {
 } from "@sm/domain";
 import { getInstallationMetadata } from "@sm/github";
 import { correlationIdPlugin } from "./correlationId.js";
-import { login, resolveSession, generateSessionToken, hashToken, type AuthStore } from "./auth.js";
+import {
+  loginWithDiagnostics,
+  resolveSession,
+  generateSessionToken,
+  hashToken,
+  type AuthStore,
+  type LoginTraceStep
+} from "./auth.js";
 import {
   addOAuthProvider,
   buildAuthorizeUrl,
@@ -227,6 +234,54 @@ function signValid(secret: string, payload: string, signature?: string): boolean
 
 function defaultWebhookTenantId() {
   return process.env.DEFAULT_WEBHOOK_TENANT_ID ?? "t-webhook";
+}
+
+function loginEmailMetadata(email: string | undefined): {
+  emailProvided: boolean;
+  emailDomain: string | null;
+  emailFingerprint: string | null;
+} {
+  const normalized = email?.trim().toLowerCase() ?? "";
+  if (!normalized) {
+    return { emailProvided: false, emailDomain: null, emailFingerprint: null };
+  }
+
+  const domain = normalized.includes("@") ? normalized.split("@").slice(1).join("@") : null;
+  const emailFingerprint = crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+  return { emailProvided: true, emailDomain: domain, emailFingerprint };
+}
+
+function requestSourceIp(req: { ip: string; headers: Record<string, unknown> }): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    const first = forwarded.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return req.ip;
+}
+
+function emitLoginFailureLog(
+  req: { log: { warn: (obj: Record<string, unknown>, msg?: string) => void } },
+  payload: Record<string, unknown>
+): void {
+  req.log.warn(payload, "Login attempt failed");
+  const loggerFn = req.log.warn as unknown as { name?: string };
+  if (loggerFn.name === "noop") {
+    // Ensure failures are visible in backend stdout/stderr when Fastify logger is disabled.
+    console.error("[auth.login.failed]", JSON.stringify(payload));
+  }
+}
+
+function emitLoginStepLog(
+  req: { log: { info: (obj: Record<string, unknown>, msg?: string) => void } },
+  payload: Record<string, unknown>
+): void {
+  req.log.info(payload, "Login step");
+  const loggerFn = req.log.info as unknown as { name?: string };
+  if (loggerFn.name === "noop") {
+    // Keep step-by-step visibility in backend logs even if Fastify logger is disabled.
+    console.error("[auth.login.step]", JSON.stringify(payload));
+  }
 }
 
 export function buildGithubWebhookJobFromEvent(
@@ -634,13 +689,81 @@ export function buildServer(opts: BuildServerOptions = {}) {
 
   app.post("/api/v1/auth/login", async (req, reply) => {
     const { email, password } = req.body as { email?: string; password?: string };
+    const emailMeta = loginEmailMetadata(email);
+    const correlationId = (req as { correlationId?: string }).correlationId;
+    const sourceIp = requestSourceIp(req as unknown as { ip: string; headers: Record<string, unknown> });
+    const stepLogReq = req as unknown as { log: { info: (obj: Record<string, unknown>, msg?: string) => void } };
+    const failureLogReq = req as unknown as { log: { warn: (obj: Record<string, unknown>, msg?: string) => void } };
+    emitLoginStepLog(stepLogReq, {
+      event: "auth.login.step",
+      step: "REQUEST_RECEIVED",
+      correlationId,
+      sourceIp,
+      ...emailMeta
+    });
     if (!email || !password) {
+      emitLoginStepLog(stepLogReq, {
+        event: "auth.login.step",
+        step: "INPUT_VALIDATION_FAILED",
+        hasPassword: Boolean(password),
+        correlationId,
+        sourceIp,
+        ...emailMeta
+      });
+      emitLoginFailureLog(failureLogReq, {
+        event: "auth.login.failed",
+        reason: "MISSING_CREDENTIAL_FIELDS",
+        hasPassword: Boolean(password),
+        correlationId,
+        sourceIp,
+        ...emailMeta
+      });
       return reply.status(400).send({ code: "BAD_REQUEST", message: "email and password required" });
     }
-    const result = await login(authStore, email, password);
-    if (!result) {
+    emitLoginStepLog(stepLogReq, {
+      event: "auth.login.step",
+      step: "INPUT_VALIDATION_PASSED",
+      correlationId,
+      sourceIp,
+      ...emailMeta
+    });
+    const result = await loginWithDiagnostics(authStore, email, password);
+    for (const traceStep of result.trace) {
+      emitLoginStepLog(stepLogReq, {
+        event: "auth.login.step",
+        step: traceStep as LoginTraceStep,
+        correlationId,
+        sourceIp,
+        ...emailMeta
+      });
+    }
+    if (!result.ok) {
+      emitLoginStepLog(stepLogReq, {
+        event: "auth.login.step",
+        step: "AUTHENTICATION_FAILED",
+        reason: result.reason,
+        correlationId,
+        sourceIp,
+        ...emailMeta
+      });
+      emitLoginFailureLog(failureLogReq, {
+        event: "auth.login.failed",
+        reason: result.reason,
+        correlationId,
+        sourceIp,
+        ...emailMeta
+      });
       return reply.status(401).send({ code: "INVALID_CREDENTIALS", message: "Invalid email or password" });
     }
+    emitLoginStepLog(stepLogReq, {
+      event: "auth.login.step",
+      step: "AUTHENTICATION_SUCCEEDED",
+      correlationId,
+      sourceIp,
+      tenantId: result.session.tenantId,
+      role: result.session.role,
+      ...emailMeta
+    });
     return { token: result.token, user: result.session };
   });
 

@@ -144,6 +144,47 @@ describe("POST /api/v1/auth/login route", () => {
     expect(response.json().code).toBe("INVALID_CREDENTIALS");
   });
 
+  it("logs failure details on invalid credentials", async () => {
+    const warnSpy = vi.spyOn(app.log, "warn");
+    const infoSpy = vi.spyOn(app.log, "info");
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: { email: "admin@example.com", password: "bad" },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "auth.login.failed",
+          reason: "INVALID_PASSWORD",
+          emailProvided: true,
+          correlationId: expect.any(String)
+        }),
+        "Login attempt failed"
+      );
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "auth.login.step",
+          step: "REQUEST_RECEIVED",
+          emailProvided: true
+        }),
+        "Login step"
+      );
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "auth.login.step",
+          step: "INVALID_PASSWORD",
+          correlationId: expect.any(String)
+        }),
+        "Login step"
+      );
+    } finally {
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+    }
+  });
+
   it("returns 400 when email/password missing", async () => {
     const response = await app.inject({
       method: "POST",

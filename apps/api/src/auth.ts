@@ -48,27 +48,58 @@ export function generateSessionToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
-export async function login(
+export type LoginFailureReason =
+  | "USER_NOT_FOUND"
+  | "PASSWORD_NOT_SET"
+  | "INVALID_PASSWORD"
+  | "NO_MEMBERSHIP";
+
+export type LoginTraceStep =
+  | "LOOKUP_USER"
+  | "USER_NOT_FOUND"
+  | "PASSWORD_NOT_SET"
+  | "VERIFY_PASSWORD"
+  | "PASSWORD_VERIFIED"
+  | "INVALID_PASSWORD"
+  | "LOAD_MEMBERSHIPS"
+  | "NO_MEMBERSHIP"
+  | "CREATE_SESSION"
+  | "SESSION_CREATED";
+
+export type LoginAttemptResult =
+  | { ok: true; session: SessionInfo; token: string; trace: LoginTraceStep[] }
+  | { ok: false; reason: LoginFailureReason; trace: LoginTraceStep[] };
+
+export async function loginWithDiagnostics(
   store: AuthStore,
   email: string,
   password: string
-): Promise<{ session: SessionInfo; token: string } | null> {
+): Promise<LoginAttemptResult> {
+  const trace: LoginTraceStep[] = ["LOOKUP_USER"];
   const user = await store.findUserByEmail(email);
-  if (!user || !user.passwordHash) return null;
+  if (!user) return { ok: false, reason: "USER_NOT_FOUND", trace: [...trace, "USER_NOT_FOUND"] };
+  if (!user.passwordHash) return { ok: false, reason: "PASSWORD_NOT_SET", trace: [...trace, "PASSWORD_NOT_SET"] };
 
+  trace.push("VERIFY_PASSWORD");
   const valid = await verifyPassword(password, user.passwordHash);
-  if (!valid) return null;
+  if (!valid) return { ok: false, reason: "INVALID_PASSWORD", trace: [...trace, "INVALID_PASSWORD"] };
+  trace.push("PASSWORD_VERIFIED");
 
+  trace.push("LOAD_MEMBERSHIPS");
   const memberships = await store.findMemberships(user.id);
   const membership = memberships[0];
-  if (!membership) return null;
+  if (!membership) return { ok: false, reason: "NO_MEMBERSHIP", trace: [...trace, "NO_MEMBERSHIP"] };
 
+  trace.push("CREATE_SESSION");
   const token = generateSessionToken();
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
   const sessionId = await store.createSession(user.id, membership.tenantId, tokenHash, expiresAt);
+  trace.push("SESSION_CREATED");
 
   return {
+    ok: true,
+    trace,
     session: {
       id: sessionId,
       email: user.email,
@@ -77,6 +108,15 @@ export async function login(
     },
     token,
   };
+}
+
+export async function login(
+  store: AuthStore,
+  email: string,
+  password: string
+): Promise<{ session: SessionInfo; token: string } | null> {
+  const result = await loginWithDiagnostics(store, email, password);
+  return result.ok ? { session: result.session, token: result.token } : null;
 }
 
 export async function resolveSession(
