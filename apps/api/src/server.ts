@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { bootstrapEnv, isSetupRequired } from "./bootstrapEnv.js";
+import { applyGithubAppToEnv, bootstrapEnv, isSetupRequired } from "./bootstrapEnv.js";
 import { setupRoutes, type SetupCompleteCallback } from "./setupRoutes.js";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
@@ -85,7 +85,7 @@ import {
 } from "./enrollmentStore.js";
 import { createMemoryAuthStore, seedDevUser } from "./memoryAuthStore.js";
 import { createPostgresAuthStore } from "./postgresAuthStore.js";
-import { readConfig, type KaiadConfig } from "./configPersistence.js";
+import { readConfig, writeConfig, type KaiadConfig } from "./configPersistence.js";
 import { enforcePolicy } from "./policy.js";
 import { createReadinessCheckersFromEnv, type ReadinessChecker } from "./readyChecks.js";
 import { RealtimeManager, type PendingCommandRedis } from "./realtimeManager.js";
@@ -969,6 +969,94 @@ export function buildServer(opts: BuildServerOptions = {}) {
       );
     }
     return reply.status(201).send({ ok: true });
+  });
+
+  app.get("/api/v1/settings/github-app", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token" })
+      );
+    }
+    if (session.role !== "owner" && session.role !== "admin") {
+      return reply.status(403).send(
+        apiErrorSchema.parse({ code: "FORBIDDEN", message: "Admin access required" })
+      );
+    }
+    const cfg = readConfig();
+    const gh = cfg?.githubApp;
+    return {
+      appId: gh?.appId?.trim() ? gh.appId : null,
+      privateKeyConfigured: !!gh?.privateKeyPem?.trim(),
+      webhookSecretConfigured: !!gh?.webhookSecret?.trim()
+    };
+  });
+
+  app.post("/api/v1/settings/github-app", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token" })
+      );
+    }
+    if (session.role !== "owner" && session.role !== "admin") {
+      return reply.status(403).send(
+        apiErrorSchema.parse({ code: "FORBIDDEN", message: "Admin access required" })
+      );
+    }
+    const current = readConfig();
+    if (!current) {
+      return reply.status(503).send(
+        apiErrorSchema.parse({
+          code: "CONFIG_UNAVAILABLE",
+          message: "Server configuration file not found; complete setup before editing GitHub App credentials"
+        })
+      );
+    }
+    const body = req.body as Record<string, unknown>;
+    const githubAppId = String(body.githubAppId ?? "").trim();
+    if (!githubAppId) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({ code: "BAD_REQUEST", message: "githubAppId is required" })
+      );
+    }
+    const pemIn = String(body.githubAppPrivateKeyPem ?? "").trim();
+    const secretIn = String(body.githubWebhookSecret ?? "").trim();
+    const existing = current.githubApp;
+    const privateKeyPem = pemIn || existing?.privateKeyPem?.trim() || "";
+    const webhookSecret = secretIn || existing?.webhookSecret?.trim() || "";
+    if (!privateKeyPem) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: "GitHub App private key is required when none is stored yet"
+        })
+      );
+    }
+    if (!webhookSecret) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: "GitHub webhook secret is required when none is stored yet"
+        })
+      );
+    }
+    const next: KaiadConfig = {
+      ...current,
+      githubApp: { appId: githubAppId, privateKeyPem, webhookSecret }
+    };
+    try {
+      await writeConfig(next);
+    } catch (err) {
+      return reply.status(500).send(
+        apiErrorSchema.parse({
+          code: "CONFIG_WRITE_FAILED",
+          message: err instanceof Error ? err.message : "Failed to write configuration"
+        })
+      );
+    }
+    applyGithubAppToEnv(next.githubApp!);
+    return { ok: true };
   });
 
   app.get("/api/v1/me", async (req, reply) => {
@@ -1856,9 +1944,7 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
     if (config.internalApiUrl) process.env.INTERNAL_API_URL = config.internalApiUrl;
     if (config.defaultWebhookTenantId) process.env.DEFAULT_WEBHOOK_TENANT_ID = config.defaultWebhookTenantId;
     if (config.githubApp) {
-      process.env.GITHUB_APP_ID = config.githubApp.appId;
-      process.env.GITHUB_APP_PRIVATE_KEY = config.githubApp.privateKeyPem;
-      process.env.GITHUB_WEBHOOK_SECRET = config.githubApp.webhookSecret;
+      applyGithubAppToEnv(config.githubApp);
     }
     if (config.oauth?.googleClientId) {
       process.env.GOOGLE_CLIENT_ID = config.oauth.googleClientId;

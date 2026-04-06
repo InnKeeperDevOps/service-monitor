@@ -295,6 +295,23 @@ export const api = {
       body: JSON.stringify(payload)
     }),
 
+  getGithubAppSettings: () =>
+    apiFetch<{
+      appId: string | null;
+      privateKeyConfigured: boolean;
+      webhookSecretConfigured: boolean;
+    }>("/api/v1/settings/github-app"),
+
+  updateGithubAppSettings: (payload: {
+    githubAppId: string;
+    githubAppPrivateKeyPem?: string;
+    githubWebhookSecret?: string;
+  }) =>
+    apiFetch<{ ok: boolean }>("/api/v1/settings/github-app", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+
   getOAuthAuthorizeUrl: (providerId: string) =>
     apiFetch<{ authorizeUrl: string }>(`/api/v1/auth/oauth/authorize?provider=${encodeURIComponent(providerId)}`),
 

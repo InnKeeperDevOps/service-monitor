@@ -58,6 +58,16 @@ export function bootstrapEnv(): { setupComplete: boolean; configLoaded: boolean 
   return { setupComplete: config.setupComplete ?? false, configLoaded: true };
 }
 
+/**
+ * Apply GitHub App credentials to `process.env` (runtime hot-reload).
+ * Long-lived workers may need a full process restart to pick up changes.
+ */
+export function applyGithubAppToEnv(githubApp: NonNullable<KaiadConfig["githubApp"]>): void {
+  process.env.GITHUB_APP_ID = githubApp.appId;
+  process.env.GITHUB_APP_PRIVATE_KEY = githubApp.privateKeyPem;
+  process.env.GITHUB_WEBHOOK_SECRET = githubApp.webhookSecret;
+}
+
 export function isSetupRequired(): boolean {
   const hasDatabaseUrl = !!process.env.DATABASE_URL;
   if (hasDatabaseUrl) return false;

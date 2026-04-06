@@ -86,6 +86,7 @@ function buildAgentStartCommand(token: string): string {
 export function SettingsPage() {
   const { user } = useAuth();
   const canManageOAuth = user?.role === "owner" || user?.role === "admin";
+  const canManageGithub = user?.role === "owner" || user?.role === "admin";
 
   const [authProviders, setAuthProviders] = useState<AuthProviderEntry[]>([]);
   const [oauthId, setOauthId] = useState("");
@@ -99,6 +100,18 @@ export function SettingsPage() {
   const [oauthFormError, setOauthFormError] = useState<string | null>(null);
   const [oauthSuccess, setOauthSuccess] = useState<string | null>(null);
   const [isSubmittingOAuth, setIsSubmittingOAuth] = useState(false);
+
+  const [githubAppId, setGithubAppId] = useState("");
+  const [githubPrivateKeyPem, setGithubPrivateKeyPem] = useState("");
+  const [githubWebhookSecret, setGithubWebhookSecret] = useState("");
+  const [githubPrivateKeyConfigured, setGithubPrivateKeyConfigured] = useState(false);
+  const [githubWebhookSecretConfigured, setGithubWebhookSecretConfigured] = useState(false);
+  const [githubFormError, setGithubFormError] = useState<string | null>(null);
+  const [githubSuccess, setGithubSuccess] = useState<string | null>(null);
+  const [isSavingGithub, setIsSavingGithub] = useState(false);
+  const [syncInstallationIdInput, setSyncInstallationIdInput] = useState("");
+  const [isSyncingInstallation, setIsSyncingInstallation] = useState(false);
+  const [syncInstallationError, setSyncInstallationError] = useState<string | null>(null);
 
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [installations, setInstallations] = useState<GithubInstallation[]>([]);
@@ -145,6 +158,75 @@ export function SettingsPage() {
         });
     }
   }, []);
+
+  useEffect(() => {
+    if (!canManageGithub) {
+      return;
+    }
+    api
+      .getGithubAppSettings()
+      .then((s) => {
+        setGithubAppId(s.appId ?? "");
+        setGithubPrivateKeyConfigured(s.privateKeyConfigured);
+        setGithubWebhookSecretConfigured(s.webhookSecretConfigured);
+      })
+      .catch(() => {});
+  }, [canManageGithub]);
+
+  async function handleSaveGithubApp() {
+    setGithubFormError(null);
+    setGithubSuccess(null);
+    const id = githubAppId.trim();
+    if (!id) {
+      setGithubFormError("App ID is required.");
+      return;
+    }
+    setIsSavingGithub(true);
+    try {
+      await api.updateGithubAppSettings({
+        githubAppId: id,
+        githubAppPrivateKeyPem: githubPrivateKeyPem,
+        githubWebhookSecret: githubWebhookSecret
+      });
+      setGithubPrivateKeyPem("");
+      setGithubWebhookSecret("");
+      setGithubSuccess("GitHub App settings saved. Restart workers if GitHub automation does not pick up changes immediately.");
+      const s = await api.getGithubAppSettings();
+      setGithubPrivateKeyConfigured(s.privateKeyConfigured);
+      setGithubWebhookSecretConfigured(s.webhookSecretConfigured);
+      setError(null);
+    } catch (e) {
+      setGithubFormError((e as Error).message);
+    } finally {
+      setIsSavingGithub(false);
+    }
+  }
+
+  async function handleSyncInstallationManual() {
+    setSyncInstallationError(null);
+    const raw = syncInstallationIdInput.trim();
+    const installationId = raw ? Number(raw) : NaN;
+    if (!Number.isInteger(installationId) || installationId <= 0) {
+      setSyncInstallationError("Enter a positive integer installation ID.");
+      return;
+    }
+    setIsSyncingInstallation(true);
+    try {
+      const installation = await api.syncGithubInstallation(installationId);
+      setInstallations((prev) => {
+        const next = prev.filter((i) => i.installationId !== installation.installationId);
+        next.push(installation);
+        return next;
+      });
+      setSyncMessage(`Synced GitHub installation ${installation.installationId} (${installation.accountLogin}).`);
+      setSyncInstallationIdInput("");
+      setError(null);
+    } catch (e) {
+      setSyncInstallationError((e as Error).message);
+    } finally {
+      setIsSyncingInstallation(false);
+    }
+  }
 
   async function handleGenerateEnrollmentToken() {
     setTokenError(null);
@@ -721,10 +803,126 @@ export function SettingsPage() {
       {/* GitHub App */}
       <div style={sectionStyle}>
         <h3 style={h3Style}><GitBranch size={16} /> GitHub App</h3>
+        <p style={mutedText}>
+          App credentials are stored in the server&apos;s <code>kaiad.config.json</code>. Configure the GitHub App webhook URL to{" "}
+          <code>
+            {typeof window !== "undefined" ? `${window.location.origin}/webhooks/github` : "/webhooks/github"}
+          </code>
+          . After installing the app on GitHub, sync the installation using the form below or return to this page with an{" "}
+          <code>installation_id</code> query parameter.
+        </p>
+        {!canManageGithub && (
+          <p style={{ ...mutedText, marginTop: "0.75rem" }}>
+            Only owners and admins can edit GitHub App credentials. Installations for this tenant are listed below.
+          </p>
+        )}
+        {canManageGithub && (
+          <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--color-border)" }}>
+            {githubFormError && (
+              <p style={{ color: "var(--color-danger)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{githubFormError}</p>
+            )}
+            {githubSuccess && (
+              <p style={{ color: "var(--color-success)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{githubSuccess}</p>
+            )}
+            <label style={labelColStyle}>
+              <span style={{ color: "var(--color-text-secondary)" }}>App ID</span>
+              <input
+                aria-label="GitHub App ID"
+                value={githubAppId}
+                onChange={(e) => setGithubAppId(e.target.value)}
+                placeholder="123456"
+                autoComplete="off"
+                style={inputStyle}
+              />
+            </label>
+            <div className="sm-input-wrapper" style={{ marginBottom: "0.65rem" }}>
+              <label className="sm-input-label" htmlFor="settings-github-pem" style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+                Private Key (PEM)
+              </label>
+              <textarea
+                id="settings-github-pem"
+                aria-label="GitHub App private key PEM"
+                className="sm-input"
+                rows={5}
+                value={githubPrivateKeyPem}
+                onChange={(e) => setGithubPrivateKeyPem(e.target.value)}
+                placeholder={githubPrivateKeyConfigured ? "Leave blank to keep existing key" : "-----BEGIN RSA PRIVATE KEY-----"}
+                style={{ resize: "vertical", fontFamily: "monospace", fontSize: "0.8rem", width: "100%", maxWidth: 420, boxSizing: "border-box" }}
+              />
+            </div>
+            <label style={labelColStyle}>
+              <span style={{ color: "var(--color-text-secondary)" }}>Webhook secret</span>
+              <input
+                aria-label="GitHub webhook secret"
+                type="password"
+                value={githubWebhookSecret}
+                onChange={(e) => setGithubWebhookSecret(e.target.value)}
+                placeholder={githubWebhookSecretConfigured ? "Leave blank to keep existing secret" : "whsec_…"}
+                autoComplete="new-password"
+                style={inputStyle}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleSaveGithubApp()}
+              disabled={isSavingGithub}
+              style={{
+                background: "var(--color-primary)",
+                color: "var(--color-primary-foreground)",
+                border: "none",
+                borderRadius: 6,
+                padding: "0.45rem 0.8rem",
+                fontSize: "0.85rem",
+                cursor: isSavingGithub ? "not-allowed" : "pointer",
+                opacity: isSavingGithub ? 0.75 : 1,
+                marginTop: "0.25rem"
+              }}
+            >
+              {isSavingGithub ? "Saving…" : "Save GitHub App"}
+            </button>
+          </div>
+        )}
+        <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--color-border)" }}>
+          <p style={{ ...mutedText, marginBottom: "0.65rem" }}>Sync installation metadata (after installing the app on GitHub):</p>
+          {syncInstallationError && (
+            <p style={{ color: "var(--color-danger)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{syncInstallationError}</p>
+          )}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "end" }}>
+            <label style={labelColStyle}>
+              <span style={{ color: "var(--color-text-secondary)" }}>Installation ID</span>
+              <input
+                aria-label="GitHub installation ID to sync"
+                value={syncInstallationIdInput}
+                onChange={(e) => setSyncInstallationIdInput(e.target.value)}
+                placeholder="12345678"
+                inputMode="numeric"
+                style={{ ...inputStyle, maxWidth: 200 }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleSyncInstallationManual()}
+              disabled={isSyncingInstallation}
+              style={{
+                background: "var(--color-surface-muted)",
+                color: "var(--color-text-primary)",
+                border: "1px solid var(--color-border)",
+                borderRadius: 6,
+                padding: "0.45rem 0.8rem",
+                fontSize: "0.85rem",
+                cursor: isSyncingInstallation ? "not-allowed" : "pointer",
+                opacity: isSyncingInstallation ? 0.75 : 1,
+                marginBottom: "0.65rem"
+              }}
+            >
+              {isSyncingInstallation ? "Syncing…" : "Sync now"}
+            </button>
+          </div>
+        </div>
         {installations.length === 0 ? (
-          <p style={mutedText}>No GitHub App installations yet. After installing the GitHub App, return to this page with an <code>installation_id</code> query parameter to sync metadata automatically.</p>
+          <p style={{ ...mutedText, marginTop: "0.75rem" }}>No GitHub App installations recorded for this tenant yet.</p>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem" }}>
             <thead>
               <tr>
                 {["Installation ID", "Account"].map((h) => (

@@ -1,8 +1,16 @@
 import crypto from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiErrorSchema } from "@sm/contracts";
+import * as configPersistence from "../src/configPersistence.js";
 import { __resetEnrollmentStoreForTests } from "../src/enrollmentStore.js";
+import {
+  addMemoryMembershipForTests,
+  createMemoryAuthStore,
+  seedDevUser,
+  __resetAuthStoreForTests
+} from "../src/memoryAuthStore.js";
 import { buildServer } from "../src/server.js";
+import { upsertTenantSettings, __resetTenantStoreForTests } from "../src/store.js";
 
 const app = buildServer();
 
@@ -227,6 +235,167 @@ describe("api", () => {
       payload: { tenantId: "t-2", githubRepo: "o/r", defaultBranch: "main" }
     });
     expect(response.statusCode).toBe(403);
+  });
+
+  describe.sequential("GET/POST /api/v1/settings/github-app", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete process.env.GITHUB_APP_ID;
+      delete process.env.GITHUB_APP_PRIVATE_KEY;
+      delete process.env.GITHUB_WEBHOOK_SECRET;
+    });
+
+    it("GET returns 401 when unauthenticated", async () => {
+      const response = await app.inject({ method: "GET", url: "/api/v1/settings/github-app" });
+      expect(response.statusCode).toBe(401);
+    });
+
+    it("GET returns status when owner (dev-token)", async () => {
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue({
+        setupComplete: true,
+        databaseUrl: "postgres://x",
+        githubApp: { appId: "99", privateKeyPem: "pem", webhookSecret: "wh" }
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        appId: "99",
+        privateKeyConfigured: true,
+        webhookSecretConfigured: true
+      });
+    });
+
+    it("GET returns empty flags when no config file", async () => {
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue(null);
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        appId: null,
+        privateKeyConfigured: false,
+        webhookSecretConfigured: false
+      });
+    });
+
+    it("POST merges secrets and writes config", async () => {
+      const writeSpy = vi.spyOn(configPersistence, "writeConfig").mockResolvedValue();
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue({
+        setupComplete: true,
+        databaseUrl: "postgres://x",
+        redisUrl: "redis://x",
+        githubApp: { appId: "1", privateKeyPem: "oldpem", webhookSecret: "oldwh" }
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" },
+        payload: {
+          githubAppId: "2",
+          githubAppPrivateKeyPem: "",
+          githubWebhookSecret: ""
+        }
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true });
+      expect(writeSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          githubApp: { appId: "2", privateKeyPem: "oldpem", webhookSecret: "oldwh" }
+        })
+      );
+    });
+
+    it("POST returns 400 when githubAppId missing", async () => {
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue({
+        setupComplete: true,
+        databaseUrl: "postgres://x"
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" },
+        payload: { githubAppId: "" }
+      });
+      expect(response.statusCode).toBe(400);
+    });
+
+    it("POST returns 503 when readConfig is null", async () => {
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue(null);
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" },
+        payload: {
+          githubAppId: "1",
+          githubAppPrivateKeyPem: "pem",
+          githubWebhookSecret: "sec"
+        }
+      });
+      expect(response.statusCode).toBe(503);
+    });
+
+    it("POST returns 400 when PEM missing and not stored", async () => {
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue({
+        setupComplete: true,
+        databaseUrl: "postgres://x"
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" },
+        payload: {
+          githubAppId: "1",
+          githubAppPrivateKeyPem: "",
+          githubWebhookSecret: "sec"
+        }
+      });
+      expect(response.statusCode).toBe(400);
+    });
+
+    it("GET returns 403 for viewer on active tenant", async () => {
+      __resetAuthStoreForTests();
+      __resetTenantStoreForTests();
+      await upsertTenantSettings({ tenantId: "t-1", githubRepo: "o/a", defaultBranch: "main" });
+      await upsertTenantSettings({ tenantId: "t-2", githubRepo: "o/b", defaultBranch: "main" });
+      const store = createMemoryAuthStore();
+      await seedDevUser(store);
+      addMemoryMembershipForTests({
+        tenantId: "t-2",
+        userId: "u-1",
+        role: "viewer",
+        tenantName: "Other"
+      });
+      const viewerApp = buildServer({ authStore: store });
+      await viewerApp.ready();
+      const loginRes = await viewerApp.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: { email: "admin@example.com", password: "admin" }
+      });
+      expect(loginRes.statusCode).toBe(200);
+      const token = loginRes.json().token as string;
+      await viewerApp.inject({
+        method: "POST",
+        url: "/api/v1/session/active-tenant",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { tenantId: "t-2" }
+      });
+      const response = await viewerApp.inject({
+        method: "GET",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(response.statusCode).toBe(403);
+      await viewerApp.close();
+      __resetAuthStoreForTests();
+      __resetTenantStoreForTests();
+    });
   });
 
   it("rejects invalid webhook signature", async () => {

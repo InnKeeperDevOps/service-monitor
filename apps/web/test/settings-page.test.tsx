@@ -11,6 +11,8 @@ const {
   createOAuthProvider,
   listGithubInstallations,
   syncGithubInstallation,
+  getGithubAppSettings,
+  updateGithubAppSettings,
   updateSettings,
   clipboardWriteText
 } = vi.hoisted(() => ({
@@ -23,6 +25,8 @@ const {
   createOAuthProvider: vi.fn(),
   listGithubInstallations: vi.fn(),
   syncGithubInstallation: vi.fn(),
+  getGithubAppSettings: vi.fn(),
+  updateGithubAppSettings: vi.fn(),
   updateSettings: vi.fn(),
   clipboardWriteText: vi.fn()
 }));
@@ -72,6 +76,8 @@ vi.mock("../src/lib/api.js", () => ({
     createOAuthProvider,
     listGithubInstallations,
     syncGithubInstallation,
+    getGithubAppSettings,
+    updateGithubAppSettings,
     updateSettings
   }
 }));
@@ -94,12 +100,19 @@ describe("SettingsPage enrollment token generation", () => {
     createOAuthProvider.mockReset();
     listGithubInstallations.mockReset();
     syncGithubInstallation.mockReset();
+    getGithubAppSettings.mockReset();
+    updateGithubAppSettings.mockReset();
     updateSettings.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
     listGithubInstallations.mockResolvedValue({ installations: [] });
     syncGithubInstallation.mockResolvedValue({ installationId: 1, accountLogin: "test", appId: 1 });
+    getGithubAppSettings.mockResolvedValue({
+      appId: null,
+      privateKeyConfigured: false,
+      webhookSecretConfigured: false
+    });
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: clipboardWriteText },
       configurable: true
@@ -348,11 +361,18 @@ describe("SettingsPage authentication OAuth providers", () => {
     getAuthProviders.mockReset();
     createOAuthProvider.mockReset();
     listGithubInstallations.mockReset();
+    getGithubAppSettings.mockReset();
+    updateGithubAppSettings.mockReset();
     updateSettings.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
     listGithubInstallations.mockResolvedValue({ installations: [] });
+    getGithubAppSettings.mockResolvedValue({
+      appId: null,
+      privateKeyConfigured: false,
+      webhookSecretConfigured: false
+    });
   });
 
   it("lists configured OAuth providers", async () => {
@@ -432,6 +452,90 @@ describe("SettingsPage authentication OAuth providers", () => {
     expect(screen.getByLabelText("Token URL")).toHaveValue("https://oauth2.googleapis.com/token");
     expect(screen.getByLabelText("User info URL")).toHaveValue("https://openidconnect.googleapis.com/v1/userinfo");
     expect(screen.getByLabelText("OAuth scopes")).toHaveValue("openid email profile");
+  });
+});
+
+describe("SettingsPage GitHub App", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    mockUseAuth = adminAuthState;
+    createEnrollmentToken.mockReset();
+    listEnrollmentTokens.mockReset();
+    getSettings.mockReset();
+    getAuthProviders.mockReset();
+    createOAuthProvider.mockReset();
+    listGithubInstallations.mockReset();
+    syncGithubInstallation.mockReset();
+    getGithubAppSettings.mockReset();
+    updateGithubAppSettings.mockReset();
+    updateSettings.mockReset();
+    listEnrollmentTokens.mockResolvedValue({ tokens: [] });
+    getSettings.mockResolvedValue(null);
+    getAuthProviders.mockResolvedValue({ providers: [] });
+    listGithubInstallations.mockResolvedValue({ installations: [] });
+    syncGithubInstallation.mockResolvedValue({ installationId: 99, accountLogin: "acme-org", appId: 1 });
+    getGithubAppSettings.mockResolvedValue({
+      appId: "42",
+      privateKeyConfigured: true,
+      webhookSecretConfigured: true
+    });
+  });
+
+  it("loads GitHub App settings for admin", async () => {
+    render(<SettingsPage />);
+    await waitFor(() => {
+      expect(getGithubAppSettings).toHaveBeenCalled();
+    });
+    expect(await screen.findByLabelText("GitHub App ID")).toHaveValue("42");
+  });
+
+  it("submits GitHub App settings when admin saves", async () => {
+    updateGithubAppSettings.mockResolvedValue({ ok: true });
+    getGithubAppSettings
+      .mockResolvedValueOnce({
+        appId: "42",
+        privateKeyConfigured: true,
+        webhookSecretConfigured: true
+      })
+      .mockResolvedValueOnce({
+        appId: "99",
+        privateKeyConfigured: true,
+        webhookSecretConfigured: true
+      });
+
+    render(<SettingsPage />);
+    await screen.findByLabelText("GitHub App ID");
+    fireEvent.change(screen.getByLabelText("GitHub App ID"), { target: { value: "99" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save GitHub App" }));
+
+    await waitFor(() => {
+      expect(updateGithubAppSettings).toHaveBeenCalledWith({
+        githubAppId: "99",
+        githubAppPrivateKeyPem: "",
+        githubWebhookSecret: ""
+      });
+    });
+  });
+
+  it("hides GitHub credential form for viewers", async () => {
+    mockUseAuth = viewerAuthState;
+    render(<SettingsPage />);
+    expect(
+      await screen.findByText(/Only owners and admins can edit GitHub App credentials/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save GitHub App" })).not.toBeInTheDocument();
+  });
+
+  it("syncs installation when Sync now is clicked", async () => {
+    render(<SettingsPage />);
+    fireEvent.change(screen.getByLabelText("GitHub installation ID to sync"), { target: { value: "88" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    await waitFor(() => {
+      expect(syncGithubInstallation).toHaveBeenCalledWith(88);
+    });
   });
 });
 
