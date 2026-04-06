@@ -1679,11 +1679,14 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
       process.env.KAIAD_K8S_NAMESPACE = config.kubernetes.namespace;
     }
 
-    try {
-      await swapAuthStoreToPostgres(swappableStore, config.databaseUrl);
-      console.error("[api] Auth store swapped to Postgres");
-    } catch (err) {
-      console.error("[api] Failed to create Postgres auth store:", err);
+    const setupDbUrl = config.databaseUrl?.trim();
+    if (setupDbUrl) {
+      try {
+        await swapAuthStoreToPostgres(swappableStore, setupDbUrl);
+        console.error("[api] Auth store swapped to Postgres");
+      } catch (err) {
+        console.error("[api] Failed to create Postgres auth store:", err);
+      }
     }
 
     if (config.oauth?.googleClientId) {
