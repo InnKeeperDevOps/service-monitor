@@ -46,6 +46,40 @@ paths:
           description: Unauthorized
         '403':
           description: Forbidden
+  /api/v1/tenants:
+    post:
+      operationId: postTenant
+      description: Create a tenant and switch the current session to it
+      responses:
+        '200':
+          description: Current user payload after creating tenant
+        '401':
+          description: Unauthorized
+        '409':
+          description: Tenant id already in use
+        '500':
+          description: Internal error
+  /api/v1/tenants/{tenantId}:
+    delete:
+      operationId: deleteTenant
+      description: Delete a tenant (owner or admin membership on that tenant)
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Tenant deleted
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Tenant not found
+        '409':
+          description: Protected default webhook tenant
   /api/v1/settings:
     get:
       operationId: getSettings
