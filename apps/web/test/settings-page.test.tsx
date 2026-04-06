@@ -7,6 +7,8 @@ const {
   deactivateEnrollmentToken,
   deleteEnrollmentToken,
   getSettings,
+  getAuthProviders,
+  createOAuthProvider,
   listGithubInstallations,
   syncGithubInstallation,
   clipboardWriteText
@@ -16,9 +18,33 @@ const {
   deactivateEnrollmentToken: vi.fn(),
   deleteEnrollmentToken: vi.fn(),
   getSettings: vi.fn(),
+  getAuthProviders: vi.fn(),
+  createOAuthProvider: vi.fn(),
   listGithubInstallations: vi.fn(),
   syncGithubInstallation: vi.fn(),
   clipboardWriteText: vi.fn()
+}));
+
+const adminAuthState = {
+  user: { id: "u1", email: "admin@example.com", role: "admin" as const, tenantId: "t1" },
+  role: "admin" as const,
+  isAdmin: true,
+  isOperator: false,
+  isViewer: false
+};
+
+const viewerAuthState = {
+  user: { id: "u2", email: "viewer@example.com", role: "viewer" as const, tenantId: "t1" },
+  role: "viewer" as const,
+  isAdmin: false,
+  isOperator: false,
+  isViewer: true
+};
+
+let mockUseAuth = adminAuthState;
+
+vi.mock("../src/lib/useAuth.js", () => ({
+  useAuth: () => mockUseAuth
 }));
 
 vi.mock("../src/lib/api.js", () => ({
@@ -28,6 +54,8 @@ vi.mock("../src/lib/api.js", () => ({
     deactivateEnrollmentToken,
     deleteEnrollmentToken,
     getSettings,
+    getAuthProviders,
+    createOAuthProvider,
     listGithubInstallations,
     syncGithubInstallation,
     updateSettings: vi.fn()
@@ -42,15 +70,19 @@ describe("SettingsPage enrollment token generation", () => {
   });
 
   beforeEach(() => {
+    mockUseAuth = adminAuthState;
     createEnrollmentToken.mockReset();
     listEnrollmentTokens.mockReset();
     deactivateEnrollmentToken.mockReset();
     deleteEnrollmentToken.mockReset();
     getSettings.mockReset();
+    getAuthProviders.mockReset();
+    createOAuthProvider.mockReset();
     listGithubInstallations.mockReset();
     syncGithubInstallation.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
+    getAuthProviders.mockResolvedValue({ providers: [] });
     listGithubInstallations.mockResolvedValue({ installations: [] });
     syncGithubInstallation.mockResolvedValue({ installationId: 1, accountLogin: "test", appId: 1 });
     Object.defineProperty(navigator, "clipboard", {
@@ -285,5 +317,104 @@ describe("SettingsPage enrollment token generation", () => {
 
     const deleteButton = await screen.findByRole("button", { name: "Delete token tok_active_blocked" });
     expect(deleteButton).toBeDisabled();
+  });
+});
+
+describe("SettingsPage authentication OAuth providers", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    mockUseAuth = adminAuthState;
+    createEnrollmentToken.mockReset();
+    listEnrollmentTokens.mockReset();
+    getSettings.mockReset();
+    getAuthProviders.mockReset();
+    createOAuthProvider.mockReset();
+    listGithubInstallations.mockReset();
+    listEnrollmentTokens.mockResolvedValue({ tokens: [] });
+    getSettings.mockResolvedValue(null);
+    getAuthProviders.mockResolvedValue({ providers: [] });
+    listGithubInstallations.mockResolvedValue({ installations: [] });
+  });
+
+  it("lists configured OAuth providers", async () => {
+    getAuthProviders.mockResolvedValue({
+      providers: [
+        { id: "google", name: "Google", provider: "google" },
+        { id: "okta", name: "Oidc", provider: "oidc" }
+      ]
+    });
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("Google")).toBeInTheDocument();
+    expect(screen.getByText("okta")).toBeInTheDocument();
+    expect(screen.getAllByText("google").length).toBe(2);
+  });
+
+  it("submits new OAuth provider when admin saves", async () => {
+    createOAuthProvider.mockResolvedValue({ ok: true });
+    getAuthProviders.mockResolvedValue({ providers: [] });
+
+    render(<SettingsPage />);
+
+    await screen.findByRole("button", { name: "Save provider" });
+
+    fireEvent.change(screen.getByLabelText("Provider id"), { target: { value: "gitlab" } });
+    fireEvent.change(screen.getByLabelText("Provider type"), { target: { value: "oidc" } });
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "client-id-1" } });
+    fireEvent.change(screen.getByLabelText("Client secret"), { target: { value: "secret" } });
+    fireEvent.change(screen.getByLabelText("Authorize URL"), {
+      target: { value: "https://example.com/oauth/authorize" }
+    });
+    fireEvent.change(screen.getByLabelText("Token URL"), { target: { value: "https://example.com/oauth/token" } });
+    fireEvent.change(screen.getByLabelText("User info URL"), { target: { value: "https://example.com/userinfo" } });
+    fireEvent.change(screen.getByLabelText("OAuth scopes"), { target: { value: "openid email" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save provider" }));
+
+    await waitFor(() => {
+      expect(createOAuthProvider).toHaveBeenCalledWith({
+        id: "gitlab",
+        provider: "oidc",
+        clientId: "client-id-1",
+        clientSecret: "secret",
+        authorizeUrl: "https://example.com/oauth/authorize",
+        tokenUrl: "https://example.com/oauth/token",
+        userInfoUrl: "https://example.com/userinfo",
+        scopes: ["openid", "email"]
+      });
+    });
+  });
+
+  it("hides add-provider form for viewers", async () => {
+    mockUseAuth = viewerAuthState;
+    getAuthProviders.mockResolvedValue({
+      providers: [{ id: "google", name: "Google", provider: "google" }]
+    });
+
+    render(<SettingsPage />);
+
+    await screen.findByText("Google");
+    expect(screen.queryByRole("button", { name: "Save provider" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Only owners and admins can add or change OAuth providers/i)
+    ).toBeInTheDocument();
+  });
+
+  it("prefills Google defaults when button is clicked", async () => {
+    render(<SettingsPage />);
+
+    await screen.findByRole("button", { name: "Use Google defaults" });
+    fireEvent.click(screen.getByRole("button", { name: "Use Google defaults" }));
+
+    expect(screen.getByLabelText("Provider id")).toHaveValue("google");
+    expect(screen.getByLabelText("Provider type")).toHaveValue("google");
+    expect(screen.getByLabelText("Authorize URL")).toHaveValue("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(screen.getByLabelText("Token URL")).toHaveValue("https://oauth2.googleapis.com/token");
+    expect(screen.getByLabelText("User info URL")).toHaveValue("https://openidconnect.googleapis.com/v1/userinfo");
+    expect(screen.getByLabelText("OAuth scopes")).toHaveValue("openid email profile");
   });
 });

@@ -99,6 +99,24 @@ export type WorkflowDryRunResponse = {
   steps: { nodeId: string; nodeType: string; success: boolean; output?: string }[];
 };
 
+/** Matches server OAuth provider registration (POST /api/v1/settings/oauth-providers). */
+export type OAuthProviderConfigPayload = {
+  id: string;
+  provider: string;
+  clientId: string;
+  clientSecret: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userInfoUrl: string;
+  scopes: string[];
+};
+
+export type AuthProviderEntry = {
+  id: string;
+  provider: string;
+  name: string;
+};
+
 export const api = {
   login: (email: string, password: string) =>
     apiFetch<{ token: string }>("/api/v1/auth/login", {
@@ -214,8 +232,13 @@ export const api = {
       }
     ),
 
-  getAuthProviders: () =>
-    apiFetch<{ providers: { id: string; name: string; type: string }[] }>("/api/v1/auth/providers"),
+  getAuthProviders: () => apiFetch<{ providers: AuthProviderEntry[] }>("/api/v1/auth/providers"),
+
+  createOAuthProvider: (payload: OAuthProviderConfigPayload) =>
+    apiFetch<{ ok: boolean }>("/api/v1/settings/oauth-providers", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
 
   getOAuthAuthorizeUrl: (providerId: string) =>
     apiFetch<{ authorizeUrl: string }>(`/api/v1/auth/oauth/authorize?provider=${encodeURIComponent(providerId)}`),
