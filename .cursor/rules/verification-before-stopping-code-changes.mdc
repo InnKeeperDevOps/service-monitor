@@ -31,6 +31,8 @@ Run these **after the change**, **before** declaring success or versioning git.
 | Commit | Same — **do not commit** on a failing or unrun build/test. |
 | Push | Same — **do not push** unless the commit’s changes were verified as above. |
 
+**After `git push`:** also follow **`.cursor/rules/post-push-github-actions-monitor.mdc`** — monitor GitHub Actions until workflows complete; local `pnpm` does not replace CI.
+
 ## Anti-patterns (do not do this)
 
 - “I ran unit tests” **without** the package **production build** when the package has a separate compile step (TypeScript `build` script / `tsconfig.build.json`).

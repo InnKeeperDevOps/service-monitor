@@ -1,16 +1,14 @@
 import { useState, useEffect, type FormEvent } from "react";
-import { api } from "../../lib/api.js";
+import { api, type AuthProviderEntry } from "../../lib/api.js";
 import { Button } from "../../components/Button.js";
 import { Input } from "../../components/Input.js";
-
-type OAuthProvider = { id: string; name: string; type: string };
 
 export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [providers, setProviders] = useState<OAuthProvider[]>([]);
+  const [providers, setProviders] = useState<AuthProviderEntry[]>([]);
   const [oauthLoading, setOauthLoading] = useState<string | null>(null);
 
   useEffect(() => {
@@ -57,7 +55,7 @@ export function LoginPage() {
     }
   }
 
-  async function handleOAuthLogin(provider: OAuthProvider) {
+  async function handleOAuthLogin(provider: AuthProviderEntry) {
     setOauthLoading(provider.id);
     setError(null);
     try {

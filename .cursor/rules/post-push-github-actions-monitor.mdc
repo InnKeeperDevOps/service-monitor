@@ -1,0 +1,36 @@
+---
+description: MANDATORY — after every push to GitHub, monitor Actions until workflows finish; never treat a push as “done” while CI is pending or red
+alwaysApply: true
+---
+
+# Post-push: monitor GitHub Actions (binding)
+
+**Non-negotiable.** After you **push** to `origin` (or any remote that runs GitHub Actions), you **must** monitor workflow runs for that commit/branch before you:
+
+- tell the user the change is fully delivered;
+- move on as if the repo is green;
+- close the task without mentioning CI status.
+
+Local `pnpm` checks are **not** a substitute: GitHub runners, permissions, and jobs (acceptance, docs, Go) can still fail.
+
+## What to do immediately after `git push`
+
+1. **Identify the repo** (`git remote -v`) and **branch** you pushed.
+2. **Watch CI** using one of:
+   - **GitHub CLI** (preferred): `gh run list --branch <branch> --limit 10` then `gh run watch <run-id>` for failing or in-progress runs, or `gh run list --workflow=ci` filtered by commit if needed.
+   - If `gh` errors on auth: tell the user CI must be checked in the browser and give the Actions URL pattern: `https://github.com/<owner>/<repo>/actions`.
+3. **Wait** until relevant workflows for this push are **completed** (not queued/in_progress), or state explicitly that you cannot reach GitHub and the user must verify.
+4. **If any job failed**: pull logs via `gh run view <id> --log-failed` (when `gh` works), summarize the failure, fix, re-run local verification per `verification-before-stopping-code-changes.mdc`, commit, push, and **monitor again**.
+
+## Workflows in this repo (know what can fail)
+
+- **`.github/workflows/ci.yml`** — `pnpm lint`, `typecheck`, `test:coverage`, `build`; Go agent tests; PR-only OpenAPI drift when `packages/contracts/` changes.
+- **`.github/workflows/acceptance.yml`** — Docker Compose + `pnpm acceptance`.
+- **`.github/workflows/docs.yml`** — Jekyll docs (and Pages deploy on `main`).
+
+A push to `main` can trigger **all** of these; do not assume only `ci` matters.
+
+## Forbidden
+
+- Pushing and stopping without checking Actions status when `gh` or the web UI is available to the user/agent environment.
+- “Pushed; you’re done” without a CI outcome (pass, or explicit failure + next steps).

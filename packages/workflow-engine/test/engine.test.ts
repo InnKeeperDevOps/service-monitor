@@ -54,7 +54,7 @@ describe("workflow engine", () => {
     expect(() =>
       validateWorkflowGraph(
         [
-          { id: "t", type: "onSchedule" },
+          { id: "t", type: "onCrash" },
           { id: "ok", type: "runShell" },
           { id: "orphan", type: "genericWebhook" }
         ],
