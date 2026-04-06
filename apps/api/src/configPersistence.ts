@@ -12,6 +12,8 @@ export type KaiadConfig = {
     appId: string;
     privateKeyPem: string;
     webhookSecret: string;
+    /** Public URL segment for https://github.com/apps/<slug>/installations/new */
+    appSlug?: string;
   };
   oauth?: {
     googleClientId?: string;

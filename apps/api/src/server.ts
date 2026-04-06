@@ -50,7 +50,7 @@ import {
   type WorkflowNode,
   type WorkflowNodeType
 } from "@sm/domain";
-import { getInstallationMetadata } from "@sm/github";
+import { fetchGithubAppSlug, getInstallationMetadata } from "@sm/github";
 import { correlationIdPlugin } from "./correlationId.js";
 import {
   loginWithDiagnostics,
@@ -541,6 +541,36 @@ async function swapAuthStoreToPostgres(
   swappable.swap(createPostgresAuthStore(pool));
 }
 
+function githubInstallUrlFromSlug(slug: string): string {
+  return `https://github.com/apps/${encodeURIComponent(slug)}/installations/new`;
+}
+
+/** Resolve public slug + install URL from env, config, or GitHub GET /app (no user-entered slug required). */
+async function resolveGithubInstallInfo(cfg: KaiadConfig | null): Promise<{
+  appSlug: string | null;
+  installUrl: string | null;
+}> {
+  const envSlug = process.env.GITHUB_APP_SLUG?.trim();
+  if (envSlug) {
+    return { appSlug: envSlug, installUrl: githubInstallUrlFromSlug(envSlug) };
+  }
+  const gh = cfg?.githubApp;
+  const fromFile = gh?.appSlug?.trim();
+  if (fromFile) {
+    return { appSlug: fromFile, installUrl: githubInstallUrlFromSlug(fromFile) };
+  }
+  const appIdStr = process.env.GITHUB_APP_ID ?? gh?.appId?.trim() ?? "";
+  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY ?? gh?.privateKeyPem?.trim() ?? "";
+  const appIdNum = Number(appIdStr);
+  if (Number.isFinite(appIdNum) && appIdNum > 0 && privateKey) {
+    const slug = await fetchGithubAppSlug({ appId: appIdNum, privateKey });
+    if (slug) {
+      return { appSlug: slug, installUrl: githubInstallUrlFromSlug(slug) };
+    }
+  }
+  return { appSlug: null, installUrl: null };
+}
+
 export function buildServer(opts: BuildServerOptions = {}) {
   const enqueueGithubJob = opts.enqueueGithubJob ?? noopGithubEnqueue;
   const enqueueLogIngestion = opts.enqueueLogIngestion ?? noopLogIngestion;
@@ -978,15 +1008,13 @@ export function buildServer(opts: BuildServerOptions = {}) {
         apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token" })
       );
     }
-    if (session.role !== "owner" && session.role !== "admin") {
-      return reply.status(403).send(
-        apiErrorSchema.parse({ code: "FORBIDDEN", message: "Admin access required" })
-      );
-    }
     const cfg = readConfig();
     const gh = cfg?.githubApp;
+    const { appSlug, installUrl } = await resolveGithubInstallInfo(cfg);
     return {
       appId: gh?.appId?.trim() ? gh.appId : null,
+      appSlug,
+      installUrl,
       privateKeyConfigured: !!gh?.privateKeyPem?.trim(),
       webhookSecretConfigured: !!gh?.webhookSecret?.trim()
     };
@@ -1023,6 +1051,10 @@ export function buildServer(opts: BuildServerOptions = {}) {
     const pemIn = String(body.githubAppPrivateKeyPem ?? "").trim();
     const secretIn = String(body.githubWebhookSecret ?? "").trim();
     const existing = current.githubApp;
+    let appSlug = existing?.appSlug?.trim() ?? "";
+    if (Object.prototype.hasOwnProperty.call(body, "githubAppSlug")) {
+      appSlug = String(body.githubAppSlug ?? "").trim();
+    }
     const privateKeyPem = pemIn || existing?.privateKeyPem?.trim() || "";
     const webhookSecret = secretIn || existing?.webhookSecret?.trim() || "";
     if (!privateKeyPem) {
@@ -1043,7 +1075,12 @@ export function buildServer(opts: BuildServerOptions = {}) {
     }
     const next: KaiadConfig = {
       ...current,
-      githubApp: { appId: githubAppId, privateKeyPem, webhookSecret }
+      githubApp: {
+        appId: githubAppId,
+        privateKeyPem,
+        webhookSecret,
+        ...(appSlug ? { appSlug } : {})
+      }
     };
     try {
       await writeConfig(next);

@@ -102,6 +102,7 @@ export function SettingsPage() {
   const [isSubmittingOAuth, setIsSubmittingOAuth] = useState(false);
 
   const [githubAppId, setGithubAppId] = useState("");
+  const [githubInstallUrl, setGithubInstallUrl] = useState<string | null>(null);
   const [githubPrivateKeyPem, setGithubPrivateKeyPem] = useState("");
   const [githubWebhookSecret, setGithubWebhookSecret] = useState("");
   const [githubPrivateKeyConfigured, setGithubPrivateKeyConfigured] = useState(false);
@@ -160,15 +161,15 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (!canManageGithub) {
-      return;
-    }
     api
       .getGithubAppSettings()
       .then((s) => {
-        setGithubAppId(s.appId ?? "");
-        setGithubPrivateKeyConfigured(s.privateKeyConfigured);
-        setGithubWebhookSecretConfigured(s.webhookSecretConfigured);
+        setGithubInstallUrl(s.installUrl ?? null);
+        if (canManageGithub) {
+          setGithubAppId(s.appId ?? "");
+          setGithubPrivateKeyConfigured(s.privateKeyConfigured);
+          setGithubWebhookSecretConfigured(s.webhookSecretConfigured);
+        }
       })
       .catch(() => {});
   }, [canManageGithub]);
@@ -192,6 +193,7 @@ export function SettingsPage() {
       setGithubWebhookSecret("");
       setGithubSuccess("GitHub App settings saved. Restart workers if GitHub automation does not pick up changes immediately.");
       const s = await api.getGithubAppSettings();
+      setGithubInstallUrl(s.installUrl ?? null);
       setGithubPrivateKeyConfigured(s.privateKeyConfigured);
       setGithubWebhookSecretConfigured(s.webhookSecretConfigured);
       setError(null);
@@ -804,83 +806,129 @@ export function SettingsPage() {
       <div style={sectionStyle}>
         <h3 style={h3Style}><GitBranch size={16} /> GitHub App</h3>
         <p style={mutedText}>
-          App credentials are stored in the server&apos;s <code>kaiad.config.json</code>. Configure the GitHub App webhook URL to{" "}
+          Configure the GitHub App <strong>webhook URL</strong> to{" "}
           <code>
             {typeof window !== "undefined" ? `${window.location.origin}/webhooks/github` : "/webhooks/github"}
-          </code>
-          . After installing the app on GitHub, sync the installation using the form below or return to this page with an{" "}
-          <code>installation_id</code> query parameter.
+          </code>{" "}
+          and <strong>Setup URL</strong> to{" "}
+          <code>{typeof window !== "undefined" ? `${window.location.origin}/` : "https://your-host/"}</code>
+          . After you install the app on GitHub, you are redirected back here with <code>installation_id</code> and sync runs automatically.
         </p>
-        {!canManageGithub && (
-          <p style={{ ...mutedText, marginTop: "0.75rem" }}>
-            Only owners and admins can edit GitHub App credentials. Installations for this tenant are listed below.
-          </p>
-        )}
-        {canManageGithub && (
-          <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--color-border)" }}>
-            {githubFormError && (
-              <p style={{ color: "var(--color-danger)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{githubFormError}</p>
-            )}
-            {githubSuccess && (
-              <p style={{ color: "var(--color-success)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{githubSuccess}</p>
-            )}
-            <label style={labelColStyle}>
-              <span style={{ color: "var(--color-text-secondary)" }}>App ID</span>
-              <input
-                aria-label="GitHub App ID"
-                value={githubAppId}
-                onChange={(e) => setGithubAppId(e.target.value)}
-                placeholder="123456"
-                autoComplete="off"
-                style={inputStyle}
-              />
-            </label>
-            <div className="sm-input-wrapper" style={{ marginBottom: "0.65rem" }}>
-              <label className="sm-input-label" htmlFor="settings-github-pem" style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
-                Private Key (PEM)
-              </label>
-              <textarea
-                id="settings-github-pem"
-                aria-label="GitHub App private key PEM"
-                className="sm-input"
-                rows={5}
-                value={githubPrivateKeyPem}
-                onChange={(e) => setGithubPrivateKeyPem(e.target.value)}
-                placeholder={githubPrivateKeyConfigured ? "Leave blank to keep existing key" : "-----BEGIN RSA PRIVATE KEY-----"}
-                style={{ resize: "vertical", fontFamily: "monospace", fontSize: "0.8rem", width: "100%", maxWidth: 420, boxSizing: "border-box" }}
-              />
-            </div>
-            <label style={labelColStyle}>
-              <span style={{ color: "var(--color-text-secondary)" }}>Webhook secret</span>
-              <input
-                aria-label="GitHub webhook secret"
-                type="password"
-                value={githubWebhookSecret}
-                onChange={(e) => setGithubWebhookSecret(e.target.value)}
-                placeholder={githubWebhookSecretConfigured ? "Leave blank to keep existing secret" : "whsec_…"}
-                autoComplete="new-password"
-                style={inputStyle}
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => void handleSaveGithubApp()}
-              disabled={isSavingGithub}
+        {githubInstallUrl ? (
+          <div style={{ marginTop: "1rem" }}>
+            <a
+              href={githubInstallUrl}
+              target="_blank"
+              rel="noopener noreferrer"
               style={{
+                display: "inline-block",
                 background: "var(--color-primary)",
                 color: "var(--color-primary-foreground)",
                 border: "none",
                 borderRadius: 6,
-                padding: "0.45rem 0.8rem",
-                fontSize: "0.85rem",
-                cursor: isSavingGithub ? "not-allowed" : "pointer",
-                opacity: isSavingGithub ? 0.75 : 1,
-                marginTop: "0.25rem"
+                padding: "0.55rem 1rem",
+                fontSize: "0.9rem",
+                fontWeight: 600,
+                textDecoration: "none"
               }}
             >
-              {isSavingGithub ? "Saving…" : "Save GitHub App"}
-            </button>
+              Install on GitHub
+            </a>
+            <p style={{ ...mutedText, marginTop: "0.5rem", marginBottom: 0, fontSize: "0.8rem" }}>
+              Opens GitHub to authorize this app for your org or account. No extra fields to fill in here.
+            </p>
           </div>
+        ) : (
+          <p style={{ ...mutedText, marginTop: "0.75rem", marginBottom: 0, fontSize: "0.85rem" }}>
+            The install link appears once the server has GitHub App credentials (or <code>GITHUB_APP_SLUG</code>). Ask an administrator to complete the one-time setup
+            {canManageGithub ? " under Advanced below" : ""}, or use manual sync if you already know the installation ID.
+          </p>
+        )}
+        {!canManageGithub && (
+          <p style={{ ...mutedText, marginTop: "0.75rem" }}>
+            Only owners and admins can change server credentials. Installations for this tenant are listed below.
+          </p>
+        )}
+        {canManageGithub && (
+          <details style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--color-border)" }}>
+            <summary
+              style={{
+                cursor: "pointer",
+                fontSize: "0.9rem",
+                color: "var(--color-text-secondary)",
+                fontWeight: 600
+              }}
+            >
+              Advanced: GitHub App credentials (server / kaiad.config.json)
+            </summary>
+            <div style={{ marginTop: "0.75rem" }}>
+              {githubFormError && (
+                <p style={{ color: "var(--color-danger)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{githubFormError}</p>
+              )}
+              {githubSuccess && (
+                <p style={{ color: "var(--color-success)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{githubSuccess}</p>
+              )}
+              <p style={{ ...mutedText, marginBottom: "0.65rem", fontSize: "0.8rem" }}>
+                App ID and private key are usually set once at install time. The server also discovers the public app slug from GitHub when these are valid.
+              </p>
+              <label style={labelColStyle}>
+                <span style={{ color: "var(--color-text-secondary)" }}>App ID</span>
+                <input
+                  aria-label="GitHub App ID"
+                  value={githubAppId}
+                  onChange={(e) => setGithubAppId(e.target.value)}
+                  placeholder="123456"
+                  autoComplete="off"
+                  style={inputStyle}
+                />
+              </label>
+              <div className="sm-input-wrapper" style={{ marginBottom: "0.65rem" }}>
+                <label className="sm-input-label" htmlFor="settings-github-pem" style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+                  Private Key (PEM)
+                </label>
+                <textarea
+                  id="settings-github-pem"
+                  aria-label="GitHub App private key PEM"
+                  className="sm-input"
+                  rows={5}
+                  value={githubPrivateKeyPem}
+                  onChange={(e) => setGithubPrivateKeyPem(e.target.value)}
+                  placeholder={githubPrivateKeyConfigured ? "Leave blank to keep existing key" : "-----BEGIN RSA PRIVATE KEY-----"}
+                  style={{ resize: "vertical", fontFamily: "monospace", fontSize: "0.8rem", width: "100%", maxWidth: 420, boxSizing: "border-box" }}
+                />
+              </div>
+              <label style={labelColStyle}>
+                <span style={{ color: "var(--color-text-secondary)" }}>Webhook secret</span>
+                <input
+                  aria-label="GitHub webhook secret"
+                  type="password"
+                  value={githubWebhookSecret}
+                  onChange={(e) => setGithubWebhookSecret(e.target.value)}
+                  placeholder={githubWebhookSecretConfigured ? "Leave blank to keep existing secret" : "whsec_…"}
+                  autoComplete="new-password"
+                  style={inputStyle}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleSaveGithubApp()}
+                disabled={isSavingGithub}
+                style={{
+                  background: "var(--color-primary)",
+                  color: "var(--color-primary-foreground)",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "0.45rem 0.8rem",
+                  fontSize: "0.85rem",
+                  cursor: isSavingGithub ? "not-allowed" : "pointer",
+                  opacity: isSavingGithub ? 0.75 : 1,
+                  marginTop: "0.25rem"
+                }}
+              >
+                {isSavingGithub ? "Saving…" : "Save GitHub App"}
+              </button>
+            </div>
+          </details>
         )}
         <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--color-border)" }}>
           <p style={{ ...mutedText, marginBottom: "0.65rem" }}>Sync installation metadata (after installing the app on GitHub):</p>

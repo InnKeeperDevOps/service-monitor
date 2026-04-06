@@ -144,6 +144,17 @@ function AppMain() {
     return () => window.removeEventListener("hashchange", handler);
   }, []);
 
+  /** GitHub App post-install redirect uses query params on the origin; hash routing would leave users off Settings. */
+  useEffect(() => {
+    if (!hasToken()) return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get("installation_id")) return;
+    const raw = window.location.hash.replace(/^#/, "").split("?")[0];
+    if (raw !== "settings") {
+      window.location.hash = "settings";
+    }
+  }, []);
+
   if (route === "login") {
     return <LoginPage />;
   }

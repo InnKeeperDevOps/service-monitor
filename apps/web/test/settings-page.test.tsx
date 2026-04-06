@@ -110,6 +110,8 @@ describe("SettingsPage enrollment token generation", () => {
     syncGithubInstallation.mockResolvedValue({ installationId: 1, accountLogin: "test", appId: 1 });
     getGithubAppSettings.mockResolvedValue({
       appId: null,
+      appSlug: null,
+      installUrl: null,
       privateKeyConfigured: false,
       webhookSecretConfigured: false
     });
@@ -370,6 +372,8 @@ describe("SettingsPage authentication OAuth providers", () => {
     listGithubInstallations.mockResolvedValue({ installations: [] });
     getGithubAppSettings.mockResolvedValue({
       appId: null,
+      appSlug: null,
+      installUrl: null,
       privateKeyConfigured: false,
       webhookSecretConfigured: false
     });
@@ -479,6 +483,8 @@ describe("SettingsPage GitHub App", () => {
     syncGithubInstallation.mockResolvedValue({ installationId: 99, accountLogin: "acme-org", appId: 1 });
     getGithubAppSettings.mockResolvedValue({
       appId: "42",
+      appSlug: null,
+      installUrl: null,
       privateKeyConfigured: true,
       webhookSecretConfigured: true
     });
@@ -497,11 +503,15 @@ describe("SettingsPage GitHub App", () => {
     getGithubAppSettings
       .mockResolvedValueOnce({
         appId: "42",
+        appSlug: null,
+        installUrl: null,
         privateKeyConfigured: true,
         webhookSecretConfigured: true
       })
       .mockResolvedValueOnce({
         appId: "99",
+        appSlug: null,
+        installUrl: null,
         privateKeyConfigured: true,
         webhookSecretConfigured: true
       });
@@ -520,11 +530,24 @@ describe("SettingsPage GitHub App", () => {
     });
   });
 
+  it("shows Install on GitHub link when server returns installUrl", async () => {
+    getGithubAppSettings.mockResolvedValue({
+      appId: "42",
+      appSlug: "acme-kaiad",
+      installUrl: "https://github.com/apps/acme-kaiad/installations/new",
+      privateKeyConfigured: true,
+      webhookSecretConfigured: true
+    });
+    render(<SettingsPage />);
+    const link = await screen.findByRole("link", { name: "Install on GitHub" });
+    expect(link).toHaveAttribute("href", "https://github.com/apps/acme-kaiad/installations/new");
+  });
+
   it("hides GitHub credential form for viewers", async () => {
     mockUseAuth = viewerAuthState;
     render(<SettingsPage />);
     expect(
-      await screen.findByText(/Only owners and admins can edit GitHub App credentials/i)
+      await screen.findByText(/Only owners and admins can change server credentials/i)
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save GitHub App" })).not.toBeInTheDocument();
   });

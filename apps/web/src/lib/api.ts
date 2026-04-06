@@ -298,12 +298,16 @@ export const api = {
   getGithubAppSettings: () =>
     apiFetch<{
       appId: string | null;
+      appSlug: string | null;
+      /** Ready-to-open GitHub install URL when the server could resolve the app slug. */
+      installUrl: string | null;
       privateKeyConfigured: boolean;
       webhookSecretConfigured: boolean;
     }>("/api/v1/settings/github-app"),
 
   updateGithubAppSettings: (payload: {
     githubAppId: string;
+    githubAppSlug?: string;
     githubAppPrivateKeyPem?: string;
     githubWebhookSecret?: string;
   }) =>

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiErrorSchema } from "@sm/contracts";
+import * as github from "@sm/github";
 import * as configPersistence from "../src/configPersistence.js";
 import { __resetEnrollmentStoreForTests } from "../src/enrollmentStore.js";
 import {
@@ -238,11 +239,16 @@ describe("api", () => {
   });
 
   describe.sequential("GET/POST /api/v1/settings/github-app", () => {
+    beforeEach(() => {
+      vi.spyOn(github, "fetchGithubAppSlug").mockResolvedValue(null);
+    });
+
     afterEach(() => {
       vi.restoreAllMocks();
       delete process.env.GITHUB_APP_ID;
       delete process.env.GITHUB_APP_PRIVATE_KEY;
       delete process.env.GITHUB_WEBHOOK_SECRET;
+      delete process.env.GITHUB_APP_SLUG;
     });
 
     it("GET returns 401 when unauthenticated", async () => {
@@ -264,6 +270,51 @@ describe("api", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({
         appId: "99",
+        appSlug: null,
+        installUrl: null,
+        privateKeyConfigured: true,
+        webhookSecretConfigured: true
+      });
+    });
+
+    it("GET returns installUrl when slug is resolved from GitHub API", async () => {
+      vi.spyOn(github, "fetchGithubAppSlug").mockResolvedValue("from-api");
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue({
+        setupComplete: true,
+        databaseUrl: "postgres://x",
+        githubApp: { appId: "99", privateKeyPem: "pem", webhookSecret: "wh" }
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        appId: "99",
+        appSlug: "from-api",
+        installUrl: "https://github.com/apps/from-api/installations/new",
+        privateKeyConfigured: true,
+        webhookSecretConfigured: true
+      });
+    });
+
+    it("GET returns appSlug when set in config", async () => {
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue({
+        setupComplete: true,
+        databaseUrl: "postgres://x",
+        githubApp: { appId: "99", privateKeyPem: "pem", webhookSecret: "wh", appSlug: "my-kaiad-app" }
+      });
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        appId: "99",
+        appSlug: "my-kaiad-app",
+        installUrl: "https://github.com/apps/my-kaiad-app/installations/new",
         privateKeyConfigured: true,
         webhookSecretConfigured: true
       });
@@ -279,6 +330,8 @@ describe("api", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({
         appId: null,
+        appSlug: null,
+        installUrl: null,
         privateKeyConfigured: false,
         webhookSecretConfigured: false
       });
@@ -307,6 +360,33 @@ describe("api", () => {
       expect(writeSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           githubApp: { appId: "2", privateKeyPem: "oldpem", webhookSecret: "oldwh" }
+        })
+      );
+    });
+
+    it("POST persists githubAppSlug when provided", async () => {
+      const writeSpy = vi.spyOn(configPersistence, "writeConfig").mockResolvedValue();
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue({
+        setupComplete: true,
+        databaseUrl: "postgres://x",
+        redisUrl: "redis://x",
+        githubApp: { appId: "1", privateKeyPem: "oldpem", webhookSecret: "oldwh" }
+      });
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/settings/github-app",
+        headers: { authorization: "Bearer dev-token" },
+        payload: {
+          githubAppId: "1",
+          githubAppSlug: "acme-kaiad",
+          githubAppPrivateKeyPem: "",
+          githubWebhookSecret: ""
+        }
+      });
+      expect(response.statusCode).toBe(200);
+      expect(writeSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          githubApp: { appId: "1", privateKeyPem: "oldpem", webhookSecret: "oldwh", appSlug: "acme-kaiad" }
         })
       );
     });
@@ -358,7 +438,17 @@ describe("api", () => {
       expect(response.statusCode).toBe(400);
     });
 
-    it("GET returns 403 for viewer on active tenant", async () => {
+    it("GET returns install link for viewer when GitHub App is configured", async () => {
+      vi.spyOn(configPersistence, "readConfig").mockReturnValue({
+        setupComplete: true,
+        databaseUrl: "postgres://x",
+        githubApp: {
+          appId: "1",
+          privateKeyPem: "pem",
+          webhookSecret: "wh",
+          appSlug: "viewer-test-app"
+        }
+      });
       __resetAuthStoreForTests();
       __resetTenantStoreForTests();
       await upsertTenantSettings({ tenantId: "t-1", githubRepo: "o/a", defaultBranch: "main" });
@@ -391,7 +481,14 @@ describe("api", () => {
         url: "/api/v1/settings/github-app",
         headers: { authorization: `Bearer ${token}` }
       });
-      expect(response.statusCode).toBe(403);
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        appId: "1",
+        appSlug: "viewer-test-app",
+        installUrl: "https://github.com/apps/viewer-test-app/installations/new",
+        privateKeyConfigured: true,
+        webhookSecretConfigured: true
+      });
       await viewerApp.close();
       __resetAuthStoreForTests();
       __resetTenantStoreForTests();

@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { GitHubAppClient } from "../src/client.js";
-import { createAppJwt, createInstallationToken, getInstallationMetadata } from "../src/installation-token.js";
+import {
+  createAppJwt,
+  createInstallationToken,
+  fetchGithubAppSlug,
+  getInstallationMetadata
+} from "../src/installation-token.js";
 import { policyGuardedMutation } from "../src/policy-guard.js";
 
 const TEST_KEY = crypto.generateKeyPairSync("rsa", {
@@ -137,6 +142,32 @@ describe("getInstallationMetadata", () => {
         { fetch: mockFetch as unknown as typeof fetch, apiBase: "https://api.github.com" }
       )
     ).rejects.toThrow("GitHub installation lookup failed");
+  });
+});
+
+describe("fetchGithubAppSlug", () => {
+  it("returns slug from GET /app", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ slug: "my-app" })
+    });
+    const slug = await fetchGithubAppSlug(
+      { appId: 12345, privateKey: fakeRsaKey() },
+      { fetch: mockFetch as unknown as typeof fetch, apiBase: "https://api.github.com" }
+    );
+    expect(slug).toBe("my-app");
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain("/app");
+    expect((init as RequestInit).method).toBe("GET");
+  });
+
+  it("returns null on non-ok response", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 401 });
+    const slug = await fetchGithubAppSlug(
+      { appId: 1, privateKey: fakeRsaKey() },
+      { fetch: mockFetch as unknown as typeof fetch, apiBase: "https://api.github.com" }
+    );
+    expect(slug).toBeNull();
   });
 });
 

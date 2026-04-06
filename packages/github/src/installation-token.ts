@@ -124,3 +124,40 @@ export async function getInstallationMetadata(
     appId: Number(data.app_id ?? req.appId)
   };
 }
+
+/**
+ * Returns the public slug for this GitHub App (for install URLs). Uses GET /app with app JWT.
+ * Returns null if the request fails or the response has no slug.
+ */
+export async function fetchGithubAppSlug(
+  req: { appId: number; privateKey: string },
+  opts?: { fetch?: typeof globalThis.fetch; apiBase?: string }
+): Promise<string | null> {
+  const fetchFn = opts?.fetch ?? globalThis.fetch;
+  const apiBase = opts?.apiBase ?? "https://api.github.com";
+  assertSafeOutboundUrl(apiBase, "GitHub API base URL");
+  const jwt = createAppJwt(req.appId, req.privateKey);
+  try {
+    const response = await fetchWithProtectedRedirects(
+      `${apiBase}/app`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+      },
+      "GitHub app metadata endpoint",
+      fetchFn
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const data = (await response.json()) as { slug?: string };
+    const slug = data.slug?.trim();
+    return slug || null;
+  } catch {
+    return null;
+  }
+}

@@ -16,6 +16,7 @@ const NESTED_KEY_MAP: Record<string, Record<string, string>> = {
     appId: "GITHUB_APP_ID",
     privateKeyPem: "GITHUB_APP_PRIVATE_KEY",
     webhookSecret: "GITHUB_WEBHOOK_SECRET",
+    appSlug: "GITHUB_APP_SLUG"
   },
   oauth: {
     googleClientId: "GOOGLE_CLIENT_ID",
@@ -66,6 +67,9 @@ export function applyGithubAppToEnv(githubApp: NonNullable<KaiadConfig["githubAp
   process.env.GITHUB_APP_ID = githubApp.appId;
   process.env.GITHUB_APP_PRIVATE_KEY = githubApp.privateKeyPem;
   process.env.GITHUB_WEBHOOK_SECRET = githubApp.webhookSecret;
+  if (githubApp.appSlug?.trim()) {
+    process.env.GITHUB_APP_SLUG = githubApp.appSlug.trim();
+  }
 }
 
 export function isSetupRequired(): boolean {
