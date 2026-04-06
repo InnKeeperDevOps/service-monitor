@@ -1,0 +1,13 @@
+---
+description: Web UI uses hooks/services over raw API calls; shared contracts for settings
+globs: apps/web/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# UI layer over API transport
+
+- **Do not** call `fetch` or `api.*` from React components for domain workflows (settings, services, workflows). Use a **hook** (e.g. `useTenantSettings`) or a small **module** that wraps `api.ts`, then call that from components.
+- Keep [`apps/web/src/lib/api.ts`](apps/web/src/lib/api.ts) as **HTTP transport** only: typed paths, auth headers, JSON. Business rules (merge payloads, validation) live beside the UI feature or in a dedicated helper.
+- Prefer types and Zod schemas from **`@sm/contracts`** for anything that mirrors the API body (e.g. `TenantSettings`, `tenantSettingsSchema`).
+- **Full-document saves**: when the server replaces a JSON document (e.g. tenant settings), merge partial UI updates with the last loaded row plus session `tenantId` before `POST`—never send incomplete bodies.
+- Adding a new settings surface: extend contracts if needed → `api.ts` → hook + merge/validate → form component → tests.

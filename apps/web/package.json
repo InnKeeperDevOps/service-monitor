@@ -11,6 +11,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@sm/contracts": "workspace:*",
     "@sm/domain": "workspace:*",
     "@xyflow/react": "^12.6.0",
     "lucide-react": "^0.503.0",

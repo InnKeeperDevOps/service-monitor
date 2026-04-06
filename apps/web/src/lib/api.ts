@@ -1,7 +1,26 @@
+import type { TenantSettings } from "@sm/contracts";
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://localhost:3001" : "");
 
 function getAuthToken(): string {
   return localStorage.getItem("sm_token") ?? import.meta.env.VITE_AUTH_TOKEN ?? "dev-token";
+}
+
+/** GET /api/v1/settings — returns null when no row exists (404), throws on other errors. */
+export async function getTenantSettings(): Promise<TenantSettings | null> {
+  const res = await fetch(`${API_BASE}/api/v1/settings`, {
+    headers: {
+      Authorization: `Bearer ${getAuthToken()}`
+    }
+  });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ code: "UNKNOWN", message: res.statusText }));
+    throw new Error(body.message ?? `API ${res.status}`);
+  }
+  return res.json() as Promise<TenantSettings>;
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -175,9 +194,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ workflowGraphId })
     }),
-  getSettings: () => apiFetch<Record<string, unknown>>("/api/v1/settings").catch(() => null),
-  updateSettings: (data: Record<string, unknown>) =>
-    apiFetch<Record<string, unknown>>("/api/v1/settings", {
+  getSettings: () => getTenantSettings(),
+  updateSettings: (data: TenantSettings) =>
+    apiFetch<TenantSettings>("/api/v1/settings", {
       method: "POST",
       body: JSON.stringify(data)
     }),

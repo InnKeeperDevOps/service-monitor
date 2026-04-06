@@ -11,6 +11,7 @@ const {
   createOAuthProvider,
   listGithubInstallations,
   syncGithubInstallation,
+  updateSettings,
   clipboardWriteText
 } = vi.hoisted(() => ({
   createEnrollmentToken: vi.fn(),
@@ -22,6 +23,7 @@ const {
   createOAuthProvider: vi.fn(),
   listGithubInstallations: vi.fn(),
   syncGithubInstallation: vi.fn(),
+  updateSettings: vi.fn(),
   clipboardWriteText: vi.fn()
 }));
 
@@ -58,7 +60,7 @@ vi.mock("../src/lib/api.js", () => ({
     createOAuthProvider,
     listGithubInstallations,
     syncGithubInstallation,
-    updateSettings: vi.fn()
+    updateSettings
   }
 }));
 
@@ -80,6 +82,7 @@ describe("SettingsPage enrollment token generation", () => {
     createOAuthProvider.mockReset();
     listGithubInstallations.mockReset();
     syncGithubInstallation.mockReset();
+    updateSettings.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
@@ -333,6 +336,7 @@ describe("SettingsPage authentication OAuth providers", () => {
     getAuthProviders.mockReset();
     createOAuthProvider.mockReset();
     listGithubInstallations.mockReset();
+    updateSettings.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
@@ -416,5 +420,94 @@ describe("SettingsPage authentication OAuth providers", () => {
     expect(screen.getByLabelText("Token URL")).toHaveValue("https://oauth2.googleapis.com/token");
     expect(screen.getByLabelText("User info URL")).toHaveValue("https://openidconnect.googleapis.com/v1/userinfo");
     expect(screen.getByLabelText("OAuth scopes")).toHaveValue("openid email profile");
+  });
+});
+
+describe("SettingsPage tenant configuration", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  beforeEach(() => {
+    mockUseAuth = adminAuthState;
+    createEnrollmentToken.mockReset();
+    listEnrollmentTokens.mockReset();
+    deactivateEnrollmentToken.mockReset();
+    deleteEnrollmentToken.mockReset();
+    getSettings.mockReset();
+    getAuthProviders.mockReset();
+    createOAuthProvider.mockReset();
+    listGithubInstallations.mockReset();
+    syncGithubInstallation.mockReset();
+    updateSettings.mockReset();
+    listEnrollmentTokens.mockResolvedValue({ tokens: [] });
+    getAuthProviders.mockResolvedValue({ providers: [] });
+    listGithubInstallations.mockResolvedValue({ installations: [] });
+    syncGithubInstallation.mockResolvedValue({ installationId: 1, accountLogin: "test", appId: 1 });
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: clipboardWriteText },
+      configurable: true
+    });
+  });
+
+  it("submits merged tenant settings on save", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main"
+    });
+    updateSettings.mockImplementation(async (payload) => payload);
+
+    render(<SettingsPage />);
+
+    const repoInput = await screen.findByLabelText("GitHub repository");
+    await waitFor(() => {
+      expect(repoInput).toHaveValue("acme/app");
+    });
+    fireEvent.change(repoInput, { target: { value: "other/repo" } });
+    await waitFor(() => {
+      expect(repoInput).toHaveValue("other/repo");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save tenant settings" }));
+
+    await waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: "t1",
+          githubRepo: "other/repo",
+          defaultBranch: "main"
+        })
+      );
+    });
+  });
+
+  it("kill switch posts full tenant payload including empty automation policy", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main",
+      automationPolicy: {
+        repos: ["acme/app"],
+        branches: ["main"],
+        actions: ["create_pr"]
+      }
+    });
+    updateSettings.mockImplementation(async (payload) => payload);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<SettingsPage />);
+
+    await screen.findByLabelText("GitHub repository");
+    fireEvent.click(screen.getByRole("button", { name: "Kill Switch — Disable All Automation" }));
+
+    await waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledWith({
+        tenantId: "t1",
+        githubRepo: "acme/app",
+        defaultBranch: "main",
+        automationPolicy: { repos: [], branches: [], actions: [] }
+      });
+    });
   });
 });

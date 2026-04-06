@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Settings, Key, Shield, GitBranch, Cpu, Lock } from "lucide-react";
 import { api, type AuthProviderEntry, type OAuthProviderConfigPayload } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
+import { TenantConfigurationSection } from "./TenantConfigurationSection.js";
+import { useTenantSettings } from "./useTenantSettings.js";
 
 const GOOGLE_OAUTH_DEFAULTS: Pick<OAuthProviderConfigPayload, "id" | "provider" | "authorizeUrl" | "tokenUrl" | "userInfoUrl" | "scopes"> = {
   id: "google",
@@ -86,6 +88,9 @@ function buildAgentStartCommand(token: string): string {
 export function SettingsPage() {
   const { user } = useAuth();
   const canManageOAuth = user?.role === "owner" || user?.role === "admin";
+  const canManageTenantSettings =
+    user?.role === "owner" || user?.role === "admin" || user?.role === "operator";
+  const tenantSettings = useTenantSettings(user?.tenantId ?? null);
 
   const [authProviders, setAuthProviders] = useState<AuthProviderEntry[]>([]);
   const [oauthId, setOauthId] = useState("");
@@ -101,7 +106,6 @@ export function SettingsPage() {
   const [isSubmittingOAuth, setIsSubmittingOAuth] = useState(false);
 
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
-  const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
   const [installations, setInstallations] = useState<GithubInstallation[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -117,7 +121,6 @@ export function SettingsPage() {
 
   useEffect(() => {
     api.listEnrollmentTokens().then((r) => setTokens(r.tokens)).catch(() => {});
-    api.getSettings().then((s) => setSettings(s)).catch(() => {});
     api.listGithubInstallations().then((r) => setInstallations(r.installations)).catch(() => {});
     api.getAuthProviders().then((r) => setAuthProviders(r.providers)).catch(() => {});
 
@@ -342,7 +345,7 @@ export function SettingsPage() {
     setOauthScopesInput(GOOGLE_OAUTH_DEFAULTS.scopes.join(" "));
   }
 
-  const policy = settings?.automationPolicy as { repos?: string[]; branches?: string[]; actions?: string[] } | undefined;
+  const policy = tenantSettings.data?.automationPolicy;
 
   return (
     <section>
@@ -536,17 +539,18 @@ export function SettingsPage() {
         )}
       </div>
 
-      {/* Tenant Configuration */}
-      <div style={sectionStyle}>
-        <h3 style={{ margin: "0 0 0.75rem", fontSize: "1rem" }}>Tenant Configuration</h3>
-        {settings ? (
-          <pre style={{ margin: 0, fontSize: "0.8rem", overflow: "auto", maxHeight: 200, background: "var(--color-surface-muted)", padding: "0.5rem", borderRadius: 6 }}>
-            {JSON.stringify(settings, null, 2)}
-          </pre>
-        ) : (
-          <p style={mutedText}>No settings configured. Use the API to upsert tenant settings.</p>
-        )}
-      </div>
+      {user?.tenantId && (
+        <TenantConfigurationSection
+          tenantId={user.tenantId}
+          canEdit={canManageTenantSettings}
+          data={tenantSettings.data}
+          loading={tenantSettings.loading}
+          error={tenantSettings.error}
+          isSaving={tenantSettings.isSaving}
+          savePatch={tenantSettings.savePatch}
+          onClearError={tenantSettings.clearError}
+        />
+      )}
 
       {/* Enrollment Tokens */}
       <div style={sectionStyle}>
@@ -753,20 +757,17 @@ export function SettingsPage() {
             </tbody>
           </table>
         ) : (
-          <p style={mutedText}>No automation policy configured. Configure via <code>POST /api/v1/settings</code>.</p>
+          <p style={mutedText}>No automation policy configured. Set allowlists in Tenant Configuration above.</p>
         )}
         <div style={{ marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "1px solid var(--color-border)" }}>
           <button
+            type="button"
+            disabled={!canManageTenantSettings || tenantSettings.loading || tenantSettings.isSaving}
             onClick={() => {
               if (window.confirm("This will disable ALL automated GitHub operations (merge, push, PR, workflow dispatch) for this tenant. Continue?")) {
-                api.updateSettings?.({ automationPolicy: { repos: [], branches: [], actions: [] } })
-                  .then((updated) => {
-                    setSettings(updated);
-                    setError(null);
-                  })
-                  .catch((e: unknown) => {
-                    setError((e as Error).message);
-                  });
+                void tenantSettings.savePatch({ automationPolicy: { repos: [], branches: [], actions: [] } }).catch(() => {
+                  /* error surfaced via tenantSettings.error */
+                });
               }
             }}
             style={{
@@ -776,7 +777,9 @@ export function SettingsPage() {
               borderRadius: 6,
               padding: "0.4rem 0.75rem",
               fontSize: "0.85rem",
-              cursor: "pointer"
+              cursor:
+                !canManageTenantSettings || tenantSettings.loading || tenantSettings.isSaving ? "not-allowed" : "pointer",
+              opacity: !canManageTenantSettings || tenantSettings.loading || tenantSettings.isSaving ? 0.6 : 1
             }}
           >
             Kill Switch — Disable All Automation
@@ -819,7 +822,10 @@ export function SettingsPage() {
       <div style={sectionStyle}>
         <h3 style={h3Style}><Cpu size={16} /> Executors</h3>
         <p style={mutedText}>
-          Preferred executor: <strong>Cursor</strong> (fallback: Claude). Configure via tenant settings <code>automationPolicy</code>.
+          Preferred executor:{" "}
+          <strong>{tenantSettings.data?.preferredExecutor === "claude" ? "Claude" : "Cursor"}</strong> (fallback:{" "}
+          {tenantSettings.data?.preferredExecutor === "claude" ? "Cursor" : "Claude"}). Set in{" "}
+          <strong>Tenant Configuration</strong> above.
         </p>
       </div>
     </section>

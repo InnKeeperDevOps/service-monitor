@@ -78,6 +78,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@sm/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@sm/domain':
         specifier: workspace:*
         version: link:../../packages/domain
