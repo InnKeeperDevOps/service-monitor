@@ -82,7 +82,7 @@ import {
 } from "./enrollmentStore.js";
 import { createMemoryAuthStore, seedDevUser } from "./memoryAuthStore.js";
 import { createPostgresAuthStore } from "./postgresAuthStore.js";
-import type { KaiadConfig } from "./configPersistence.js";
+import { readConfig, type KaiadConfig } from "./configPersistence.js";
 import { enforcePolicy } from "./policy.js";
 import { createReadinessCheckersFromEnv, type ReadinessChecker } from "./readyChecks.js";
 import { RealtimeManager, type PendingCommandRedis } from "./realtimeManager.js";
@@ -498,6 +498,15 @@ function createSwappableAuthStore(initial: AuthStore): AuthStore & { swap: (next
     findUserById: (id) => current.findUserById(id),
     swap: (next) => { current = next; },
   };
+}
+
+async function swapAuthStoreToPostgres(
+  swappable: AuthStore & { swap: (next: AuthStore) => void },
+  databaseUrl: string
+): Promise<void> {
+  const { Pool } = await import("pg");
+  const pool = new Pool({ connectionString: databaseUrl });
+  swappable.swap(createPostgresAuthStore(pool));
 }
 
 export function buildServer(opts: BuildServerOptions = {}) {
@@ -1620,6 +1629,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
 
 /** Avoid auto-listen in test runners; allow normal `node dist/server.js` startup. */
 if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  void (async () => {
   bootstrapEnv();
   const store = createMemoryAuthStore();
   const seedDevCredentials =
@@ -1635,6 +1645,16 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
   let currentQueueWiring = createRuntimeQueueWiringFromEnv(process.env);
   if (!currentQueueWiring) {
     console.error("[api] REDIS_DISABLED=1 — queue-backed async paths are disabled");
+  }
+
+  const persisted = readConfig();
+  if (persisted?.setupComplete && persisted.databaseUrl?.trim()) {
+    try {
+      await swapAuthStoreToPostgres(swappableStore, persisted.databaseUrl);
+      console.error("[api] Auth store: Postgres (persisted config)");
+    } catch (err) {
+      console.error("[api] Failed to attach Postgres auth store at startup:", err);
+    }
   }
 
   const onSetupComplete: SetupCompleteCallback = async (config: KaiadConfig) => {
@@ -1660,10 +1680,7 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
     }
 
     try {
-      const { Pool } = await import("pg");
-      const pool = new Pool({ connectionString: config.databaseUrl });
-      const pgAuth = createPostgresAuthStore(pool);
-      swappableStore.swap(pgAuth);
+      await swapAuthStoreToPostgres(swappableStore, config.databaseUrl);
       console.error("[api] Auth store swapped to Postgres");
     } catch (err) {
       console.error("[api] Failed to create Postgres auth store:", err);
@@ -1695,13 +1712,15 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
     await app.close().catch(() => {});
   };
 
-  app.listen({ port: Number(process.env.PORT ?? 3001), host: "0.0.0.0" }).then(() => {
+  try {
+    await app.listen({ port: Number(process.env.PORT ?? 3001), host: "0.0.0.0" });
     if (process.env.SM_EMBED_WORKER === "1") {
       const port = Number(process.env.PORT ?? 3001);
       if (!process.env.INTERNAL_API_URL) {
         process.env.INTERNAL_API_URL = `http://127.0.0.1:${port}`;
       }
-      import("@sm/worker/runtime").then((mod) => {
+      try {
+        const mod = await import("@sm/worker/runtime");
         const { connection: wc, workers: wi } = mod.startQueueConsumersFromEnv(process.env);
         if (wi.length > 0) {
           console.error(`[api] Embedded worker: ${wi.length} BullMQ consumer(s) started`);
@@ -1713,19 +1732,23 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
           await mod.shutdownWorkersAndRedis(wi, wc).catch(() => {});
           await prev();
         };
-      }).catch((err) => {
+      } catch (err) {
         console.error("[api] Failed to start embedded worker:", err);
-      });
+      }
     }
-  }).catch((err) => {
+  } catch (err) {
     app.log.error(err);
     process.exit(1);
-  });
+  }
 
   process.on("SIGTERM", () => {
     void shutdownFn();
   });
   process.on("SIGINT", () => {
     void shutdownFn();
+  });
+  })().catch((err) => {
+    console.error(err);
+    process.exit(1);
   });
 }
