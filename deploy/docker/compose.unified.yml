@@ -58,4 +58,5 @@ services:
 
 volumes:
   kaiad-data:
+    name: ${KAIAD_DATA_VOLUME_NAME:-kaiad-data}
   pg-data:

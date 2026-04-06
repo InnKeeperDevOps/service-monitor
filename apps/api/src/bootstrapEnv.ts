@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { readConfig } from "./configPersistence.js";
 import type { KaiadConfig } from "./configPersistence.js";
 
 const CONFIG_KEY_MAP: Record<string, string> = {
@@ -31,14 +31,8 @@ export function getDataDir(): string {
 }
 
 export function bootstrapEnv(): { setupComplete: boolean; configLoaded: boolean } {
-  const dataDir = getDataDir();
-  const configPath = path.join(dataDir, "kaiad.config.json");
-
-  let config: KaiadConfig;
-  try {
-    const raw = fs.readFileSync(configPath, "utf-8");
-    config = JSON.parse(raw) as KaiadConfig;
-  } catch {
+  const config = readConfig();
+  if (!config) {
     return { setupComplete: false, configLoaded: false };
   }
 
@@ -67,15 +61,7 @@ export function bootstrapEnv(): { setupComplete: boolean; configLoaded: boolean 
 export function isSetupRequired(): boolean {
   const hasDatabaseUrl = !!process.env.DATABASE_URL;
   if (hasDatabaseUrl) return false;
-
-  const dataDir = getDataDir();
-  const configPath = path.join(dataDir, "kaiad.config.json");
-  try {
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const config = JSON.parse(raw) as KaiadConfig;
-    if (config.setupComplete && config.databaseUrl) return false;
-  } catch {
-    // No config file — setup is required
-  }
+  const config = readConfig();
+  if (config?.setupComplete && config.databaseUrl) return false;
   return true;
 }

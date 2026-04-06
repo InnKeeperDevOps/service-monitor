@@ -57,6 +57,8 @@ Open http://localhost:3001 to access the setup wizard. You'll configure:
 
 Kaiad stores its config in `KAIAD_DATA_DIR` (default: `/data` in Docker, `./data` locally).
 
+In Docker Compose, setup persistence depends on the `kaiad-data` volume. Do not run `docker compose down -v` unless you intentionally want to wipe setup state. If you deploy from different directories or with varying project names, set `KAIAD_DATA_VOLUME_NAME` to a stable value so the same volume is reused.
+
 **Environment variable precedence**: Environment variables always override values from `kaiad.config.json`. This means Kubernetes secrets, Docker env, or shell exports take priority over the config file.
 
 **Key environment variables:**

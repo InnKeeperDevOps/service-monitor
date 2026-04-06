@@ -727,7 +727,10 @@ export function buildServer(opts: BuildServerOptions = {}) {
       sourceIp,
       ...emailMeta
     });
-    const result = await loginWithDiagnostics(authStore, email, password);
+    // Match DB lookups: stored emails are compared as plain text; normalize so login matches
+    // signup/OAuth rows (and so fingerprint-aligned attempts actually query the same key).
+    const loginEmail = email.trim().toLowerCase();
+    const result = await loginWithDiagnostics(authStore, loginEmail, password);
     for (const traceStep of result.trace) {
       emitLoginStepLog(stepLogReq, {
         event: "auth.login.step",

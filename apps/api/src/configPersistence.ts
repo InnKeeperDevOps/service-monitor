@@ -24,7 +24,7 @@ export type KaiadConfig = {
   port?: number;
 };
 
-function getConfigPath(): string {
+export function getConfigPath(): string {
   const dataDir = process.env.KAIAD_DATA_DIR || "./data";
   return path.resolve(dataDir, "kaiad.config.json");
 }
@@ -34,7 +34,12 @@ export function readConfig(): KaiadConfig | null {
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     return JSON.parse(raw) as KaiadConfig;
-  } catch {
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[config] Failed to read ${configPath}: ${message}`);
+    }
     return null;
   }
 }
@@ -42,7 +47,9 @@ export function readConfig(): KaiadConfig | null {
 export async function writeConfig(config: KaiadConfig): Promise<void> {
   const configPath = getConfigPath();
   const dir = path.dirname(configPath);
+  const tmpPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
-  fs.chmodSync(configPath, 0o600);
+  fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2), "utf-8");
+  fs.chmodSync(tmpPath, 0o600);
+  fs.renameSync(tmpPath, configPath);
 }
