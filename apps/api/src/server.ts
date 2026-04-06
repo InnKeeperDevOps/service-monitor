@@ -27,6 +27,7 @@ import {
   listWorkflowGraphsResponseSchema,
   listAuthProvidersResponseSchema,
   meResponseSchema,
+  createTenantRequestSchema,
   switchActiveTenantRequestSchema,
   oauthAuthorizeResponseSchema,
   oauthCallbackResponseSchema,
@@ -525,6 +526,8 @@ function createSwappableAuthStore(initial: AuthStore): AuthStore & { swap: (next
     findSessionByTokenHash: (tokenHash) => current.findSessionByTokenHash(tokenHash),
     findUserById: (id) => current.findUserById(id),
     updateSessionTenant: (sessionId, tenantId) => current.updateSessionTenant(sessionId, tenantId),
+    createTenantAsUser: (args) => current.createTenantAsUser(args),
+    deleteTenantForUser: (args) => current.deleteTenantForUser(args),
     swap: (next) => { current = next; },
   };
 }
@@ -1026,6 +1029,104 @@ export function buildServer(opts: BuildServerOptions = {}) {
       );
     }
     return await buildMeResponse(authStore, next);
+  });
+
+  app.post("/api/v1/tenants", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Missing or invalid bearer token",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const body = createTenantRequestSchema.parse(req.body);
+    try {
+      await authStore.createTenantAsUser({
+        userId: session.id,
+        sessionId: session.sessionId,
+        name: body.name,
+        tenantId: body.tenantId
+      });
+    } catch (e: unknown) {
+      const code = e && typeof e === "object" && "code" in e ? (e as { code?: string }).code : undefined;
+      if (code === "TENANT_ID_TAKEN") {
+        return reply.status(409).send(
+          apiErrorSchema.parse({
+            code: "TENANT_ID_TAKEN",
+            message: "That tenant id is already in use",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const msg = e instanceof Error ? e.message : "";
+      if (msg === "SESSION_UPDATE_FAILED") {
+        return reply.status(500).send(
+          apiErrorSchema.parse({
+            code: "INTERNAL_ERROR",
+            message: "Failed to attach session to new tenant",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      throw e;
+    }
+    const next = await resolveSession(authStore, req.headers.authorization);
+    if (!next) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Session invalid after creating tenant",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    return await buildMeResponse(authStore, next);
+  });
+
+  app.delete<{ Params: { tenantId: string } }>("/api/v1/tenants/:tenantId", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Missing or invalid bearer token",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const tenantId = decodeURIComponent(req.params.tenantId);
+    const outcome = await authStore.deleteTenantForUser({ userId: session.id, tenantId });
+    if (outcome === "forbidden") {
+      return reply.status(403).send(
+        apiErrorSchema.parse({
+          code: "FORBIDDEN",
+          message: "Not allowed to delete this tenant",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    if (outcome === "not_found") {
+      return reply.status(404).send(
+        apiErrorSchema.parse({
+          code: "NOT_FOUND",
+          message: "Tenant not found",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    if (outcome === "protected") {
+      return reply.status(409).send(
+        apiErrorSchema.parse({
+          code: "PROTECTED_TENANT",
+          message: "This tenant is configured as the default webhook tenant and cannot be deleted",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    return reply.status(204).send();
   });
 
   app.get("/api/v1/settings", async (req, reply) => {

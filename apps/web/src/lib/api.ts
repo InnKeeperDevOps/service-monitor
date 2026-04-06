@@ -1,4 +1,4 @@
-import type { MeResponse, TenantSettings } from "@sm/contracts";
+import type { CreateTenantRequest, MeResponse, TenantSettings } from "@sm/contracts";
 import type { AuthUser } from "./useAuth.js";
 
 /** Maps `/api/v1/me` JSON to `AuthUser` for React context. */
@@ -173,6 +173,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ tenantId })
     }),
+
+  createTenant: (body: CreateTenantRequest) =>
+    apiFetch<MeResponse>("/api/v1/tenants", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
+
+  deleteTenant: (tenantId: string) =>
+    apiFetch<void>(`/api/v1/tenants/${encodeURIComponent(tenantId)}`, {
+      method: "DELETE"
+    }),
+
   listIncidents: () => apiFetch<{ incidents: Incident[] }>("/api/v1/incidents"),
   updateIncidentStatus: (id: string, status: string) =>
     apiFetch<Incident>(`/api/v1/incidents/${id}/status`, {

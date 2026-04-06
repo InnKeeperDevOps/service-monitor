@@ -67,6 +67,64 @@ export function createMemoryAuthStore(): AuthStore {
       const u = users.get(id);
       return u ? { id: u.id, email: u.email } : null;
     },
+
+    async createTenantAsUser({ userId, sessionId, name, tenantId: explicitId }) {
+      const id = explicitId ?? `t-${crypto.randomUUID()}`;
+      if (tenantNames.has(id)) {
+        throw Object.assign(new Error("Tenant id already exists"), { code: "TENANT_ID_TAKEN" });
+      }
+      const s = sessions.get(sessionId);
+      if (!s || s.userId !== userId) {
+        throw new Error("SESSION_UPDATE_FAILED");
+      }
+      tenantNames.set(id, name);
+      memberships.push({ tenantId: id, userId, role: "owner" });
+      s.tenantId = id;
+      return { tenantId: id };
+    },
+
+    async deleteTenantForUser({ userId, tenantId }) {
+      const protectedIds = new Set(
+        [process.env.DEFAULT_WEBHOOK_TENANT_ID, process.env.SM_DEFAULT_TENANT_ID].filter(Boolean) as string[]
+      );
+      if (protectedIds.has(tenantId)) {
+        return "protected";
+      }
+      if (!tenantNames.has(tenantId)) {
+        return "not_found";
+      }
+      const row = memberships.find((r) => r.userId === userId && r.tenantId === tenantId);
+      if (!row) {
+        return "forbidden";
+      }
+      if (row.role !== "owner" && row.role !== "admin") {
+        return "forbidden";
+      }
+
+      for (const sess of [...sessions.values()]) {
+        if (sess.tenantId !== tenantId) continue;
+        const alts = memberships
+          .filter((r) => r.userId === sess.userId && r.tenantId !== tenantId)
+          .map((r) => ({
+            tenantId: r.tenantId,
+            sortName: tenantNames.get(r.tenantId) ?? r.tenantId,
+          }))
+          .sort((a, b) => a.sortName.localeCompare(b.sortName));
+        if (alts.length > 0) {
+          sess.tenantId = alts[0].tenantId;
+        } else {
+          sessions.delete(sess.id);
+        }
+      }
+
+      for (let i = memberships.length - 1; i >= 0; i--) {
+        if (memberships[i].tenantId === tenantId) {
+          memberships.splice(i, 1);
+        }
+      }
+      tenantNames.delete(tenantId);
+      return "deleted";
+    },
   };
 }
 

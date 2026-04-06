@@ -20,6 +20,15 @@ export type AuthStore = {
   findSessionByTokenHash(tokenHash: string): Promise<{ id: string; userId: string; tenantId: string; expiresAt: Date } | null>;
   findUserById(id: string): Promise<{ id: string; email: string } | null>;
   updateSessionTenant(sessionId: string, tenantId: string): Promise<boolean>;
+  createTenantAsUser(args: {
+    userId: string;
+    sessionId: string;
+    name: string;
+    tenantId?: string;
+  }): Promise<{ tenantId: string }>;
+  deleteTenantForUser(args: { userId: string; tenantId: string }): Promise<
+    "deleted" | "forbidden" | "not_found" | "protected"
+  >;
 };
 
 const DEV_SESSION: SessionInfo = {

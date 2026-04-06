@@ -535,3 +535,186 @@ describe("multi-tenant /me and active-tenant", () => {
     expect(sw.statusCode).toBe(403);
   });
 });
+
+describe("POST /api/v1/tenants and DELETE /api/v1/tenants/:tenantId", () => {
+  let store: AuthStore;
+  let app: ReturnType<typeof buildServer>;
+
+  beforeEach(async () => {
+    __resetAuthStoreForTests();
+    __resetTenantStoreForTests();
+    await upsertTenantSettings({
+      tenantId: "t-1",
+      githubRepo: "org/a",
+      defaultBranch: "main"
+    });
+    store = createMemoryAuthStore();
+    await seedDevUser(store);
+    addMemoryMembershipForTests({
+      tenantId: "t-2",
+      userId: "u-1",
+      role: "admin",
+      tenantName: "Second"
+    });
+    addMemoryMembershipForTests({
+      tenantId: "t-3",
+      userId: "u-1",
+      role: "viewer",
+      tenantName: "Third"
+    });
+    addMemoryMembershipForTests({
+      tenantId: "t-4",
+      userId: "u-1",
+      role: "operator",
+      tenantName: "Fourth"
+    });
+    app = buildServer({ authStore: store });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    __resetTenantStoreForTests();
+  });
+
+  it("POST /tenants creates tenant, switches session, returns me", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/v1/tenants",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Fresh org" }
+    });
+    expect(create.statusCode).toBe(200);
+    const me = create.json();
+    expect(me.role).toBe("owner");
+    expect(me.memberships.length).toBe(5);
+    const createdId = me.tenantId;
+    expect(createdId.startsWith("t-")).toBe(true);
+    expect(me.memberships.some((m: { tenantId: string }) => m.tenantId === createdId)).toBe(true);
+
+    const meGet = await app.inject({
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(meGet.json().tenantId).toBe(createdId);
+  });
+
+  it("POST /tenants returns 409 when tenantId is taken", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/v1/tenants",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "A", tenantId: "t-custom-slug" }
+    });
+    expect(first.statusCode).toBe(200);
+
+    const dup = await app.inject({
+      method: "POST",
+      url: "/api/v1/tenants",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "B", tenantId: "t-custom-slug" }
+    });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.json().code).toBe("TENANT_ID_TAKEN");
+  });
+
+  it("DELETE tenant reassigns session when another membership exists", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/session/active-tenant",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { tenantId: "t-2" }
+    });
+
+    const del = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/tenants/t-2",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(del.statusCode).toBe(204);
+
+    const me = await app.inject({
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(me.statusCode).toBe(200);
+    const j = me.json();
+    expect(j.memberships.some((m: { tenantId: string }) => m.tenantId === "t-2")).toBe(false);
+    expect(j.tenantId).toBe("t-1");
+  });
+
+  it("DELETE returns 403 for viewer membership on that tenant", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+
+    const del = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/tenants/t-3",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(del.statusCode).toBe(403);
+  });
+
+  it("DELETE returns 403 for operator membership on that tenant", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+
+    const del = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/tenants/t-4",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(del.statusCode).toBe(403);
+  });
+
+  it("DELETE returns 409 for default webhook tenant id when configured", async () => {
+    const prev = process.env.SM_DEFAULT_TENANT_ID;
+    process.env.SM_DEFAULT_TENANT_ID = "t-1";
+
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+
+    const del = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/tenants/t-1",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(del.statusCode).toBe(409);
+    expect(del.json().code).toBe("PROTECTED_TENANT");
+
+    process.env.SM_DEFAULT_TENANT_ID = prev;
+  });
+});

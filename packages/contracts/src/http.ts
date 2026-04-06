@@ -25,6 +25,19 @@ export const switchActiveTenantRequestSchema = z.object({
 
 export const switchActiveTenantResponseSchema = meResponseSchema;
 
+export const createTenantRequestSchema = z.object({
+  name: z.string().min(1).max(200),
+  tenantId: z
+    .string()
+    .regex(/^t-[a-z0-9-]+$/)
+    .optional()
+});
+
+/** POST /api/v1/tenants returns the same shape as GET /me after switching to the new tenant. */
+export const createTenantResponseSchema = meResponseSchema;
+
+export type CreateTenantRequest = z.infer<typeof createTenantRequestSchema>;
+
 export const automationActionSchema = z.enum(["create_pr", "merge_pr", "dispatch_workflow", "push"]);
 
 export const automationPolicySchema = z.object({

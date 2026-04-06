@@ -232,7 +232,7 @@ function AppMain() {
           {route === "agents" && <AgentsPage />}
           {route === "services" && <ServicesPage />}
           {route === "workflows" && <WorkflowEditorPage />}
-          {route === "tenants" && <TenantsPage />}
+          {route === "tenants" && <TenantsPage onAuthUserUpdated={setUser} />}
           {route === "settings" && <SettingsPage />}
           {route === "tenantConfig" && tenantConfigTenantId && (
             <TenantConfigurationPage tenantIdFromRoute={tenantConfigTenantId} onAuthUserUpdated={setUser} />
