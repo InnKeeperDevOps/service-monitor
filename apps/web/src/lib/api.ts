@@ -1,4 +1,21 @@
-import type { TenantSettings } from "@sm/contracts";
+import type { MeResponse, TenantSettings } from "@sm/contracts";
+import type { AuthUser } from "./useAuth.js";
+
+/** Maps `/api/v1/me` JSON to `AuthUser` for React context. */
+export function meResponseToAuthUser(m: MeResponse): AuthUser {
+  return {
+    id: m.id,
+    email: m.email,
+    role: m.role,
+    tenantId: m.tenantId,
+    memberships: m.memberships.map((row) => ({
+      tenantId: row.tenantId,
+      tenantName: row.tenantName,
+      role: row.role,
+    })),
+  };
+}
+
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://localhost:3001" : "");
 
@@ -149,7 +166,13 @@ export const api = {
     window.location.reload();
   },
 
-  me: () => apiFetch<{ id: string; email: string; role: string; tenantId: string }>("/api/v1/me"),
+  me: () => apiFetch<MeResponse>("/api/v1/me"),
+
+  switchActiveTenant: (tenantId: string) =>
+    apiFetch<MeResponse>("/api/v1/session/active-tenant", {
+      method: "POST",
+      body: JSON.stringify({ tenantId })
+    }),
   listIncidents: () => apiFetch<{ incidents: Incident[] }>("/api/v1/incidents"),
   updateIncidentStatus: (id: string, status: string) =>
     apiFetch<Incident>(`/api/v1/incidents/${id}/status`, {

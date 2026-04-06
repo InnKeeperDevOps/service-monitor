@@ -5,12 +5,25 @@ export const healthResponseSchema = z.object({
   uptimeSeconds: z.number().nonnegative()
 });
 
+export const membershipEntrySchema = z.object({
+  tenantId: z.string(),
+  tenantName: z.string(),
+  role: z.enum(["owner", "admin", "operator", "viewer"])
+});
+
 export const meResponseSchema = z.object({
   id: z.string(),
   email: z.string().email(),
   role: z.enum(["owner", "admin", "operator", "viewer"]),
-  tenantId: z.string()
+  tenantId: z.string(),
+  memberships: z.array(membershipEntrySchema)
 });
+
+export const switchActiveTenantRequestSchema = z.object({
+  tenantId: z.string().min(1)
+});
+
+export const switchActiveTenantResponseSchema = meResponseSchema;
 
 export const automationActionSchema = z.enum(["create_pr", "merge_pr", "dispatch_workflow", "push"]);
 
@@ -262,6 +275,7 @@ export const listAgentsResponseSchema = z.object({
 export type AutomationAction = z.infer<typeof automationActionSchema>;
 export type AutomationPolicy = z.infer<typeof automationPolicySchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
+export type MembershipEntry = z.infer<typeof membershipEntrySchema>;
 export type MeResponse = z.infer<typeof meResponseSchema>;
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 export type GithubInstallationSettings = z.infer<typeof githubInstallationSettingsSchema>;

@@ -1,10 +1,17 @@
 import { createContext, useContext } from "react";
 
+export type AuthMembership = {
+  tenantId: string;
+  tenantName: string;
+  role: string;
+};
+
 export type AuthUser = {
   id: string;
   email: string;
   role: string;
   tenantId: string;
+  memberships: AuthMembership[];
 };
 
 export type AuthState = {

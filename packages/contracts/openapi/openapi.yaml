@@ -35,6 +35,17 @@ paths:
           description: Authenticated user
         '401':
           description: Unauthorized
+  /api/v1/session/active-tenant:
+    post:
+      operationId: postSessionActiveTenant
+      description: Switch active tenant for the current session
+      responses:
+        '200':
+          description: Updated session user payload
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
   /api/v1/settings:
     get:
       operationId: getSettings

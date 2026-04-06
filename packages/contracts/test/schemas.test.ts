@@ -106,7 +106,10 @@ describe("http.ts", () => {
           id: "u-1",
           email: "a@b.co",
           role: "admin",
-          tenantId: "t-1"
+          tenantId: "t-1",
+          memberships: [
+            { tenantId: "t-1", tenantName: "Acme", role: "admin" as const }
+          ]
         })
       ).not.toThrow();
     });
@@ -117,7 +120,8 @@ describe("http.ts", () => {
           id: "u-1",
           email: "not-an-email",
           role: "viewer",
-          tenantId: "t-1"
+          tenantId: "t-1",
+          memberships: []
         })
       ).toThrow();
     });

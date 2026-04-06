@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
-import { Settings, Key, Shield, GitBranch, Cpu, Lock } from "lucide-react";
+import { Settings, Key, GitBranch, Lock } from "lucide-react";
 import { api, type AuthProviderEntry, type OAuthProviderConfigPayload } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
-import { TenantConfigurationSection } from "./TenantConfigurationSection.js";
-import { useTenantSettings } from "./useTenantSettings.js";
 
 const GOOGLE_OAUTH_DEFAULTS: Pick<OAuthProviderConfigPayload, "id" | "provider" | "authorizeUrl" | "tokenUrl" | "userInfoUrl" | "scopes"> = {
   id: "google",
@@ -88,9 +86,6 @@ function buildAgentStartCommand(token: string): string {
 export function SettingsPage() {
   const { user } = useAuth();
   const canManageOAuth = user?.role === "owner" || user?.role === "admin";
-  const canManageTenantSettings =
-    user?.role === "owner" || user?.role === "admin" || user?.role === "operator";
-  const tenantSettings = useTenantSettings(user?.tenantId ?? null);
 
   const [authProviders, setAuthProviders] = useState<AuthProviderEntry[]>([]);
   const [oauthId, setOauthId] = useState("");
@@ -345,8 +340,6 @@ export function SettingsPage() {
     setOauthScopesInput(GOOGLE_OAUTH_DEFAULTS.scopes.join(" "));
   }
 
-  const policy = tenantSettings.data?.automationPolicy;
-
   return (
     <section>
       <h2 style={{ margin: "0 0 1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -539,18 +532,6 @@ export function SettingsPage() {
         )}
       </div>
 
-      {user?.tenantId && (
-        <TenantConfigurationSection
-          tenantId={user.tenantId}
-          canEdit={canManageTenantSettings}
-          data={tenantSettings.data}
-          loading={tenantSettings.loading}
-          error={tenantSettings.error}
-          isSaving={tenantSettings.isSaving}
-          savePatch={tenantSettings.savePatch}
-          onClearError={tenantSettings.clearError}
-        />
-      )}
 
       {/* Enrollment Tokens */}
       <div style={sectionStyle}>
@@ -736,59 +717,6 @@ export function SettingsPage() {
         )}
       </div>
 
-      {/* Automation Policy */}
-      <div style={sectionStyle}>
-        <h3 style={h3Style}><Shield size={16} /> Automation Policy</h3>
-        {policy ? (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
-            <tbody>
-              <tr>
-                <td style={{ padding: "0.4rem", fontWeight: 600, verticalAlign: "top", width: 120 }}>Repos</td>
-                <td style={{ padding: "0.4rem" }}>{policy.repos?.length ? policy.repos.join(", ") : <span style={mutedText}>any</span>}</td>
-              </tr>
-              <tr>
-                <td style={{ padding: "0.4rem", fontWeight: 600, verticalAlign: "top" }}>Branches</td>
-                <td style={{ padding: "0.4rem" }}>{policy.branches?.length ? policy.branches.join(", ") : <span style={mutedText}>any</span>}</td>
-              </tr>
-              <tr>
-                <td style={{ padding: "0.4rem", fontWeight: 600, verticalAlign: "top" }}>Actions</td>
-                <td style={{ padding: "0.4rem" }}>{policy.actions?.length ? policy.actions.join(", ") : <span style={mutedText}>any</span>}</td>
-              </tr>
-            </tbody>
-          </table>
-        ) : (
-          <p style={mutedText}>No automation policy configured. Set allowlists in Tenant Configuration above.</p>
-        )}
-        <div style={{ marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: "1px solid var(--color-border)" }}>
-          <button
-            type="button"
-            disabled={!canManageTenantSettings || tenantSettings.loading || tenantSettings.isSaving}
-            onClick={() => {
-              if (window.confirm("This will disable ALL automated GitHub operations (merge, push, PR, workflow dispatch) for this tenant. Continue?")) {
-                void tenantSettings.savePatch({ automationPolicy: { repos: [], branches: [], actions: [] } }).catch(() => {
-                  /* error surfaced via tenantSettings.error */
-                });
-              }
-            }}
-            style={{
-              background: "var(--color-danger)",
-              color: "var(--color-primary-foreground)",
-              border: "none",
-              borderRadius: 6,
-              padding: "0.4rem 0.75rem",
-              fontSize: "0.85rem",
-              cursor:
-                !canManageTenantSettings || tenantSettings.loading || tenantSettings.isSaving ? "not-allowed" : "pointer",
-              opacity: !canManageTenantSettings || tenantSettings.loading || tenantSettings.isSaving ? 0.6 : 1
-            }}
-          >
-            Kill Switch — Disable All Automation
-          </button>
-          <p style={{ ...mutedText, marginTop: "0.35rem", fontSize: "0.8rem" }}>
-            Immediately clears all allowlisted repos, branches, and actions. Re-enable by updating the policy.
-          </p>
-        </div>
-      </div>
 
       {/* GitHub App */}
       <div style={sectionStyle}>
@@ -816,17 +744,6 @@ export function SettingsPage() {
             </tbody>
           </table>
         )}
-      </div>
-
-      {/* Executors */}
-      <div style={sectionStyle}>
-        <h3 style={h3Style}><Cpu size={16} /> Executors</h3>
-        <p style={mutedText}>
-          Preferred executor:{" "}
-          <strong>{tenantSettings.data?.preferredExecutor === "claude" ? "Claude" : "Cursor"}</strong> (fallback:{" "}
-          {tenantSettings.data?.preferredExecutor === "claude" ? "Cursor" : "Claude"}). Set in{" "}
-          <strong>Tenant Configuration</strong> above.
-        </p>
       </div>
     </section>
   );

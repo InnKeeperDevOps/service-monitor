@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   Box,
+  Building2,
   Cpu,
   GitBranch,
   LayoutDashboard,
@@ -18,13 +19,24 @@ import { SettingsPage } from "./features/settings/SettingsPage.js";
 import { LoginPage } from "./features/auth/LoginPage.js";
 import { SetupWizardPage } from "./features/setup/SetupWizardPage.js";
 import { WorkflowEditorPage } from "./features/workflow-editor/WorkflowEditorPage.js";
-import { api, type Incident } from "./lib/api.js";
+import { TenantsPage } from "./features/tenants/TenantsPage.js";
+import { TenantConfigurationPage } from "./features/tenants/TenantConfigurationPage.js";
+import { api, meResponseToAuthUser, type Incident } from "./lib/api.js";
 import { AuthContext, buildAuthState, type AuthUser } from "./lib/useAuth.js";
 import { Card } from "./components/Card.js";
 import { Badge } from "./components/Badge.js";
 import { Button } from "./components/Button.js";
 
-type Route = "dashboard" | "incidents" | "agents" | "services" | "workflows" | "settings" | "login";
+type Route =
+  | "dashboard"
+  | "incidents"
+  | "agents"
+  | "services"
+  | "workflows"
+  | "settings"
+  | "tenants"
+  | "tenantConfig"
+  | "login";
 
 const NAV_ITEMS: { route: Route; label: string; icon: typeof LayoutDashboard; adminOnly?: boolean }[] = [
   { route: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -32,14 +44,31 @@ const NAV_ITEMS: { route: Route; label: string; icon: typeof LayoutDashboard; ad
   { route: "services", label: "Services", icon: Box },
   { route: "agents", label: "Agents", icon: Cpu },
   { route: "workflows", label: "Workflows", icon: GitBranch },
+  { route: "tenants", label: "Tenants", icon: Building2, adminOnly: true },
   { route: "settings", label: "Settings", icon: Settings, adminOnly: true }
 ];
 
-const VALID_ROUTES: Route[] = ["dashboard", "incidents", "agents", "services", "workflows", "settings", "login"];
-
-function getHashRoute(): Route {
-  const hash = window.location.hash.replace("#", "");
-  return VALID_ROUTES.includes(hash as Route) ? (hash as Route) : "dashboard";
+function readNavFromHash(): { route: Route; tenantConfigTenantId: string | null } {
+  const raw = window.location.hash.replace(/^#/, "").split("?")[0];
+  if (raw.startsWith("tenant-config/")) {
+    const id = decodeURIComponent(raw.slice("tenant-config/".length).trim());
+    return { route: "tenantConfig", tenantConfigTenantId: id || null };
+  }
+  const base = (raw.split("/")[0] || "dashboard") as Route;
+  const allowed: Route[] = [
+    "dashboard",
+    "incidents",
+    "agents",
+    "services",
+    "workflows",
+    "settings",
+    "tenants",
+    "login"
+  ];
+  if (allowed.includes(base)) {
+    return { route: base, tenantConfigTenantId: null };
+  }
+  return { route: "dashboard", tenantConfigTenantId: null };
 }
 
 function hasToken(): boolean {
@@ -71,17 +100,17 @@ export function App() {
 }
 
 function AppMain() {
-  const [route, setRoute] = useState<Route>(() => {
-    if (!hasToken() && getHashRoute() !== "login") return "login";
-    return getHashRoute();
-  });
+  const [route, setRoute] = useState<Route>(() => (hasToken() ? readNavFromHash().route : "login"));
+  const [tenantConfigTenantId, setTenantConfigTenantId] = useState<string | null>(() =>
+    hasToken() ? readNavFromHash().tenantConfigTenantId : null
+  );
   const [user, setUser] = useState<AuthUser | null>(null);
 
   const authState = useMemo(() => buildAuthState(user), [user]);
 
   useEffect(() => {
     if (hasToken()) {
-      api.me().then(setUser).catch(() => {});
+      api.me().then((m) => setUser(meResponseToAuthUser(m))).catch(() => {});
     }
   }, []);
 
@@ -89,18 +118,27 @@ function AppMain() {
     if (!hasToken() && route !== "login") {
       window.location.hash = "login";
       setRoute("login");
+      setTenantConfigTenantId(null);
     }
   }, [route]);
 
   useEffect(() => {
+    if (route === "tenantConfig" && !tenantConfigTenantId) {
+      window.location.hash = "tenants";
+    }
+  }, [route, tenantConfigTenantId]);
+
+  useEffect(() => {
     const handler = () => {
-      const next = getHashRoute();
-      if (!hasToken() && next !== "login") {
+      if (!hasToken()) {
         window.location.hash = "login";
         setRoute("login");
-      } else {
-        setRoute(next);
+        setTenantConfigTenantId(null);
+        return;
       }
+      const nav = readNavFromHash();
+      setRoute(nav.route);
+      setTenantConfigTenantId(nav.tenantConfigTenantId);
     };
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
@@ -123,7 +161,9 @@ function AppMain() {
             Kaiad
           </div>
           {visibleNav.map((item) => {
-            const active = route === item.route;
+            const active =
+              route === item.route ||
+              (item.route === "tenants" && route === "tenantConfig");
             const Icon = item.icon;
             return (
               <a
@@ -192,7 +232,11 @@ function AppMain() {
           {route === "agents" && <AgentsPage />}
           {route === "services" && <ServicesPage />}
           {route === "workflows" && <WorkflowEditorPage />}
+          {route === "tenants" && <TenantsPage />}
           {route === "settings" && <SettingsPage />}
+          {route === "tenantConfig" && tenantConfigTenantId && (
+            <TenantConfigurationPage tenantIdFromRoute={tenantConfigTenantId} onAuthUserUpdated={setUser} />
+          )}
         </main>
       </div>
     </AuthContext>

@@ -8,11 +8,13 @@ type SessionRow = { id: string; userId: string; tenantId: string; tokenHash: str
 let users: Map<string, UserRow>;
 let memberships: MembershipRow[];
 let sessions: Map<string, SessionRow>;
+let tenantNames: Map<string, string>;
 
 function init() {
   users = new Map();
   memberships = [];
   sessions = new Map();
+  tenantNames = new Map();
 }
 
 init();
@@ -34,6 +36,16 @@ export function createMemoryAuthStore(): AuthStore {
         .filter((r) => r.userId === userId)
         .map((r) => ({ tenantId: r.tenantId, role: r.role }));
     },
+    async findMembershipsWithTenants(userId) {
+      return memberships
+        .filter((r) => r.userId === userId)
+        .map((r) => ({
+          tenantId: r.tenantId,
+          tenantName: tenantNames.get(r.tenantId) ?? r.tenantId,
+          role: r.role,
+        }))
+        .sort((a, b) => a.tenantName.localeCompare(b.tenantName));
+    },
     async createSession(userId, tenantId, tokenHash, expiresAt) {
       const id = `sess-${crypto.randomUUID()}`;
       sessions.set(id, { id, userId, tenantId, tokenHash, expiresAt });
@@ -44,6 +56,12 @@ export function createMemoryAuthStore(): AuthStore {
         if (s.tokenHash === tokenHash) return s;
       }
       return null;
+    },
+    async updateSessionTenant(sessionId, tenantId) {
+      const s = sessions.get(sessionId);
+      if (!s) return false;
+      s.tenantId = tenantId;
+      return true;
     },
     async findUserById(id) {
       const u = users.get(id);
@@ -57,4 +75,18 @@ export async function seedDevUser(store: AuthStore): Promise<void> {
   const user: UserRow = { id: "u-1", email: "admin@example.com", passwordHash };
   users.set(user.id, user);
   memberships.push({ tenantId: "t-1", userId: "u-1", role: "owner" });
+  tenantNames.set("t-1", "Dev");
+}
+
+/** Test helper: add another tenant membership for a user (memory store only). */
+export function addMemoryMembershipForTests(opts: {
+  tenantId: string;
+  userId: string;
+  role: string;
+  tenantName?: string;
+}): void {
+  memberships.push({ tenantId: opts.tenantId, userId: opts.userId, role: opts.role });
+  if (opts.tenantName) {
+    tenantNames.set(opts.tenantId, opts.tenantName);
+  }
 }

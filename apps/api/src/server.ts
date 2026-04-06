@@ -27,6 +27,7 @@ import {
   listWorkflowGraphsResponseSchema,
   listAuthProvidersResponseSchema,
   meResponseSchema,
+  switchActiveTenantRequestSchema,
   oauthAuthorizeResponseSchema,
   oauthCallbackResponseSchema,
   updateIncidentStatusRequestSchema,
@@ -56,7 +57,8 @@ import {
   generateSessionToken,
   hashToken,
   type AuthStore,
-  type LoginTraceStep
+  type LoginTraceStep,
+  type SessionInfo
 } from "./auth.js";
 import {
   addOAuthProvider,
@@ -97,6 +99,31 @@ import { ensureCoreSchema } from "@sm/db";
 
 const startedAt = Date.now();
 const WORKFLOW_NODE_TYPE_SET = new Set<string>(WORKFLOW_NODE_TYPES);
+
+async function buildMeResponse(store: AuthStore, session: SessionInfo) {
+  let rows = await store.findMembershipsWithTenants(session.id);
+  if (rows.length === 0) {
+    rows = [
+      {
+        tenantId: session.tenantId,
+        tenantName: session.tenantId,
+        role: session.role,
+      },
+    ];
+  }
+  const memberships = rows.map((r) => ({
+    tenantId: r.tenantId,
+    tenantName: r.tenantName,
+    role: r.role as SessionInfo["role"],
+  }));
+  return meResponseSchema.parse({
+    id: session.id,
+    email: session.email,
+    role: session.role,
+    tenantId: session.tenantId,
+    memberships,
+  });
+}
 
 function toEngineWorkflowNodes(
   nodes: Array<{ id: string; type: string; data?: Record<string, unknown>; position?: { x: number; y: number } }>
@@ -492,10 +519,12 @@ function createSwappableAuthStore(initial: AuthStore): AuthStore & { swap: (next
   return {
     findUserByEmail: (email) => current.findUserByEmail(email),
     findMemberships: (userId) => current.findMemberships(userId),
+    findMembershipsWithTenants: (userId) => current.findMembershipsWithTenants(userId),
     createSession: (userId, tenantId, tokenHash, expiresAt) =>
       current.createSession(userId, tenantId, tokenHash, expiresAt),
     findSessionByTokenHash: (tokenHash) => current.findSessionByTokenHash(tokenHash),
     findUserById: (id) => current.findUserById(id),
+    updateSessionTenant: (sessionId, tenantId) => current.updateSessionTenant(sessionId, tenantId),
     swap: (next) => { current = next; },
   };
 }
@@ -777,7 +806,15 @@ export function buildServer(opts: BuildServerOptions = {}) {
       role: result.session.role,
       ...emailMeta
     });
-    return { token: result.token, user: result.session };
+    return {
+      token: result.token,
+      user: {
+        id: result.session.id,
+        email: result.session.email,
+        role: result.session.role,
+        tenantId: result.session.tenantId
+      }
+    };
   });
 
   // --- OAuth / OIDC ---
@@ -859,7 +896,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
     }
 
     let user = await authStore.findUserByEmail(userInfo.email);
-    const tenantId = "t-1";
+    const defaultTenantId = process.env.SM_DEFAULT_TENANT_ID ?? "t-default";
     if (!user) {
       const userId = `u-oauth-${crypto.randomUUID()}`;
       user = { id: userId, email: userInfo.email, passwordHash: null };
@@ -872,14 +909,19 @@ export function buildServer(opts: BuildServerOptions = {}) {
     const sessionToken = generateSessionToken();
     const tokenHash = hashToken(sessionToken);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const sessionId = await authStore.createSession(user.id, membership?.tenantId ?? tenantId, tokenHash, expiresAt);
+    const sessionId = await authStore.createSession(
+      user.id,
+      membership?.tenantId ?? defaultTenantId,
+      tokenHash,
+      expiresAt
+    );
 
     return oauthCallbackResponseSchema.parse({
       token: sessionToken,
       user: {
-        id: sessionId,
+        id: user.id,
         email: user.email,
-        tenantId: membership?.tenantId ?? tenantId,
+        tenantId: membership?.tenantId ?? defaultTenantId,
         role
       }
     });
@@ -937,7 +979,53 @@ export function buildServer(opts: BuildServerOptions = {}) {
         })
       );
     }
-    return meResponseSchema.parse(session);
+    return await buildMeResponse(authStore, session);
+  });
+
+  app.post("/api/v1/session/active-tenant", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Missing or invalid bearer token",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const body = switchActiveTenantRequestSchema.parse(req.body);
+    const memberships = await authStore.findMembershipsWithTenants(session.id);
+    const allowed = memberships.some((m) => m.tenantId === body.tenantId);
+    if (!allowed) {
+      return reply.status(403).send(
+        apiErrorSchema.parse({
+          code: "FORBIDDEN",
+          message: "Not a member of this tenant",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const ok = await authStore.updateSessionTenant(session.sessionId, body.tenantId);
+    if (!ok) {
+      return reply.status(500).send(
+        apiErrorSchema.parse({
+          code: "INTERNAL_ERROR",
+          message: "Failed to update session tenant",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const next = await resolveSession(authStore, req.headers.authorization);
+    if (!next) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Session invalid after tenant switch",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    return await buildMeResponse(authStore, next);
   });
 
   app.get("/api/v1/settings", async (req, reply) => {

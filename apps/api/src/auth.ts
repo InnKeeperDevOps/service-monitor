@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 
 export type SessionInfo = {
+  /** User id (matches `/me` and OAuth user.id). */
   id: string;
+  /** Session row id; used to update active tenant. */
+  sessionId: string;
   email: string;
   role: "owner" | "admin" | "operator" | "viewer";
   tenantId: string;
@@ -10,12 +13,22 @@ export type SessionInfo = {
 export type AuthStore = {
   findUserByEmail(email: string): Promise<{ id: string; email: string; passwordHash: string | null } | null>;
   findMemberships(userId: string): Promise<{ tenantId: string; role: string }[]>;
+  findMembershipsWithTenants(
+    userId: string
+  ): Promise<{ tenantId: string; tenantName: string; role: string }[]>;
   createSession(userId: string, tenantId: string, tokenHash: string, expiresAt: Date): Promise<string>;
   findSessionByTokenHash(tokenHash: string): Promise<{ id: string; userId: string; tenantId: string; expiresAt: Date } | null>;
   findUserById(id: string): Promise<{ id: string; email: string } | null>;
+  updateSessionTenant(sessionId: string, tenantId: string): Promise<boolean>;
 };
 
-const DEV_SESSION: SessionInfo = { id: "u-1", email: "admin@example.com", role: "owner", tenantId: "t-1" };
+const DEV_SESSION: SessionInfo = {
+  id: "u-1",
+  sessionId: "sess-dev",
+  email: "admin@example.com",
+  role: "owner",
+  tenantId: "t-1"
+};
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -101,7 +114,8 @@ export async function loginWithDiagnostics(
     ok: true,
     trace,
     session: {
-      id: sessionId,
+      id: user.id,
+      sessionId,
       email: user.email,
       role: membership.role as SessionInfo["role"],
       tenantId: membership.tenantId,
@@ -145,7 +159,8 @@ export async function resolveSession(
   if (!membership) return null;
 
   return {
-    id: session.id,
+    id: user.id,
+    sessionId: session.id,
     email: user.email,
     role: membership.role as SessionInfo["role"],
     tenantId: membership.tenantId,

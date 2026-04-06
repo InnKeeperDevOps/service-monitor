@@ -1,0 +1,130 @@
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const {
+  getSettings,
+  updateSettings,
+  switchActiveTenant
+} = vi.hoisted(() => ({
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
+  switchActiveTenant: vi.fn()
+}));
+
+const adminAuthState = {
+  user: {
+    id: "u1",
+    email: "admin@example.com",
+    role: "admin" as const,
+    tenantId: "t1",
+    memberships: [{ tenantId: "t1", tenantName: "Acme", role: "admin" as const }]
+  },
+  role: "admin" as const,
+  isAdmin: true,
+  isOperator: false,
+  isViewer: false
+};
+
+let mockUseAuth = adminAuthState;
+
+vi.mock("../src/lib/useAuth.js", () => ({
+  useAuth: () => mockUseAuth
+}));
+
+vi.mock("../src/lib/api.js", () => ({
+  api: {
+    getSettings,
+    updateSettings,
+    switchActiveTenant
+  },
+  meResponseToAuthUser: (m: {
+    id: string;
+    email: string;
+    role: string;
+    tenantId: string;
+    memberships: { tenantId: string; tenantName: string; role: string }[];
+  }) => ({
+    id: m.id,
+    email: m.email,
+    role: m.role,
+    tenantId: m.tenantId,
+    memberships: m.memberships
+  })
+}));
+
+import { TenantConfigurationPage } from "../src/features/tenants/TenantConfigurationPage.js";
+
+describe("TenantConfigurationPage", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  beforeEach(() => {
+    mockUseAuth = adminAuthState;
+    getSettings.mockReset();
+    updateSettings.mockReset();
+    switchActiveTenant.mockReset();
+    getSettings.mockResolvedValue(null);
+  });
+
+  it("submits merged tenant settings on save", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main"
+    });
+    updateSettings.mockImplementation(async (payload) => payload);
+
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+
+    const repoInput = await screen.findByLabelText("GitHub repository");
+    await waitFor(() => {
+      expect(repoInput).toHaveValue("acme/app");
+    });
+    fireEvent.change(repoInput, { target: { value: "other/repo" } });
+    await waitFor(() => {
+      expect(repoInput).toHaveValue("other/repo");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save tenant settings" }));
+
+    await waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: "t1",
+          githubRepo: "other/repo",
+          defaultBranch: "main"
+        })
+      );
+    });
+  });
+
+  it("kill switch posts full tenant payload including empty automation policy", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main",
+      automationPolicy: {
+        repos: ["acme/app"],
+        branches: ["main"],
+        actions: ["create_pr"]
+      }
+    });
+    updateSettings.mockImplementation(async (payload) => payload);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+
+    await screen.findByLabelText("GitHub repository");
+    fireEvent.click(screen.getByRole("button", { name: "Kill Switch — Disable All Automation" }));
+
+    await waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledWith({
+        tenantId: "t1",
+        githubRepo: "acme/app",
+        defaultBranch: "main",
+        automationPolicy: { repos: [], branches: [], actions: [] }
+      });
+    });
+  });
+});

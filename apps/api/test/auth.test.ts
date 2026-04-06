@@ -7,8 +7,14 @@ import {
   verifyPassword,
   type AuthStore,
 } from "../src/auth.js";
-import { createMemoryAuthStore, seedDevUser, __resetAuthStoreForTests } from "../src/memoryAuthStore.js";
+import {
+  createMemoryAuthStore,
+  seedDevUser,
+  __resetAuthStoreForTests,
+  addMemoryMembershipForTests
+} from "../src/memoryAuthStore.js";
 import { buildServer } from "../src/server.js";
+import { upsertTenantSettings, __resetTenantStoreForTests } from "../src/store.js";
 import {
   buildAuthorizeUrl,
   addOAuthProvider,
@@ -407,5 +413,125 @@ describe("OAuth routes", () => {
       expect(res.statusCode).toBe(201);
       expect(getOAuthProvider("gitlab")).toBeTruthy();
     });
+  });
+});
+
+
+describe("multi-tenant /me and active-tenant", () => {
+  let store: AuthStore;
+  let app: ReturnType<typeof buildServer>;
+
+  beforeAll(async () => {
+    __resetAuthStoreForTests();
+    __resetTenantStoreForTests();
+    await upsertTenantSettings({
+      tenantId: "t-1",
+      githubRepo: "org/tenant-a",
+      defaultBranch: "main"
+    });
+    await upsertTenantSettings({
+      tenantId: "t-2",
+      githubRepo: "org/tenant-b",
+      defaultBranch: "main"
+    });
+    store = createMemoryAuthStore();
+    await seedDevUser(store);
+    addMemoryMembershipForTests({
+      tenantId: "t-2",
+      userId: "u-1",
+      role: "viewer",
+      tenantName: "Other org"
+    });
+    app = buildServer({ authStore: store });
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    __resetTenantStoreForTests();
+  });
+
+  it("GET /me includes memberships", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    expect(loginRes.statusCode).toBe(200);
+    const token = loginRes.json().token as string;
+    const me = await app.inject({ url: "/api/v1/me", headers: { authorization: `Bearer ${token}` } });
+    expect(me.statusCode).toBe(200);
+    const j = me.json();
+    expect(Array.isArray(j.memberships)).toBe(true);
+    expect(j.memberships.length).toBe(2);
+    expect(j.tenantId).toBe("t-1");
+  });
+
+  it("POST /session/active-tenant switches tenant", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+
+    const sw = await app.inject({
+      method: "POST",
+      url: "/api/v1/session/active-tenant",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { tenantId: "t-2" }
+    });
+    expect(sw.statusCode).toBe(200);
+    expect(sw.json().tenantId).toBe("t-2");
+    expect(sw.json().role).toBe("viewer");
+
+    const me = await app.inject({ url: "/api/v1/me", headers: { authorization: `Bearer ${token}` } });
+    expect(me.json().tenantId).toBe("t-2");
+  });
+
+  it("GET /settings returns the active tenant row after switching", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+
+    let settingsRes = await app.inject({
+      url: "/api/v1/settings",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(settingsRes.statusCode).toBe(200);
+    expect(settingsRes.json().githubRepo).toBe("org/tenant-a");
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/session/active-tenant",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { tenantId: "t-2" }
+    });
+
+    settingsRes = await app.inject({
+      url: "/api/v1/settings",
+      headers: { authorization: `Bearer ${token}` }
+    });
+    expect(settingsRes.statusCode).toBe(200);
+    expect(settingsRes.json().githubRepo).toBe("org/tenant-b");
+  });
+
+  it("POST /session/active-tenant returns 403 for non-member tenant", async () => {
+    const loginRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "admin@example.com", password: "admin" }
+    });
+    const token = loginRes.json().token as string;
+    const sw = await app.inject({
+      method: "POST",
+      url: "/api/v1/session/active-tenant",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { tenantId: "t-nonexistent" }
+    });
+    expect(sw.statusCode).toBe(403);
   });
 });

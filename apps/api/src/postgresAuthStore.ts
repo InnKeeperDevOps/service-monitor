@@ -28,6 +28,22 @@ export function createPostgresAuthStore(pool: Pool): AuthStore {
       }));
     },
 
+    async findMembershipsWithTenants(userId) {
+      const { rows } = await pool.query(
+        `SELECT tm.tenant_id, tm.role, t.name AS tenant_name
+         FROM tenant_memberships tm
+         JOIN tenants t ON t.id = tm.tenant_id
+         WHERE tm.user_id = $1
+         ORDER BY t.name`,
+        [userId]
+      );
+      return rows.map((r: { tenant_id: string; role: string; tenant_name: string }) => ({
+        tenantId: r.tenant_id,
+        role: r.role,
+        tenantName: r.tenant_name,
+      }));
+    },
+
     async createSession(userId, tenantId, tokenHash, expiresAt) {
       const id = `sess-${crypto.randomUUID()}`;
       await pool.query(
@@ -49,6 +65,14 @@ export function createPostgresAuthStore(pool: Pool): AuthStore {
         tenantId: rows[0].tenant_id,
         expiresAt: new Date(rows[0].expires_at),
       };
+    },
+
+    async updateSessionTenant(sessionId, tenantId) {
+      const { rowCount } = await pool.query("UPDATE sessions SET tenant_id = $1 WHERE id = $2", [
+        tenantId,
+        sessionId,
+      ]);
+      return (rowCount ?? 0) > 0;
     },
 
     async findUserById(id) {
