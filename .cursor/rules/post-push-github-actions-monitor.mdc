@@ -1,36 +1,50 @@
 ---
-description: MANDATORY — after every push to GitHub, monitor Actions until workflows finish; never treat a push as “done” while CI is pending or red
+description: MANDATORY — after every push, watch ALL GitHub Actions for that commit before any “done” message; no exceptions
 alwaysApply: true
 ---
 
 # Post-push: monitor GitHub Actions (binding)
 
-**Non-negotiable.** After you **push** to `origin` (or any remote that runs GitHub Actions), you **must** monitor workflow runs for that commit/branch before you:
+**Non-negotiable.** If your turn includes **`git push`** (or any command that updates `origin`), you **do not** finish the task, **do not** tell the user the work is delivered, **do not** say “commit and push complete,” and **do not** move on until you have **monitored CI** as below.
 
-- tell the user the change is fully delivered;
-- move on as if the repo is green;
-- close the task without mentioning CI status.
+Local `pnpm` / `turbo` / tests are **not** sufficient proof. GitHub Actions can still fail.
 
-Local `pnpm` checks are **not** a substitute: GitHub runners, permissions, and jobs (acceptance, docs, Go) can still fail.
+## Red flags (if you think this, you are wrong)
 
-## What to do immediately after `git push`
+| Excuse | Reality |
+|--------|---------|
+| “The user only asked to push” | Push is one step; **monitoring is part of the same push workflow.** |
+| “I’ll let them check Actions” | Forbidden unless `gh` is broken **and** you gave the Actions URL **and** said CI is unverified. |
+| “Tests passed locally” | Runners, Docker acceptance, docs, and permissions differ. |
+| “This was a small / docs-only change” | Still run the monitor; workflows you skip are the ones that fail. |
+| “I already ran out of time / tokens” | Then **state CI is still pending** and give `gh run list` / URLs—do not imply green. |
 
-1. **Identify the repo** (`git remote -v`) and **branch** you pushed.
-2. **Watch CI** using one of:
-   - **GitHub CLI** (preferred): `gh run list --branch <branch> --limit 10` then `gh run watch <run-id>` for failing or in-progress runs, or `gh run list --workflow=ci` filtered by commit if needed.
-   - If `gh` errors on auth: tell the user CI must be checked in the browser and give the Actions URL pattern: `https://github.com/<owner>/<repo>/actions`.
-3. **Wait** until relevant workflows for this push are **completed** (not queued/in_progress), or state explicitly that you cannot reach GitHub and the user must verify.
-4. **If any job failed**: pull logs via `gh run view <id> --log-failed` (when `gh` works), summarize the failure, fix, re-run local verification per `verification-before-stopping-code-changes.mdc`, commit, push, and **monitor again**.
+## Mandatory sequence (do not reorder)
 
-## Workflows in this repo (know what can fail)
+1. **Push** (if not already done).
+2. **Immediately** get the **branch** and **commit SHA** you pushed: `git rev-parse HEAD` (and branch if needed).
+3. **List runs** for that branch: `gh run list --branch <branch> --limit 15` (or filter by commit in the UI).
+4. For **this repository**, a push to **`main`** typically triggers **four** workflows on the **same `headSha`**. You must account for **all** that apply to that commit:
+   - **`ci`** — lint, typecheck, test:coverage, build, Go agent tests.
+   - **`acceptance`** — Docker Compose + `pnpm acceptance`.
+   - **`docs`** — Jekyll docs.
+   - **`docs-site-www`** — docs site build/deploy.
+5. **Watch** every run that is `queued` or `in_progress` for that commit until **`completed`**, using **GitHub CLI** in this environment:
+   - `gh run watch <run-id> --exit-status` per run, **or** poll `gh run list` until each workflow shows `conclusion` (not empty).
+6. **Report outcomes** in your reply: each workflow name → `success` or `failure` (or `skipped` / `cancelled` if shown). If **any** failed: `gh run view <id> --log-failed` when possible, summarize, fix, verify locally, commit, push, and **repeat this entire section from step 1**.
 
-- **`.github/workflows/ci.yml`** — `pnpm lint`, `typecheck`, `test:coverage`, `build`; Go agent tests; PR-only OpenAPI drift when `packages/contracts/` changes.
-- **`.github/workflows/acceptance.yml`** — Docker Compose + `pnpm acceptance`.
-- **`.github/workflows/docs.yml`** — Jekyll docs (and Pages deploy on `main`).
+## If `gh` is unavailable or auth fails
 
-A push to `main` can trigger **all** of these; do not assume only `ci` matters.
+- Say **explicitly** that you could not verify Actions.
+- Give the pattern: `https://github.com/<owner>/<repo>/actions` (resolve owner/repo from `git remote -v`).
+- Do **not** say the branch is green.
 
-## Forbidden
+## Repo note (remote name vs GitHub)
 
-- Pushing and stopping without checking Actions status when `gh` or the web UI is available to the user/agent environment.
-- “Pushed; you’re done” without a CI outcome (pass, or explicit failure + next steps).
+`git remote` may still say `service-monitor`; GitHub Actions for the same code may run under **`InnKeeperDevOps/kaiad`**. Use `gh run list` from the repo root—`gh` uses the **GitHub remote**—and verify runs match your **commit SHA**.
+
+## Forbidden (repeated on purpose)
+
+- Ending the turn right after push with only “pushed” or “done.”
+- Claiming delivery without listing workflow results for that commit.
+- Skipping **acceptance** or **docs** because “only `ci` matters.”
