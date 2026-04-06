@@ -10,13 +10,17 @@ export type EnrollmentTokenRow = {
   createdBy: string;
   createdAt: Date;
   usedAt: Date | null;
+  revokedAt: Date | null;
 };
+
+export type DeactivateEnrollmentTokenResult = "deactivated" | "not_found" | "not_revocable";
 
 const tokensByTenant = new Map<string, EnrollmentTokenRow[]>();
 type EnrollmentStore = {
   create(input: { tenantId: string; createdBy: string; ttlSeconds: number }): Promise<EnrollmentTokenRow & { token: string }>;
   list(tenantId: string): Promise<EnrollmentTokenRow[]>;
   delete(tenantId: string, tokenId: string): Promise<boolean>;
+  deactivate(tenantId: string, tokenId: string): Promise<DeactivateEnrollmentTokenResult>;
   consume(plaintext: string): Promise<{ tenantId: string; tokenId: string } | null>;
   resetForTests?(): void | Promise<void>;
 };
@@ -32,7 +36,9 @@ function hashToken(plaintext: string): string {
 }
 
 function toMetadata(row: EnrollmentTokenRow): EnrollmentTokenMetadata {
-  const isActive = row.usedAt === null && row.expiresAt.getTime() > Date.now();
+  const now = Date.now();
+  const isActive =
+    row.usedAt === null && row.revokedAt === null && row.expiresAt.getTime() > now;
   return {
     id: row.id,
     tenantId: row.tenantId,
@@ -40,6 +46,7 @@ function toMetadata(row: EnrollmentTokenRow): EnrollmentTokenMetadata {
     createdBy: row.createdBy,
     createdAt: row.createdAt.toISOString(),
     usedAt: row.usedAt ? row.usedAt.toISOString() : null,
+    revokedAt: row.revokedAt ? row.revokedAt.toISOString() : null,
     isActive
   };
 }
@@ -58,7 +65,8 @@ function createInMemoryEnrollmentStore(): EnrollmentStore {
         expiresAt: new Date(now.getTime() + input.ttlSeconds * 1000),
         createdBy: input.createdBy,
         createdAt: now,
-        usedAt: null
+        usedAt: null,
+        revokedAt: null
       };
       const list = tokensByTenant.get(input.tenantId) ?? [];
       list.push(row);
@@ -83,12 +91,30 @@ function createInMemoryEnrollmentStore(): EnrollmentStore {
       }
       return true;
     },
+    async deactivate(tenantId, tokenId) {
+      const list = tokensByTenant.get(tenantId) ?? [];
+      const row = list.find((r) => r.id === tokenId);
+      if (!row) {
+        return "not_found";
+      }
+      const now = new Date();
+      if (row.usedAt !== null || row.revokedAt !== null || row.expiresAt.getTime() <= now.getTime()) {
+        return "not_revocable";
+      }
+      row.revokedAt = now;
+      return "deactivated";
+    },
     async consume(plaintext) {
       const hash = hashToken(plaintext);
       const now = new Date();
       for (const rows of tokensByTenant.values()) {
         for (const row of rows) {
-          if (row.tokenHash === hash && row.usedAt === null && row.expiresAt > now) {
+          if (
+            row.tokenHash === hash &&
+            row.usedAt === null &&
+            row.revokedAt === null &&
+            row.expiresAt > now
+          ) {
             row.usedAt = now;
             return { tenantId: row.tenantId, tokenId: row.id };
           }
@@ -121,18 +147,28 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
           expiresAt: new Date(now.getTime() + input.ttlSeconds * 1000),
           createdBy: input.createdBy,
           createdAt: now,
-          usedAt: null
+          usedAt: null,
+          revokedAt: null
         };
         await pool.query(
-          `insert into agent_enrollment_tokens (id, tenant_id, token_hash, expires_at, created_by, created_at, used_at)
-           values ($1, $2, $3, $4, $5, $6, $7)`,
-          [row.id, row.tenantId, row.tokenHash, row.expiresAt.toISOString(), row.createdBy, row.createdAt.toISOString(), null]
+          `insert into agent_enrollment_tokens (id, tenant_id, token_hash, expires_at, created_by, created_at, used_at, revoked_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            row.id,
+            row.tenantId,
+            row.tokenHash,
+            row.expiresAt.toISOString(),
+            row.createdBy,
+            row.createdAt.toISOString(),
+            null,
+            null
+          ]
         );
         return { ...row, token: plaintext };
       },
       async list(tenantId) {
         const result = await pool.query(
-          `select id, tenant_id, token_hash, expires_at, created_by, created_at, used_at
+          `select id, tenant_id, token_hash, expires_at, created_by, created_at, used_at, revoked_at
              from agent_enrollment_tokens
             where tenant_id = $1
             order by created_at desc`,
@@ -145,7 +181,8 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
           expiresAt: new Date(String(row.expires_at)),
           createdBy: String(row.created_by),
           createdAt: new Date(String(row.created_at)),
-          usedAt: row.used_at ? new Date(String(row.used_at)) : null
+          usedAt: row.used_at ? new Date(String(row.used_at)) : null,
+          revokedAt: row.revoked_at ? new Date(String(row.revoked_at)) : null
         }));
       },
       async delete(tenantId, tokenId) {
@@ -157,12 +194,34 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
         );
         return (result.rowCount ?? 0) > 0;
       },
+      async deactivate(tenantId, tokenId) {
+        const updated = await pool.query(
+          `update agent_enrollment_tokens
+              set revoked_at = now()
+            where tenant_id = $1
+              and id = $2
+              and used_at is null
+              and revoked_at is null
+              and expires_at > now()
+          returning id`,
+          [tenantId, tokenId]
+        );
+        if ((updated.rowCount ?? 0) > 0) {
+          return "deactivated";
+        }
+        const exists = await pool.query(
+          `select 1 from agent_enrollment_tokens where tenant_id = $1 and id = $2 limit 1`,
+          [tenantId, tokenId]
+        );
+        return exists.rows.length === 0 ? "not_found" : "not_revocable";
+      },
       async consume(plaintext) {
         const result = await pool.query(
           `update agent_enrollment_tokens
               set used_at = now()
             where token_hash = $1
               and used_at is null
+              and revoked_at is null
               and expires_at > now()
           returning tenant_id, id`,
           [hashToken(plaintext)]
@@ -218,6 +277,14 @@ export async function listEnrollmentTokensForTenant(tenantId: string): Promise<E
 export async function deleteEnrollmentTokenForTenant(tenantId: string, tokenId: string): Promise<boolean> {
   const store = await getEnrollmentStore();
   return store.delete(tenantId, tokenId);
+}
+
+export async function deactivateEnrollmentTokenForTenant(
+  tenantId: string,
+  tokenId: string
+): Promise<DeactivateEnrollmentTokenResult> {
+  const store = await getEnrollmentStore();
+  return store.deactivate(tenantId, tokenId);
 }
 
 export async function validateEnrollmentToken(plaintext: string): Promise<{ tenantId: string; tokenId: string } | null> {

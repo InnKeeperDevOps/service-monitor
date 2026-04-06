@@ -149,6 +149,25 @@ paths:
           description: Unauthorized
         '403':
           description: Forbidden
+  /api/v1/agents/enrollment-tokens/{tokenId}/deactivate:
+    post:
+      operationId: deactivateEnrollmentToken
+      description: Revoke an unused enrollment token before it is consumed or expires
+      parameters:
+        - name: tokenId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Token deactivated
+        '401':
+          description: Unauthorized
+        '404':
+          description: Token not found
+        '409':
+          description: Token cannot be deactivated
   /api/v1/github/installations:
     get:
       operationId: listGithubInstallations

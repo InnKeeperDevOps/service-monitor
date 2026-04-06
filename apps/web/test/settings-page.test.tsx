@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   createEnrollmentToken,
   listEnrollmentTokens,
+  deactivateEnrollmentToken,
   deleteEnrollmentToken,
   getSettings,
   listGithubInstallations,
@@ -12,6 +13,7 @@ const {
 } = vi.hoisted(() => ({
   createEnrollmentToken: vi.fn(),
   listEnrollmentTokens: vi.fn(),
+  deactivateEnrollmentToken: vi.fn(),
   deleteEnrollmentToken: vi.fn(),
   getSettings: vi.fn(),
   listGithubInstallations: vi.fn(),
@@ -23,6 +25,7 @@ vi.mock("../src/lib/api.js", () => ({
   api: {
     createEnrollmentToken,
     listEnrollmentTokens,
+    deactivateEnrollmentToken,
     deleteEnrollmentToken,
     getSettings,
     listGithubInstallations,
@@ -41,6 +44,7 @@ describe("SettingsPage enrollment token generation", () => {
   beforeEach(() => {
     createEnrollmentToken.mockReset();
     listEnrollmentTokens.mockReset();
+    deactivateEnrollmentToken.mockReset();
     deleteEnrollmentToken.mockReset();
     getSettings.mockReset();
     listGithubInstallations.mockReset();
@@ -64,6 +68,7 @@ describe("SettingsPage enrollment token generation", () => {
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       usedAt: null,
+      revokedAt: null,
       isActive: true
     });
 
@@ -124,6 +129,7 @@ describe("SettingsPage enrollment token generation", () => {
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       usedAt: null,
+      revokedAt: null,
       isActive: true
     });
 
@@ -149,6 +155,7 @@ describe("SettingsPage enrollment token generation", () => {
           createdAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
           usedAt: null,
+          revokedAt: null,
           isActive: true
         },
         {
@@ -158,6 +165,7 @@ describe("SettingsPage enrollment token generation", () => {
           createdAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
           usedAt: null,
+          revokedAt: null,
           isActive: false
         }
       ]
@@ -166,7 +174,7 @@ describe("SettingsPage enrollment token generation", () => {
     render(<SettingsPage />);
 
     expect(await screen.findByText("Active")).toBeInTheDocument();
-    expect(await screen.findByText("Inactive")).toBeInTheDocument();
+    expect(await screen.findByText("Expired")).toBeInTheDocument();
   });
 
   it("deletes an enrollment token from the table", async () => {
@@ -179,6 +187,7 @@ describe("SettingsPage enrollment token generation", () => {
           createdAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
           usedAt: null,
+          revokedAt: null,
           isActive: false
         }
       ]
@@ -209,6 +218,7 @@ describe("SettingsPage enrollment token generation", () => {
           createdAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
           usedAt: null,
+          revokedAt: null,
           isActive: false
         }
       ]
@@ -225,6 +235,36 @@ describe("SettingsPage enrollment token generation", () => {
     confirmSpy.mockRestore();
   });
 
+  it("deactivates an active enrollment token", async () => {
+    listEnrollmentTokens.mockResolvedValue({
+      tokens: [
+        {
+          id: "tok_deactivate_me",
+          tenantId: "tenant_1",
+          createdBy: "user_1",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          usedAt: null,
+          revokedAt: null,
+          isActive: true
+        }
+      ]
+    });
+    deactivateEnrollmentToken.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<SettingsPage />);
+
+    const deactivateButton = await screen.findByRole("button", { name: "Deactivate token tok_deactivate_me" });
+    fireEvent.click(deactivateButton);
+
+    await waitFor(() => {
+      expect(deactivateEnrollmentToken).toHaveBeenCalledWith("tok_deactivate_me");
+    });
+    expect(await screen.findByText("Revoked")).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
   it("disables delete button for active tokens", async () => {
     listEnrollmentTokens.mockResolvedValue({
       tokens: [
@@ -235,6 +275,7 @@ describe("SettingsPage enrollment token generation", () => {
           createdAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
           usedAt: null,
+          revokedAt: null,
           isActive: true
         }
       ]

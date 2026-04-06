@@ -89,8 +89,9 @@ describe("db schema", () => {
       expect(coreSchemaSql).toContain("metadata_json");
     });
 
-    it("defines agent_enrollment_tokens with tenant, hash, expiry, created_by, optional used_at", () => {
+    it("defines agent_enrollment_tokens with tenant, hash, expiry, created_by, optional used_at, optional revoked_at", () => {
       expect(coreSchemaSql).toContain("create table if not exists agent_enrollment_tokens");
+      expect(coreSchemaSql).toContain("revoked_at");
       expect(coreSchemaSql).toMatch(/tenant_id text not null references tenants\(id\)/);
       expect(coreSchemaSql).toContain("token_hash text not null");
       expect(coreSchemaSql).toContain("expires_at timestamptz not null");

@@ -9,6 +9,7 @@ type TokenInfo = {
   createdBy: string;
   createdAt: string;
   usedAt: string | null;
+  revokedAt: string | null;
   isActive: boolean;
 };
 type GithubInstallation = { installationId: number; accountLogin: string; repos?: string[] };
@@ -64,6 +65,7 @@ export function SettingsPage() {
   const [expiresAtInput, setExpiresAtInput] = useState<string>(() => toPresetExpiration("24h"));
   const [isGeneratingToken, setIsGeneratingToken] = useState(false);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
+  const [deactivatingTokenId, setDeactivatingTokenId] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [latestToken, setLatestToken] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
@@ -164,6 +166,53 @@ export function SettingsPage() {
       setCommandCopyMessage("Copied command to clipboard.");
     } catch {
       setCommandCopyMessage("Unable to copy command automatically.");
+    }
+  }
+
+  function enrollmentTokenStatus(t: TokenInfo): string {
+    if (t.isActive) {
+      return "Active";
+    }
+    if (t.revokedAt && !t.usedAt) {
+      return "Revoked";
+    }
+    if (t.usedAt) {
+      return "Used";
+    }
+    return "Expired";
+  }
+
+  async function handleDeactivateEnrollmentToken(tokenId: string) {
+    const token = tokens.find((entry) => entry.id === tokenId);
+    if (!token || !token.isActive) {
+      return;
+    }
+    const confirmed = window.confirm(
+      "Deactivate this enrollment token? It will no longer work for new agent connections."
+    );
+    if (!confirmed) {
+      return;
+    }
+    setTokenError(null);
+    setDeactivatingTokenId(tokenId);
+    try {
+      await api.deactivateEnrollmentToken(tokenId);
+      setTokens((prev) =>
+        prev.map((entry) =>
+          entry.id === tokenId
+            ? {
+                ...entry,
+                isActive: false,
+                revokedAt: new Date().toISOString()
+              }
+            : entry
+        )
+      );
+      setError(null);
+    } catch (e) {
+      setTokenError((e as Error).message);
+    } finally {
+      setDeactivatingTokenId(null);
     }
   }
 
@@ -352,29 +401,49 @@ export function SettingsPage() {
               {tokens.map((t) => (
                 <tr key={t.id}>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem", fontFamily: "monospace" }}>{t.id.slice(0, 12)}...</td>
-                  <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{t.isActive ? "Active" : "Inactive"}</td>
+                  <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{enrollmentTokenStatus(t)}</td>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{new Date(t.expiresAt).toLocaleString()}</td>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{t.createdBy}</td>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>{t.usedAt ? "Yes" : "No"}</td>
                   <td style={{ padding: "0.4rem", fontSize: "0.8rem" }}>
-                    <button
-                      type="button"
-                      aria-label={`Delete token ${t.id}`}
-                      onClick={() => void handleDeleteEnrollmentToken(t.id)}
-                      disabled={deletingTokenId === t.id || t.isActive}
-                      style={{
-                        background: "var(--color-danger-bg)",
-                        color: "var(--color-danger)",
-                        border: "1px solid var(--color-border)",
-                        borderRadius: 6,
-                        padding: "0.3rem 0.55rem",
-                        fontSize: "0.75rem",
-                        cursor: deletingTokenId === t.id || t.isActive ? "not-allowed" : "pointer",
-                        opacity: deletingTokenId === t.id || t.isActive ? 0.7 : 1
-                      }}
-                    >
-                      {deletingTokenId === t.id ? "Deleting..." : "Delete"}
-                    </button>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", alignItems: "center" }}>
+                      <button
+                        type="button"
+                        aria-label={`Deactivate token ${t.id}`}
+                        onClick={() => void handleDeactivateEnrollmentToken(t.id)}
+                        disabled={deactivatingTokenId === t.id || !t.isActive}
+                        style={{
+                          background: "var(--color-surface-muted)",
+                          color: "var(--color-text-primary)",
+                          border: "1px solid var(--color-border)",
+                          borderRadius: 6,
+                          padding: "0.3rem 0.55rem",
+                          fontSize: "0.75rem",
+                          cursor: deactivatingTokenId === t.id || !t.isActive ? "not-allowed" : "pointer",
+                          opacity: deactivatingTokenId === t.id || !t.isActive ? 0.7 : 1
+                        }}
+                      >
+                        {deactivatingTokenId === t.id ? "Deactivating..." : "Deactivate"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete token ${t.id}`}
+                        onClick={() => void handleDeleteEnrollmentToken(t.id)}
+                        disabled={deletingTokenId === t.id || t.isActive}
+                        style={{
+                          background: "var(--color-danger-bg)",
+                          color: "var(--color-danger)",
+                          border: "1px solid var(--color-border)",
+                          borderRadius: 6,
+                          padding: "0.3rem 0.55rem",
+                          fontSize: "0.75rem",
+                          cursor: deletingTokenId === t.id || t.isActive ? "not-allowed" : "pointer",
+                          opacity: deletingTokenId === t.id || t.isActive ? 0.7 : 1
+                        }}
+                      >
+                        {deletingTokenId === t.id ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

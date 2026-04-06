@@ -334,6 +334,7 @@ describe("http.ts", () => {
           createdBy: "u-1",
           createdAt: iso,
           usedAt: null,
+          revokedAt: null,
           isActive: true
         })
       ).not.toThrow();
@@ -347,7 +348,9 @@ describe("http.ts", () => {
           expiresAt: "yesterday",
           createdBy: "u-1",
           createdAt: iso,
-          usedAt: null
+          usedAt: null,
+          revokedAt: null,
+          isActive: true
         })
       ).toThrow();
     });
@@ -364,6 +367,7 @@ describe("http.ts", () => {
           createdBy: "u-1",
           createdAt: iso,
           usedAt: null,
+          revokedAt: null,
           isActive: true
         })
       ).not.toThrow();
@@ -379,6 +383,7 @@ describe("http.ts", () => {
           createdBy: "u-1",
           createdAt: iso,
           usedAt: null,
+          revokedAt: null,
           isActive: true
         })
       ).toThrow();
@@ -397,6 +402,7 @@ describe("http.ts", () => {
               createdBy: "u-1",
               createdAt: iso,
               usedAt: null,
+              revokedAt: null,
               isActive: true
             }
           ]

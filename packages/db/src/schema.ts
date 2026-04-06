@@ -66,6 +66,8 @@ create table if not exists agent_enrollment_tokens (
 
 alter table agent_enrollment_tokens add column if not exists created_at timestamptz not null default now();
 
+alter table agent_enrollment_tokens add column if not exists revoked_at timestamptz;
+
 create table if not exists monitored_services (
   id text primary key,
   tenant_id text not null references tenants(id) on delete cascade,

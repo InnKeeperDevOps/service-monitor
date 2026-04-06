@@ -75,6 +75,7 @@ import { createPostgresDomainStore } from "./postgresDomainStore.js";
 import { resolveTenantStoreBackend } from "./storeAdapter.js";
 import {
   createEnrollmentTokenForTenant,
+  deactivateEnrollmentTokenForTenant,
   deleteEnrollmentTokenForTenant,
   listEnrollmentTokensForTenant,
   validateEnrollmentToken
@@ -998,6 +999,49 @@ export function buildServer(opts: BuildServerOptions = {}) {
     try {
       const tokens = await listEnrollmentTokensForTenant(session.tenantId);
       return listEnrollmentTokensResponseSchema.parse({ tokens });
+    } catch (err) {
+      return reply.status(503).send(
+        apiErrorSchema.parse({
+          code: "ENROLLMENT_STORE_UNAVAILABLE",
+          message: err instanceof Error ? err.message : "Enrollment token store unavailable",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+  });
+
+  app.post<{ Params: { tokenId: string } }>("/api/v1/agents/enrollment-tokens/:tokenId/deactivate", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Missing or invalid bearer token",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    try {
+      const outcome = await deactivateEnrollmentTokenForTenant(session.tenantId, req.params.tokenId);
+      if (outcome === "not_found") {
+        return reply.status(404).send(
+          apiErrorSchema.parse({
+            code: "NOT_FOUND",
+            message: "Enrollment token not found",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      if (outcome === "not_revocable") {
+        return reply.status(409).send(
+          apiErrorSchema.parse({
+            code: "ENROLLMENT_TOKEN_NOT_REVOCABLE",
+            message: "Enrollment token cannot be deactivated (already used, revoked, or expired)",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      return reply.status(204).send();
     } catch (err) {
       return reply.status(503).send(
         apiErrorSchema.parse({

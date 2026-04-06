@@ -71,6 +71,7 @@ describe("contracts", () => {
       createdBy: "u-1",
       createdAt: "2025-12-31T00:00:00.000Z",
       usedAt: null,
+      revokedAt: null,
       isActive: true
     });
     expect(created.token).toBe("plaintext-secret");
@@ -84,6 +85,7 @@ describe("contracts", () => {
           createdBy: "u-1",
           createdAt: "2025-12-31T00:00:00.000Z",
           usedAt: null,
+          revokedAt: null,
           isActive: true
         }
       ]

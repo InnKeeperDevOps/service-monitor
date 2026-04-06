@@ -519,6 +519,14 @@ describe("api", () => {
       expect(response.statusCode).toBe(401);
     });
 
+    it("returns 401 for POST deactivate when unauthenticated", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/agents/enrollment-tokens/tok_unauthorized/deactivate"
+      });
+      expect(response.statusCode).toBe(401);
+    });
+
     it("creates a token and returns plaintext once with metadata", async () => {
       const response = await app.inject({
         method: "POST",
@@ -584,6 +592,46 @@ describe("api", () => {
       expect(listed.tokens[0]?.id).toBe(created.id);
       expect(listed.tokens[0]?.isActive).toBe(false);
       expect(listed.tokens[0]?.usedAt).not.toBeNull();
+    });
+
+    it("deactivates an active enrollment token", async () => {
+      const createdResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/agents/enrollment-tokens",
+        headers: { authorization: "Bearer dev-token" },
+        payload: { ttlSeconds: 3600 }
+      });
+      const created = createdResponse.json() as { id: string; isActive: boolean; revokedAt: string | null };
+      expect(created.isActive).toBe(true);
+      expect(created.revokedAt).toBeNull();
+
+      const deactivateResponse = await app.inject({
+        method: "POST",
+        url: `/api/v1/agents/enrollment-tokens/${created.id}/deactivate`,
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(deactivateResponse.statusCode).toBe(204);
+
+      const listedResponse = await app.inject({
+        method: "GET",
+        url: "/api/v1/agents/enrollment-tokens",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      const listed = listedResponse.json() as {
+        tokens: { id: string; isActive: boolean; revokedAt: string | null; usedAt: string | null }[];
+      };
+      expect(listed.tokens).toHaveLength(1);
+      expect(listed.tokens[0]?.id).toBe(created.id);
+      expect(listed.tokens[0]?.isActive).toBe(false);
+      expect(listed.tokens[0]?.revokedAt).not.toBeNull();
+      expect(listed.tokens[0]?.usedAt).toBeNull();
+
+      const again = await app.inject({
+        method: "POST",
+        url: `/api/v1/agents/enrollment-tokens/${created.id}/deactivate`,
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(again.statusCode).toBe(409);
     });
 
     it("deletes enrollment token by id", async () => {

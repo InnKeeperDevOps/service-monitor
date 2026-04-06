@@ -67,6 +67,7 @@ export const enrollmentTokenMetadataSchema = z.object({
   createdBy: z.string(),
   createdAt: z.string().datetime(),
   usedAt: z.string().datetime().nullable(),
+  revokedAt: z.string().datetime().nullable(),
   isActive: z.boolean()
 });
 

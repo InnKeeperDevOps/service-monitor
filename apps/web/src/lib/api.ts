@@ -163,9 +163,18 @@ export const api = {
       body: JSON.stringify(data)
     }),
   listEnrollmentTokens: () =>
-    apiFetch<{ tokens: { id: string; tenantId: string; expiresAt: string; createdBy: string; createdAt: string; usedAt: string | null; isActive: boolean }[] }>(
-      "/api/v1/agents/enrollment-tokens"
-    ),
+    apiFetch<{
+      tokens: {
+        id: string;
+        tenantId: string;
+        expiresAt: string;
+        createdBy: string;
+        createdAt: string;
+        usedAt: string | null;
+        revokedAt: string | null;
+        isActive: boolean;
+      }[];
+    }>("/api/v1/agents/enrollment-tokens"),
 
   createEnrollmentToken: (data: { ttlSeconds: number }) =>
     apiFetch<{
@@ -176,14 +185,16 @@ export const api = {
       createdBy: string;
       createdAt: string;
       usedAt: string | null;
+      revokedAt: string | null;
       isActive: boolean;
-    }>(
-      "/api/v1/agents/enrollment-tokens",
-      {
-        method: "POST",
-        body: JSON.stringify(data)
-      }
-    ),
+    }>("/api/v1/agents/enrollment-tokens", {
+      method: "POST",
+      body: JSON.stringify(data)
+    }),
+  deactivateEnrollmentToken: (tokenId: string) =>
+    apiFetch<void>(`/api/v1/agents/enrollment-tokens/${encodeURIComponent(tokenId)}/deactivate`, {
+      method: "POST"
+    }),
   deleteEnrollmentToken: (tokenId: string) =>
     apiFetch<void>(`/api/v1/agents/enrollment-tokens/${encodeURIComponent(tokenId)}`, {
       method: "DELETE"
