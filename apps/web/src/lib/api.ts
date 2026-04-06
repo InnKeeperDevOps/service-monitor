@@ -5,11 +5,12 @@ function getAuthToken(): string {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const hasBody = init?.body != null && init.body !== "";
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${getAuthToken()}`,
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
       ...(init?.headers as Record<string, string> | undefined)
     }
   });
