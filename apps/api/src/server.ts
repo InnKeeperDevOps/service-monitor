@@ -1692,7 +1692,12 @@ export function buildServer(opts: BuildServerOptions = {}) {
       return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
     }
     const agents = await domainStore.listAgents(session.tenantId);
-    return listAgentsResponseSchema.parse({ agents });
+    const connected = new Set(realtimeManager.getConnectedAgentIds());
+    const agentsWithPresence = agents.map((a) => ({
+      ...a,
+      websocketConnected: connected.has(a.id)
+    }));
+    return listAgentsResponseSchema.parse({ agents: agentsWithPresence });
   });
 
   // --- Monitored Services ---

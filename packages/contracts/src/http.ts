@@ -275,6 +275,7 @@ export const listMonitoredServicesResponseSchema = z.object({
   services: z.array(monitoredServiceSchema)
 });
 
+/** Server may merge RealtimeManager session state into list responses. */
 export const agentSchema = z.object({
   id: z.string(),
   tenantId: z.string(),
@@ -283,7 +284,8 @@ export const agentSchema = z.object({
   status: z.enum(["online", "offline", "degraded", "unknown"]),
   lastSeenAt: z.string().datetime().nullable(),
   certFingerprint: z.string().nullable().optional(),
-  allowedCapabilities: z.array(z.string()).optional()
+  allowedCapabilities: z.array(z.string()).optional(),
+  websocketConnected: z.boolean().optional()
 });
 
 export const listAgentsResponseSchema = z.object({

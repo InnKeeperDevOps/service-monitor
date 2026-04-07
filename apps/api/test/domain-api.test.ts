@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../src/server.js";
-import { createMemoryDomainStore, __resetDomainStoreForTests } from "../src/domainStore.js";
+import { createMemoryDomainStore, __resetDomainStoreForTests, __seedAgentForTests } from "../src/domainStore.js";
 
 const AUTH = { authorization: "Bearer dev-token" };
 
@@ -91,6 +91,22 @@ describe("agents API", () => {
     const res = await app.inject({ method: "GET", url: "/api/v1/agents", headers: AUTH });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ agents: [] });
+  });
+
+  it("merges websocketConnected from realtime presence", async () => {
+    __seedAgentForTests({
+      id: "a-seed-1",
+      tenantId: "t-1",
+      name: "edge",
+      version: "1.0.0",
+      status: "online",
+      lastSeenAt: new Date().toISOString()
+    });
+    const res = await app.inject({ method: "GET", url: "/api/v1/agents", headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { agents: { id: string; websocketConnected: boolean }[] };
+    expect(body.agents).toHaveLength(1);
+    expect(body.agents[0]).toMatchObject({ id: "a-seed-1", websocketConnected: false });
   });
 });
 

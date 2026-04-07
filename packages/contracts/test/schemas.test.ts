@@ -777,6 +777,20 @@ describe("http.ts", () => {
       ).not.toThrow();
     });
 
+    it("accepts websocketConnected from server merge", () => {
+      expect(() =>
+        agentSchema.parse({
+          id: "a-1",
+          tenantId: "t-1",
+          name: null,
+          version: null,
+          status: "online",
+          lastSeenAt: iso,
+          websocketConnected: true
+        })
+      ).not.toThrow();
+    });
+
     it("rejects invalid status", () => {
       expect(() =>
         agentSchema.parse({
@@ -802,7 +816,8 @@ describe("http.ts", () => {
               name: null,
               version: null,
               status: "offline",
-              lastSeenAt: null
+              lastSeenAt: null,
+              websocketConnected: false
             }
           ]
         })

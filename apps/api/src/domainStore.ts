@@ -169,3 +169,8 @@ export function __resetDomainStoreForTests(): void {
   services.clear();
   workflows.clear();
 }
+
+/** Seeds the in-memory agents map (Vitest / domain API tests only). */
+export function __seedAgentForTests(agent: Agent): void {
+  agents.set(agent.id, agent);
+}

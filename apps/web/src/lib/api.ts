@@ -81,6 +81,8 @@ export type Agent = {
   lastSeenAt: string | null;
   certFingerprint?: string | null;
   allowedCapabilities?: string[];
+  /** Present when API merges RealtimeManager session state. */
+  websocketConnected?: boolean;
 };
 
 export type MonitoredService = {
