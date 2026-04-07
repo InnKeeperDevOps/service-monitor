@@ -52,16 +52,16 @@ func streamExistingContainerLogs(ctx context.Context, dc *docker.Client, agentID
 
 func main() {
 	baseURL := os.Getenv("SM_REALTIME_URL")
-	if baseURL == "" {
-		baseURL = "ws://localhost:3001/realtime"
-	}
+	envRealtimeURL := os.Getenv("SM_REALTIME_URL") != ""
 
 	socketPath := os.Getenv("SM_DOCKER_SOCKET")
 	dc := docker.NewClient(socketPath)
 	exec := executor.NewExecutor(dc)
 
 	agentID := os.Getenv("SM_AGENT_ID")
+	envAgentID := os.Getenv("SM_AGENT_ID") != ""
 	token := os.Getenv("SM_ENROLLMENT_TOKEN")
+	envToken := os.Getenv("SM_ENROLLMENT_TOKEN") != ""
 
 	cred, err := credentials.Load()
 	if err != nil {
@@ -69,11 +69,18 @@ func main() {
 	}
 	if cred != nil {
 		log.Printf("loaded saved credential agent=%s", cred.AgentID)
-		agentID = cred.AgentID
-		token = cred.Token
-		if cred.RealtimeURL != "" {
+		if !envAgentID {
+			agentID = cred.AgentID
+		}
+		if !envToken {
+			token = cred.Token
+		}
+		if !envRealtimeURL && cred.RealtimeURL != "" {
 			baseURL = cred.RealtimeURL
 		}
+	}
+	if baseURL == "" {
+		baseURL = "ws://localhost:3001/realtime"
 	}
 	if cred == nil && token == "" && isProduction() {
 		log.Fatal("SM_ENROLLMENT_TOKEN (or saved credentials) is required in production")

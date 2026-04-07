@@ -310,7 +310,8 @@ func (c *Client) handleIncoming(ctx context.Context, errCh chan<- error, data []
 		return
 	}
 
-	if envelope.Type == "heartbeat_ack" {
+	// API responds to heartbeats with { type: "ack", accepted: true } (see apps/api server /realtime).
+	if envelope.Type == "heartbeat_ack" || envelope.Type == "ack" {
 		if c.onFirstAck != nil {
 			c.ackOnce.Do(c.onFirstAck)
 		}

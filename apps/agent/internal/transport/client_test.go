@@ -15,6 +15,70 @@ import (
 	"github.com/service-monitor/agent/internal/transport"
 )
 
+func TestClient_ackMessageTriggersOnFirstAck(t *testing.T) {
+	t.Parallel()
+	var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var probe struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(msg, &probe) != nil {
+				continue
+			}
+			if probe.Type == "heartbeat" {
+				_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ack","accepted":true}`))
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := strings.Replace(srv.URL, "http", "ws", 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	client := transport.NewClient(wsURL, "test-agent",
+		transport.WithHeartbeatInterval(30*time.Millisecond),
+		transport.WithReconnectBackoff(time.Millisecond, 20*time.Millisecond),
+		transport.OnFirstAck(func() {
+			close(done)
+		}),
+	)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- client.RunContext(ctx) }()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for OnFirstAck after ack")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("RunContext: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("client did not exit")
+	}
+}
+
 func TestClient_commandMessageTriggersCommandAck(t *testing.T) {
 	t.Parallel()
 	var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
