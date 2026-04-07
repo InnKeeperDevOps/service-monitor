@@ -76,6 +76,7 @@ export function TenantConfigurationSection({
   const [installationRepoChoices, setInstallationRepoChoices] = useState<string[]>([]);
   const [loadingInstallationRepos, setLoadingInstallationRepos] = useState(false);
   const [installationReposError, setInstallationReposError] = useState<string | null>(null);
+  const [githubInstallUrl, setGithubInstallUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (data) {
@@ -108,6 +109,25 @@ export function TenantConfigurationSection({
       });
     }
   }, [data]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getGithubAppSettings()
+      .then((settings) => {
+        if (!cancelled) {
+          setGithubInstallUrl(settings.installUrl ?? null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGithubInstallUrl(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -219,16 +239,67 @@ export function TenantConfigurationSection({
                 {loadingInstallationRepos ? "Loading…" : "Load repos from installation"}
               </button>
             )}
+            {canEdit &&
+              (githubInstallUrl ? (
+                <a
+                  href={githubInstallUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Manage repos and permissions on GitHub"
+                  style={{
+                    display: "inline-block",
+                    background: "var(--color-surface-muted)",
+                    color: "var(--color-text-primary)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: 6,
+                    padding: "0.4rem 0.65rem",
+                    fontSize: "0.8rem",
+                    textDecoration: "none",
+                    whiteSpace: "nowrap"
+                  }}
+                >
+                  Manage repos and permissions on GitHub
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  aria-label="Manage repos and permissions on GitHub"
+                  style={{
+                    background: "var(--color-surface-muted)",
+                    color: "var(--color-text-secondary)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: 6,
+                    padding: "0.4rem 0.65rem",
+                    fontSize: "0.8rem",
+                    cursor: "not-allowed",
+                    whiteSpace: "nowrap"
+                  }}
+                >
+                  Manage repos and permissions on GitHub
+                </button>
+              ))}
           </div>
           {installationReposError && (
             <p style={{ color: "var(--color-danger)", fontSize: "0.8rem", margin: "0.35rem 0 0" }} role="alert">
               {installationReposError}
             </p>
           )}
+          {!githubInstallUrl && canEdit && (
+            <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
+              Configure GitHub App settings first to enable repository access management.
+            </p>
+          )}
           {installationRepoChoices.length > 0 && !installationReposError && (
             <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
               {installationRepoChoices.length} repositor{installationRepoChoices.length === 1 ? "y" : "ies"} available as
               suggestions (type or pick from the list).
+            </p>
+          )}
+          {canEdit && (
+            <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
+              If a repository is missing, use &quot;Manage repos and permissions on GitHub&quot;, then click
+              &nbsp;&quot;Load repos from installation&quot; again.
             </p>
           )}
           <datalist id={installationRepoDatalistId}>

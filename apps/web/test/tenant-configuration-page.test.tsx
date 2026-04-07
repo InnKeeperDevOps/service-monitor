@@ -181,4 +181,57 @@ describe("TenantConfigurationPage", () => {
       expect(syncGithubInstallation).toHaveBeenCalledWith(88);
     });
   });
+
+  it("shows tenant configuration link to manage repo access on GitHub", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main"
+    });
+    getGithubAppSettings.mockResolvedValue({
+      appId: "42",
+      appSlug: "acme-kaiad",
+      installUrl: "https://github.com/apps/acme-kaiad/installations/new",
+      privateKeyConfigured: true,
+      webhookSecretConfigured: true
+    });
+
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+
+    const link = await screen.findByRole("link", { name: "Manage repos and permissions on GitHub" });
+    expect(link).toHaveAttribute("href", "https://github.com/apps/acme-kaiad/installations/new");
+  });
+
+  it("shows tenant configuration fallback copy when install link is unavailable", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main"
+    });
+    getGithubAppSettings.mockResolvedValue({
+      appId: null,
+      appSlug: null,
+      installUrl: null,
+      privateKeyConfigured: false,
+      webhookSecretConfigured: false
+    });
+
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+
+    expect(await screen.findByText(/configure github app settings first/i)).toBeInTheDocument();
+  });
+
+  it("shows tenant configuration fallback copy when GitHub App settings fetch fails", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main"
+    });
+    getGithubAppSettings.mockRejectedValue(new Error("github settings unavailable"));
+
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+
+    expect(await screen.findByText(/configure github app settings first/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Manage repos and permissions on GitHub" })).toBeDisabled();
+  });
 });
