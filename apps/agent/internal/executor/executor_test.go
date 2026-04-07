@@ -57,6 +57,33 @@ func TestExecuteCancelRun(t *testing.T) {
 	}
 }
 
+func TestExecuteSyncDesiredState(t *testing.T) {
+	e := NewExecutor(nil)
+	result := e.Execute(context.Background(), "sync_desired_state", map[string]interface{}{
+		"desiredContainers": []interface{}{
+			map[string]interface{}{"serviceId": "a", "image": "nginx", "state": "running"},
+		},
+	})
+	if !result.Success {
+		t.Fatalf("expected success: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "1 entries") {
+		t.Fatalf("output: %s", result.Output)
+	}
+}
+
+func TestExecuteSyncDesiredStateInvalid(t *testing.T) {
+	e := NewExecutor(nil)
+	if r := e.Execute(context.Background(), "sync_desired_state", map[string]interface{}{}); r.Success {
+		t.Fatal("expected failure without desiredContainers")
+	}
+	if r := e.Execute(context.Background(), "sync_desired_state", map[string]interface{}{
+		"desiredContainers": "not-array",
+	}); r.Success {
+		t.Fatal("expected failure for non-array desiredContainers")
+	}
+}
+
 func TestHandleCommand(t *testing.T) {
 	e := NewExecutor(nil)
 	success, output := e.HandleCommand(context.Background(), "run_step", map[string]interface{}{

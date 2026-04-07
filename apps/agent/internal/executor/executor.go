@@ -47,6 +47,8 @@ func (e *Executor) Execute(ctx context.Context, cmdType string, payload map[stri
 		return e.executeDockerOp(ctx, payload)
 	case "cancel_run":
 		return CommandResult{Success: true, Output: "cancelled"}
+	case "sync_desired_state":
+		return e.executeSyncDesiredState(payload)
 	default:
 		return CommandResult{Success: false, Output: fmt.Sprintf("unknown command type: %s", cmdType)}
 	}
@@ -69,6 +71,18 @@ func (e *Executor) executeRunStep(ctx context.Context, payload map[string]interf
 		return CommandResult{Success: false, Output: string(out) + "\n" + err.Error()}
 	}
 	return CommandResult{Success: true, Output: string(out)}
+}
+
+func (e *Executor) executeSyncDesiredState(payload map[string]interface{}) CommandResult {
+	raw, ok := payload["desiredContainers"]
+	if !ok {
+		return CommandResult{Success: false, Output: "missing desiredContainers"}
+	}
+	list, ok := raw.([]interface{})
+	if !ok {
+		return CommandResult{Success: false, Output: "desiredContainers must be an array"}
+	}
+	return CommandResult{Success: true, Output: fmt.Sprintf("sync_desired_state: %d entries", len(list))}
 }
 
 func (e *Executor) executeDockerOp(ctx context.Context, payload map[string]interface{}) CommandResult {
