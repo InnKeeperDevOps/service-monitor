@@ -19,6 +19,7 @@ import {
   workflowDryRunResponseSchema,
   createWorkflowGraphRequestSchema,
   githubInstallationsResponseSchema,
+  githubInstallationRepositoriesResponseSchema,
   githubPolicyCheckRequestSchema,
   healthResponseSchema,
   listAgentsResponseSchema,
@@ -50,7 +51,7 @@ import {
   type WorkflowNode,
   type WorkflowNodeType
 } from "@sm/domain";
-import { fetchGithubAppSlug, getInstallationMetadata } from "@sm/github";
+import { fetchGithubAppSlug, getInstallationMetadata, GitHubAppClient } from "@sm/github";
 import { correlationIdPlugin } from "./correlationId.js";
 import {
   loginWithDiagnostics,
@@ -1495,6 +1496,54 @@ export function buildServer(opts: BuildServerOptions = {}) {
         apiErrorSchema.parse({
           code: "GITHUB_INSTALLATION_LOOKUP_FAILED",
           message: err instanceof Error ? err.message : "Failed to fetch installation metadata",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+  });
+
+  app.get("/api/v1/github/installation-repositories", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Missing or invalid bearer token",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const installations = await listGithubInstallationsForTenant(session.tenantId);
+    if (installations.length === 0) {
+      return reply.status(404).send(
+        apiErrorSchema.parse({
+          code: "NOT_FOUND",
+          message: "No GitHub App installation linked to this tenant. Sync an installation on the tenant page first.",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const appId = Number(process.env.GITHUB_APP_ID);
+    const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+    if (!(appId > 0) || !privateKey?.trim()) {
+      return reply.status(503).send(
+        apiErrorSchema.parse({
+          code: "GITHUB_APP_NOT_CONFIGURED",
+          message: "GitHub App credentials are not configured",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const installation = installations[0]!;
+    try {
+      const gh = new GitHubAppClient({ appId, privateKey });
+      const repos = await gh.listInstallationRepositories(installation.installationId);
+      return githubInstallationRepositoriesResponseSchema.parse({ repos });
+    } catch (err) {
+      return reply.status(502).send(
+        apiErrorSchema.parse({
+          code: "GITHUB_INSTALLATION_REPOS_FAILED",
+          message: err instanceof Error ? err.message : "Failed to list installation repositories",
           correlationId: (req as any).correlationId
         })
       );

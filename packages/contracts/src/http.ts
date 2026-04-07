@@ -78,6 +78,11 @@ export const githubInstallationsResponseSchema = z.object({
   installations: z.array(githubInstallationSettingsSchema)
 });
 
+/** GET /api/v1/github/installation-repositories — repos visible to the tenant's linked installation */
+export const githubInstallationRepositoriesResponseSchema = z.object({
+  repos: z.array(z.string().min(1))
+});
+
 export const syncGithubInstallationRequestSchema = z.object({
   installationId: z.number().int().positive()
 });
@@ -293,6 +298,7 @@ export type MeResponse = z.infer<typeof meResponseSchema>;
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 export type GithubInstallationSettings = z.infer<typeof githubInstallationSettingsSchema>;
 export type GithubInstallationsResponse = z.infer<typeof githubInstallationsResponseSchema>;
+export type GithubInstallationRepositoriesResponse = z.infer<typeof githubInstallationRepositoriesResponseSchema>;
 export type SyncGithubInstallationRequest = z.infer<typeof syncGithubInstallationRequestSchema>;
 export type Incident = z.infer<typeof incidentSchema>;
 export type IncidentStatus = z.infer<typeof incidentStatusSchema>;

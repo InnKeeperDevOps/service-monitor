@@ -9,8 +9,6 @@ const {
   getSettings,
   getAuthProviders,
   createOAuthProvider,
-  listGithubInstallations,
-  syncGithubInstallation,
   getGithubAppSettings,
   updateGithubAppSettings,
   updateSettings,
@@ -23,8 +21,6 @@ const {
   getSettings: vi.fn(),
   getAuthProviders: vi.fn(),
   createOAuthProvider: vi.fn(),
-  listGithubInstallations: vi.fn(),
-  syncGithubInstallation: vi.fn(),
   getGithubAppSettings: vi.fn(),
   updateGithubAppSettings: vi.fn(),
   updateSettings: vi.fn(),
@@ -74,8 +70,6 @@ vi.mock("../src/lib/api.js", () => ({
     getSettings,
     getAuthProviders,
     createOAuthProvider,
-    listGithubInstallations,
-    syncGithubInstallation,
     getGithubAppSettings,
     updateGithubAppSettings,
     updateSettings
@@ -98,16 +92,12 @@ describe("SettingsPage enrollment token generation", () => {
     getSettings.mockReset();
     getAuthProviders.mockReset();
     createOAuthProvider.mockReset();
-    listGithubInstallations.mockReset();
-    syncGithubInstallation.mockReset();
     getGithubAppSettings.mockReset();
     updateGithubAppSettings.mockReset();
     updateSettings.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
-    listGithubInstallations.mockResolvedValue({ installations: [] });
-    syncGithubInstallation.mockResolvedValue({ installationId: 1, accountLogin: "test", appId: 1 });
     getGithubAppSettings.mockResolvedValue({
       appId: null,
       appSlug: null,
@@ -362,14 +352,12 @@ describe("SettingsPage authentication OAuth providers", () => {
     getSettings.mockReset();
     getAuthProviders.mockReset();
     createOAuthProvider.mockReset();
-    listGithubInstallations.mockReset();
     getGithubAppSettings.mockReset();
     updateGithubAppSettings.mockReset();
     updateSettings.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
-    listGithubInstallations.mockResolvedValue({ installations: [] });
     getGithubAppSettings.mockResolvedValue({
       appId: null,
       appSlug: null,
@@ -471,16 +459,12 @@ describe("SettingsPage GitHub App", () => {
     getSettings.mockReset();
     getAuthProviders.mockReset();
     createOAuthProvider.mockReset();
-    listGithubInstallations.mockReset();
-    syncGithubInstallation.mockReset();
     getGithubAppSettings.mockReset();
     updateGithubAppSettings.mockReset();
     updateSettings.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
-    listGithubInstallations.mockResolvedValue({ installations: [] });
-    syncGithubInstallation.mockResolvedValue({ installationId: 99, accountLogin: "acme-org", appId: 1 });
     getGithubAppSettings.mockResolvedValue({
       appId: "42",
       appSlug: null,
@@ -530,19 +514,6 @@ describe("SettingsPage GitHub App", () => {
     });
   });
 
-  it("shows Install on GitHub link when server returns installUrl", async () => {
-    getGithubAppSettings.mockResolvedValue({
-      appId: "42",
-      appSlug: "acme-kaiad",
-      installUrl: "https://github.com/apps/acme-kaiad/installations/new",
-      privateKeyConfigured: true,
-      webhookSecretConfigured: true
-    });
-    render(<SettingsPage />);
-    const link = await screen.findByRole("link", { name: "Install on GitHub" });
-    expect(link).toHaveAttribute("href", "https://github.com/apps/acme-kaiad/installations/new");
-  });
-
   it("hides GitHub credential form for viewers", async () => {
     mockUseAuth = viewerAuthState;
     render(<SettingsPage />);
@@ -550,15 +521,6 @@ describe("SettingsPage GitHub App", () => {
       await screen.findByText(/Only owners and admins can change server credentials/i)
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save GitHub App" })).not.toBeInTheDocument();
-  });
-
-  it("syncs installation when Sync now is clicked", async () => {
-    render(<SettingsPage />);
-    fireEvent.change(screen.getByLabelText("GitHub installation ID to sync"), { target: { value: "88" } });
-    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
-    await waitFor(() => {
-      expect(syncGithubInstallation).toHaveBeenCalledWith(88);
-    });
   });
 });
 

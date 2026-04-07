@@ -5,6 +5,7 @@ import { useAuth } from "../../lib/useAuth.js";
 import type { AuthUser } from "../../lib/useAuth.js";
 import { TenantConfigurationSection } from "../settings/TenantConfigurationSection.js";
 import { useTenantSettings } from "../settings/useTenantSettings.js";
+import { TenantGithubInstallationSection } from "./TenantGithubInstallationSection.js";
 
 const sectionStyle: React.CSSProperties = {
   background: "var(--color-surface)",
@@ -71,6 +72,8 @@ export function TenantConfigurationPage({
   const canManageTenantSettings =
     user?.role === "owner" || user?.role === "admin" || user?.role === "operator";
 
+  const canManageServerCredentials = user?.role === "owner" || user?.role === "admin";
+
   const tenantSettings = useTenantSettings(aligned ? tenantIdFromRoute : null);
   const policy = tenantSettings.data?.automationPolicy;
 
@@ -126,6 +129,13 @@ export function TenantConfigurationPage({
           isSaving={tenantSettings.isSaving}
           savePatch={tenantSettings.savePatch}
           onClearError={tenantSettings.clearError}
+        />
+      )}
+
+      {aligned && (
+        <TenantGithubInstallationSection
+          tenantActive={aligned}
+          canManageServerCredentials={canManageServerCredentials}
         />
       )}
 

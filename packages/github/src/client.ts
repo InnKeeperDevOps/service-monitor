@@ -54,6 +54,36 @@ export class GitHubAppClient {
     return result.token;
   }
 
+  /**
+   * Lists repository full names (owner/repo) accessible to this GitHub App installation.
+   * Paginates the REST `GET /installation/repositories` endpoint.
+   */
+  async listInstallationRepositories(installationId: number): Promise<string[]> {
+    const names: string[] = [];
+    let page = 1;
+    for (;;) {
+      const res = await this.authedFetch(
+        installationId,
+        `${this.apiBase}/installation/repositories?per_page=100&page=${page}`,
+        { method: "GET" }
+      );
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`GitHub list installation repositories failed: ${res.status} — ${text}`);
+      }
+      const data = (await res.json()) as { repositories?: { full_name?: string }[] };
+      const batch = data.repositories ?? [];
+      for (const r of batch) {
+        const fn = r.full_name?.trim();
+        if (fn) names.push(fn);
+      }
+      if (batch.length < 100) break;
+      page += 1;
+    }
+    names.sort((a, b) => a.localeCompare(b));
+    return names;
+  }
+
   private async authedFetch(installationId: number, url: string, init?: RequestInit): Promise<Response> {
     const token = await this.getInstallationToken(installationId);
     return fetchWithProtectedRedirects(

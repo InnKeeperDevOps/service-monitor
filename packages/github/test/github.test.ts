@@ -255,6 +255,40 @@ describe("GitHubAppClient", () => {
     ).rejects.toThrow(/private/i);
   });
 
+  it("listInstallationRepositories fetches all pages of GET /installation/repositories", async () => {
+    const mockFetch = vi.fn();
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          token: "ghs_list",
+          expires_at: new Date(Date.now() + 3600_000).toISOString()
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          repositories: [
+            { full_name: "acme/z" },
+            { full_name: "acme/a" }
+          ]
+        })
+      });
+
+    const client = new GitHubAppClient({
+      appId: 1,
+      privateKey: fakeRsaKey(),
+      fetch: mockFetch as unknown as typeof fetch
+    });
+
+    const repos = await client.listInstallationRepositories(99);
+    expect(repos).toEqual(["acme/a", "acme/z"]);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const listUrl = String(mockFetch.mock.calls[1]![0]);
+    expect(listUrl).toContain("/installation/repositories");
+    expect(listUrl).toContain("page=1");
+  });
+
   it("cloneRepo returns authenticated clone URL and command", async () => {
     const mockFetch = vi.fn().mockResolvedValueOnce({
       ok: true,

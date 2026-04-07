@@ -4,11 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   getSettings,
   updateSettings,
-  switchActiveTenant
+  switchActiveTenant,
+  getGithubAppSettings,
+  listGithubInstallations,
+  syncGithubInstallation
 } = vi.hoisted(() => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
-  switchActiveTenant: vi.fn()
+  switchActiveTenant: vi.fn(),
+  getGithubAppSettings: vi.fn(),
+  listGithubInstallations: vi.fn(),
+  syncGithubInstallation: vi.fn()
 }));
 
 const adminAuthState = {
@@ -35,7 +41,10 @@ vi.mock("../src/lib/api.js", () => ({
   api: {
     getSettings,
     updateSettings,
-    switchActiveTenant
+    switchActiveTenant,
+    getGithubAppSettings,
+    listGithubInstallations,
+    syncGithubInstallation
   },
   meResponseToAuthUser: (m: {
     id: string;
@@ -65,7 +74,19 @@ describe("TenantConfigurationPage", () => {
     getSettings.mockReset();
     updateSettings.mockReset();
     switchActiveTenant.mockReset();
+    getGithubAppSettings.mockReset();
+    listGithubInstallations.mockReset();
+    syncGithubInstallation.mockReset();
     getSettings.mockResolvedValue(null);
+    getGithubAppSettings.mockResolvedValue({
+      appId: null,
+      appSlug: null,
+      installUrl: null,
+      privateKeyConfigured: false,
+      webhookSecretConfigured: false
+    });
+    listGithubInstallations.mockResolvedValue({ installations: [] });
+    syncGithubInstallation.mockResolvedValue({ installationId: 99, accountLogin: "acme-org", appId: 1 });
   });
 
   it("submits merged tenant settings on save", async () => {
@@ -125,6 +146,39 @@ describe("TenantConfigurationPage", () => {
         defaultBranch: "main",
         automationPolicy: { repos: [], branches: [], actions: [] }
       });
+    });
+  });
+
+  it("shows Install on GitHub link when server returns installUrl", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main"
+    });
+    getGithubAppSettings.mockResolvedValue({
+      appId: "42",
+      appSlug: "acme-kaiad",
+      installUrl: "https://github.com/apps/acme-kaiad/installations/new",
+      privateKeyConfigured: true,
+      webhookSecretConfigured: true
+    });
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+    const link = await screen.findByRole("link", { name: "Install on GitHub" });
+    expect(link).toHaveAttribute("href", "https://github.com/apps/acme-kaiad/installations/new");
+  });
+
+  it("syncs installation when Sync now is clicked", async () => {
+    getSettings.mockResolvedValue({
+      tenantId: "t1",
+      githubRepo: "acme/app",
+      defaultBranch: "main"
+    });
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+    await screen.findByLabelText("GitHub repository");
+    fireEvent.change(screen.getByLabelText("GitHub installation ID to sync"), { target: { value: "88" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    await waitFor(() => {
+      expect(syncGithubInstallation).toHaveBeenCalledWith(88);
     });
   });
 });

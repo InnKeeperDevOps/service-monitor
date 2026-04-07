@@ -287,6 +287,10 @@ export const api = {
       }
     ),
 
+  /** Repositories visible to this tenant's linked GitHub App installation (GitHub REST). */
+  listGithubInstallationRepos: () =>
+    apiFetch<{ repos: string[] }>("/api/v1/github/installation-repositories"),
+
   getAuthProviders: () => apiFetch<{ providers: AuthProviderEntry[] }>("/api/v1/auth/providers"),
 
   createOAuthProvider: (payload: OAuthProviderConfigPayload) =>

@@ -144,16 +144,19 @@ function AppMain() {
     return () => window.removeEventListener("hashchange", handler);
   }, []);
 
-  /** GitHub App post-install redirect uses query params on the origin; hash routing would leave users off Settings. */
+  /** GitHub App post-install redirect: send users to tenant configuration so install sync runs in tenant context. */
   useEffect(() => {
     if (!hasToken()) return;
     const params = new URLSearchParams(window.location.search);
     if (!params.get("installation_id")) return;
+    const tid = user?.tenantId;
+    if (!tid) return;
+    const expected = `tenant-config/${encodeURIComponent(tid)}`;
     const raw = window.location.hash.replace(/^#/, "").split("?")[0];
-    if (raw !== "settings") {
-      window.location.hash = "settings";
+    if (raw !== expected) {
+      window.location.hash = expected;
     }
-  }, []);
+  }, [user?.tenantId]);
 
   if (route === "login") {
     return <LoginPage />;

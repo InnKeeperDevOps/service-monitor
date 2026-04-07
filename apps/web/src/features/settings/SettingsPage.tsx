@@ -29,7 +29,6 @@ type TokenInfo = {
   revokedAt: string | null;
   isActive: boolean;
 };
-type GithubInstallation = { installationId: number; accountLogin: string; repos?: string[] };
 type EnrollmentTokenPreset = "1h" | "24h" | "7d" | "30d";
 
 const ENROLLMENT_MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -102,7 +101,6 @@ export function SettingsPage() {
   const [isSubmittingOAuth, setIsSubmittingOAuth] = useState(false);
 
   const [githubAppId, setGithubAppId] = useState("");
-  const [githubInstallUrl, setGithubInstallUrl] = useState<string | null>(null);
   const [githubPrivateKeyPem, setGithubPrivateKeyPem] = useState("");
   const [githubWebhookSecret, setGithubWebhookSecret] = useState("");
   const [githubPrivateKeyConfigured, setGithubPrivateKeyConfigured] = useState(false);
@@ -110,14 +108,9 @@ export function SettingsPage() {
   const [githubFormError, setGithubFormError] = useState<string | null>(null);
   const [githubSuccess, setGithubSuccess] = useState<string | null>(null);
   const [isSavingGithub, setIsSavingGithub] = useState(false);
-  const [syncInstallationIdInput, setSyncInstallationIdInput] = useState("");
-  const [isSyncingInstallation, setIsSyncingInstallation] = useState(false);
-  const [syncInstallationError, setSyncInstallationError] = useState<string | null>(null);
 
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
-  const [installations, setInstallations] = useState<GithubInstallation[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<EnrollmentTokenPreset>("24h");
   const [expiresAtInput, setExpiresAtInput] = useState<string>(() => toPresetExpiration("24h"));
   const [isGeneratingToken, setIsGeneratingToken] = useState(false);
@@ -130,41 +123,13 @@ export function SettingsPage() {
 
   useEffect(() => {
     api.listEnrollmentTokens().then((r) => setTokens(r.tokens)).catch(() => {});
-    api.listGithubInstallations().then((r) => setInstallations(r.installations)).catch(() => {});
     api.getAuthProviders().then((r) => setAuthProviders(r.providers)).catch(() => {});
-
-    const params = new URLSearchParams(window.location.search);
-    const installationIdRaw = params.get("installation_id");
-    const installationId = installationIdRaw ? Number(installationIdRaw) : NaN;
-    if (Number.isInteger(installationId) && installationId > 0) {
-      api.syncGithubInstallation(installationId)
-        .then((installation) => {
-          setInstallations((prev) => {
-            const next = prev.filter((i) => i.installationId !== installation.installationId);
-            next.push(installation);
-            return next;
-          });
-          setSyncMessage(`Synced GitHub installation ${installation.installationId} (${installation.accountLogin}).`);
-          setError(null);
-        })
-        .catch((e: unknown) => {
-          setError((e as Error).message);
-          setSyncMessage(null);
-        })
-        .finally(() => {
-          const clean = new URL(window.location.href);
-          clean.searchParams.delete("installation_id");
-          clean.searchParams.delete("setup_action");
-          window.history.replaceState({}, "", clean.toString());
-        });
-    }
   }, []);
 
   useEffect(() => {
     api
       .getGithubAppSettings()
       .then((s) => {
-        setGithubInstallUrl(s.installUrl ?? null);
         if (canManageGithub) {
           setGithubAppId(s.appId ?? "");
           setGithubPrivateKeyConfigured(s.privateKeyConfigured);
@@ -193,7 +158,6 @@ export function SettingsPage() {
       setGithubWebhookSecret("");
       setGithubSuccess("GitHub App settings saved. Restart workers if GitHub automation does not pick up changes immediately.");
       const s = await api.getGithubAppSettings();
-      setGithubInstallUrl(s.installUrl ?? null);
       setGithubPrivateKeyConfigured(s.privateKeyConfigured);
       setGithubWebhookSecretConfigured(s.webhookSecretConfigured);
       setError(null);
@@ -201,32 +165,6 @@ export function SettingsPage() {
       setGithubFormError((e as Error).message);
     } finally {
       setIsSavingGithub(false);
-    }
-  }
-
-  async function handleSyncInstallationManual() {
-    setSyncInstallationError(null);
-    const raw = syncInstallationIdInput.trim();
-    const installationId = raw ? Number(raw) : NaN;
-    if (!Number.isInteger(installationId) || installationId <= 0) {
-      setSyncInstallationError("Enter a positive integer installation ID.");
-      return;
-    }
-    setIsSyncingInstallation(true);
-    try {
-      const installation = await api.syncGithubInstallation(installationId);
-      setInstallations((prev) => {
-        const next = prev.filter((i) => i.installationId !== installation.installationId);
-        next.push(installation);
-        return next;
-      });
-      setSyncMessage(`Synced GitHub installation ${installation.installationId} (${installation.accountLogin}).`);
-      setSyncInstallationIdInput("");
-      setError(null);
-    } catch (e) {
-      setSyncInstallationError((e as Error).message);
-    } finally {
-      setIsSyncingInstallation(false);
     }
   }
 
@@ -430,7 +368,6 @@ export function SettingsPage() {
         <Settings size={20} /> Settings
       </h2>
       {error && <div style={{ color: "var(--color-danger)", marginBottom: "0.5rem" }}>{error}</div>}
-      {syncMessage && <div style={{ color: "var(--color-success)", marginBottom: "0.5rem" }}>{syncMessage}</div>}
 
       {/* Authentication */}
       <div style={sectionStyle}>
@@ -802,51 +739,25 @@ export function SettingsPage() {
       </div>
 
 
-      {/* GitHub App */}
+      {/* GitHub App — server credentials; per-tenant install lives under Tenants → Configure */}
       <div style={sectionStyle}>
         <h3 style={h3Style}><GitBranch size={16} /> GitHub App</h3>
         <p style={mutedText}>
-          Configure the GitHub App <strong>webhook URL</strong> to{" "}
+          One-time <strong>server</strong> configuration (App ID, PEM, webhook secret). Use <strong>Tenants → Configure</strong> for{" "}
+          <strong>Install on GitHub</strong>, manual installation sync, and the installation list — those are scoped to the active tenant.
+        </p>
+        <p style={{ ...mutedText, marginTop: "0.5rem", fontSize: "0.85rem" }}>
+          Webhook URL:{" "}
           <code>
             {typeof window !== "undefined" ? `${window.location.origin}/webhooks/github` : "/webhooks/github"}
-          </code>{" "}
-          and <strong>Setup URL</strong> to{" "}
-          <code>{typeof window !== "undefined" ? `${window.location.origin}/` : "https://your-host/"}</code>
-          . After you install the app on GitHub, you are redirected back here with <code>installation_id</code> and sync runs automatically.
+          </code>
+          . Setup URL (GitHub App settings):{" "}
+          <code>{typeof window !== "undefined" ? `${window.location.origin}/` : "https://your-host/"}</code> so GitHub can redirect with{" "}
+          <code>installation_id</code> after install; the app opens your tenant configuration page to finish sync.
         </p>
-        {githubInstallUrl ? (
-          <div style={{ marginTop: "1rem" }}>
-            <a
-              href={githubInstallUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: "inline-block",
-                background: "var(--color-primary)",
-                color: "var(--color-primary-foreground)",
-                border: "none",
-                borderRadius: 6,
-                padding: "0.55rem 1rem",
-                fontSize: "0.9rem",
-                fontWeight: 600,
-                textDecoration: "none"
-              }}
-            >
-              Install on GitHub
-            </a>
-            <p style={{ ...mutedText, marginTop: "0.5rem", marginBottom: 0, fontSize: "0.8rem" }}>
-              Opens GitHub to authorize this app for your org or account. No extra fields to fill in here.
-            </p>
-          </div>
-        ) : (
-          <p style={{ ...mutedText, marginTop: "0.75rem", marginBottom: 0, fontSize: "0.85rem" }}>
-            The install link appears once the server has GitHub App credentials (or <code>GITHUB_APP_SLUG</code>). Ask an administrator to complete the one-time setup
-            {canManageGithub ? " under Advanced below" : ""}, or use manual sync if you already know the installation ID.
-          </p>
-        )}
         {!canManageGithub && (
           <p style={{ ...mutedText, marginTop: "0.75rem" }}>
-            Only owners and admins can change server credentials. Installations for this tenant are listed below.
+            Only owners and admins can change server credentials.
           </p>
         )}
         {canManageGithub && (
@@ -929,66 +840,6 @@ export function SettingsPage() {
               </button>
             </div>
           </details>
-        )}
-        <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--color-border)" }}>
-          <p style={{ ...mutedText, marginBottom: "0.65rem" }}>Sync installation metadata (after installing the app on GitHub):</p>
-          {syncInstallationError && (
-            <p style={{ color: "var(--color-danger)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{syncInstallationError}</p>
-          )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "end" }}>
-            <label style={labelColStyle}>
-              <span style={{ color: "var(--color-text-secondary)" }}>Installation ID</span>
-              <input
-                aria-label="GitHub installation ID to sync"
-                value={syncInstallationIdInput}
-                onChange={(e) => setSyncInstallationIdInput(e.target.value)}
-                placeholder="12345678"
-                inputMode="numeric"
-                style={{ ...inputStyle, maxWidth: 200 }}
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => void handleSyncInstallationManual()}
-              disabled={isSyncingInstallation}
-              style={{
-                background: "var(--color-surface-muted)",
-                color: "var(--color-text-primary)",
-                border: "1px solid var(--color-border)",
-                borderRadius: 6,
-                padding: "0.45rem 0.8rem",
-                fontSize: "0.85rem",
-                cursor: isSyncingInstallation ? "not-allowed" : "pointer",
-                opacity: isSyncingInstallation ? 0.75 : 1,
-                marginBottom: "0.65rem"
-              }}
-            >
-              {isSyncingInstallation ? "Syncing…" : "Sync now"}
-            </button>
-          </div>
-        </div>
-        {installations.length === 0 ? (
-          <p style={{ ...mutedText, marginTop: "0.75rem" }}>No GitHub App installations recorded for this tenant yet.</p>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem" }}>
-            <thead>
-              <tr>
-                {["Installation ID", "Account"].map((h) => (
-                  <th key={h} style={{ textAlign: "left", padding: "0.4rem", borderBottom: "1px solid var(--color-border)", color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {installations.map((inst) => (
-                <tr key={inst.installationId}>
-                  <td style={{ padding: "0.4rem", fontSize: "0.85rem", fontFamily: "monospace" }}>{inst.installationId}</td>
-                  <td style={{ padding: "0.4rem", fontSize: "0.85rem" }}>{inst.accountLogin}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         )}
       </div>
     </section>

@@ -1,6 +1,7 @@
 import type { TenantSettings } from "@sm/contracts";
 import { Building2 } from "lucide-react";
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { api } from "../../lib/api.js";
 import type { TenantSettingsPatch } from "./mergeTenantSettings.js";
 
 const AUTOMATION_ACTIONS = ["create_pr", "merge_pr", "dispatch_workflow", "push"] as const;
@@ -67,6 +68,14 @@ export function TenantConfigurationSection({
     dispatch_workflow: false,
     push: false
   });
+
+  const installationRepoDatalistId = useMemo(
+    () => `sm-tenant-gh-repos-${tenantId.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
+    [tenantId]
+  );
+  const [installationRepoChoices, setInstallationRepoChoices] = useState<string[]>([]);
+  const [loadingInstallationRepos, setLoadingInstallationRepos] = useState(false);
+  const [installationReposError, setInstallationReposError] = useState<string | null>(null);
 
   useEffect(() => {
     if (data) {
@@ -138,6 +147,25 @@ export function TenantConfigurationSection({
     await savePatch(patch);
   }
 
+  async function loadRepositoriesFromInstallation() {
+    setInstallationReposError(null);
+    setLoadingInstallationRepos(true);
+    try {
+      const { repos } = await api.listGithubInstallationRepos();
+      setInstallationRepoChoices(repos);
+    } catch (e) {
+      setInstallationRepoChoices([]);
+      setInstallationReposError((e as Error).message);
+    } finally {
+      setLoadingInstallationRepos(false);
+    }
+  }
+
+  function fillAutomationReposFromInstallation() {
+    if (installationRepoChoices.length === 0) return;
+    setReposInput(installationRepoChoices.join(", "));
+  }
+
   const disabled = !canEdit || loading || isSaving;
 
   return (
@@ -161,15 +189,53 @@ export function TenantConfigurationSection({
         </label>
         <label style={labelColStyle}>
           <span style={{ color: "var(--color-text-secondary)" }}>GitHub repository (owner/repo)</span>
-          <input
-            value={githubRepo}
-            onChange={(e) => setGithubRepo(e.target.value)}
-            disabled={disabled}
-            placeholder="acme/platform"
-            style={{ ...inputStyle, maxWidth: "100%" }}
-            aria-label="GitHub repository"
-            required
-          />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+            <input
+              value={githubRepo}
+              onChange={(e) => setGithubRepo(e.target.value)}
+              disabled={disabled}
+              placeholder="acme/platform"
+              style={{ ...inputStyle, flex: "1 1 200px", maxWidth: "100%", minWidth: 0 }}
+              list={installationRepoDatalistId}
+              aria-label="GitHub repository"
+              required
+            />
+            {canEdit && (
+              <button
+                type="button"
+                disabled={disabled || loadingInstallationRepos}
+                onClick={() => void loadRepositoriesFromInstallation()}
+                style={{
+                  background: "var(--color-surface-muted)",
+                  color: "var(--color-text-primary)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 6,
+                  padding: "0.4rem 0.65rem",
+                  fontSize: "0.8rem",
+                  cursor: disabled || loadingInstallationRepos ? "not-allowed" : "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {loadingInstallationRepos ? "Loading…" : "Load repos from installation"}
+              </button>
+            )}
+          </div>
+          {installationReposError && (
+            <p style={{ color: "var(--color-danger)", fontSize: "0.8rem", margin: "0.35rem 0 0" }} role="alert">
+              {installationReposError}
+            </p>
+          )}
+          {installationRepoChoices.length > 0 && !installationReposError && (
+            <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
+              {installationRepoChoices.length} repositor{installationRepoChoices.length === 1 ? "y" : "ies"} available as
+              suggestions (type or pick from the list).
+            </p>
+          )}
+          <datalist id={installationRepoDatalistId}>
+            {installationRepoChoices.map((r) => (
+              <option key={r} value={r} />
+            ))}
+          </datalist>
         </label>
         <label style={labelColStyle}>
           <span style={{ color: "var(--color-text-secondary)" }}>Default branch</span>
@@ -222,14 +288,37 @@ export function TenantConfigurationSection({
         </div>
         <label style={labelColStyle}>
           <span style={{ color: "var(--color-text-secondary)" }}>Allowed repos (comma or space separated)</span>
-          <input
-            value={reposInput}
-            onChange={(e) => setReposInput(e.target.value)}
-            disabled={disabled}
-            placeholder="org/repo-a, org/repo-b"
-            style={{ ...inputStyle, maxWidth: "100%" }}
-            aria-label="Automation allowed repositories"
-          />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+            <input
+              value={reposInput}
+              onChange={(e) => setReposInput(e.target.value)}
+              disabled={disabled}
+              placeholder="org/repo-a, org/repo-b"
+              style={{ ...inputStyle, flex: "1 1 200px", maxWidth: "100%", minWidth: 0 }}
+              list={installationRepoDatalistId}
+              aria-label="Automation allowed repositories"
+            />
+            {canEdit && (
+              <button
+                type="button"
+                disabled={disabled || installationRepoChoices.length === 0}
+                onClick={fillAutomationReposFromInstallation}
+                title="Replaces the allowlist with every repo from the tenant installation (load repos first)."
+                style={{
+                  background: "var(--color-surface-muted)",
+                  color: "var(--color-text-primary)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 6,
+                  padding: "0.4rem 0.65rem",
+                  fontSize: "0.8rem",
+                  cursor: disabled || installationRepoChoices.length === 0 ? "not-allowed" : "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Fill allowlist from installation
+              </button>
+            )}
+          </div>
         </label>
         <label style={labelColStyle}>
           <span style={{ color: "var(--color-text-secondary)" }}>Allowed branches (comma or space separated)</span>

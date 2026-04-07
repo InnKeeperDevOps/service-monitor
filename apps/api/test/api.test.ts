@@ -754,6 +754,50 @@ describe("api", () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    it("GET installation-repositories lists repos via GitHub installation token", async () => {
+      const keypair = crypto.generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" }
+      });
+      vi.stubEnv("GITHUB_APP_ID", "12345");
+      vi.stubEnv("GITHUB_APP_PRIVATE_KEY", keypair.privateKey);
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const u = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+        if (u.includes("/access_tokens")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              token: "ghs_repos",
+              expires_at: new Date(Date.now() + 3600_000).toISOString()
+            })
+          } as Response);
+        }
+        if (u.includes("/installation/repositories")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              repositories: [{ full_name: "acme/alpha" }, { full_name: "acme/beta" }]
+            })
+          } as Response);
+        }
+        return Promise.resolve({ ok: false, status: 404, text: async () => "unexpected " + u } as Response);
+      });
+
+      try {
+        const response = await app.inject({
+          method: "GET",
+          url: "/api/v1/github/installation-repositories",
+          headers: { authorization: "Bearer dev-token" }
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toEqual({ repos: ["acme/alpha", "acme/beta"] });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 
   describe.sequential("agent enrollment tokens", () => {
