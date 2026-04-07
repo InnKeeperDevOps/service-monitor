@@ -1,0 +1,7 @@
+# Cursor rules (this repository)
+
+Read **AGENTS.md** at the repository root. Treat **`.cursor/rules/*.mdc`** as binding (respect `alwaysApply: true` and **globs**).
+
+After **`git push`**, monitor GitHub Actions for that commit before treating the task as finished.
+
+Do not skip verification, CI monitoring, or project rules because the task looks small.

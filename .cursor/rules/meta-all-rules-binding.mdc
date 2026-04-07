@@ -5,6 +5,21 @@ alwaysApply: true
 
 # All project rules are binding
 
+Also read **`AGENTS.md`** at the repository root for the same gates in one place.
+
+## Before every response (run this checklist)
+
+Use these **conditionals** so rules are not missed. Order matters.
+
+1. **Always:** Apply **Cursor → Settings → Rules → User Rules** in full on this turn.
+2. **Always:** Before substantive edits, **list or read** **`.cursor/rules/*.mdc`**. Treat every file here as **mandatory** — `alwaysApply: true` every turn; **globs** when you touch matching paths.
+3. **If** a skill under **`.cursor/skills/`** matches the task, **read and follow** it first.
+4. **If** you will **`git push`** or have already updated **`origin`**: You are **not** finished until you **monitor GitHub Actions** for that commit (per **`post-push-github-actions-monitor.mdc`**) and report workflow outcomes.
+5. **If** you changed **`apps/`** or **`packages/`** (or shared configs that affect build): Do not claim “done” without **build + tests** for impacted packages (per **`verification-before-stopping-code-changes.mdc`**).
+6. **If** you cannot run a required step (`gh`, network, blocked tool): Say so **explicitly**; do not imply green CI or full compliance.
+
+---
+
 For **every** user message while this repository (`service-monitor` / kaiad) is the active workspace context:
 
 1. **`.cursor/rules/*.mdc`** — Treat every file here as **mandatory**, not advisory. `alwaysApply: true` rules apply to every turn; rules with **`globs`** apply whenever you touch matching paths (and you must still follow them when you choose to edit those files).
