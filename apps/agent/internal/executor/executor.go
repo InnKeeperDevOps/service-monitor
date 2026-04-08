@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/service-monitor/agent/internal/agentdebug"
 	"github.com/service-monitor/agent/internal/docker"
 )
 
@@ -19,14 +22,69 @@ type CommandResult struct {
 	Output  string
 }
 
+// RuntimeBackend is how Kaiad expects this agent to run workloads (tenant setting agentRuntimeBackend).
+type RuntimeBackend string
+
+const (
+	RuntimeDocker       RuntimeBackend = "docker"
+	RuntimeKubernetes   RuntimeBackend = "kubernetes"
+	RuntimeShell        RuntimeBackend = "shell"
+)
+
 type Executor struct {
-	docker *docker.Client
+	mu               sync.RWMutex
+	docker           *docker.Client
+	backend          RuntimeBackend
+	kaiadConfigReady bool
+	workloadSource   string
 }
 
 const defaultPlanTimeout = 5 * time.Minute
 
 func NewExecutor(dc *docker.Client) *Executor {
-	return &Executor{docker: dc}
+	return &Executor{docker: dc, backend: RuntimeDocker, kaiadConfigReady: false}
+}
+
+// Configure updates Docker handle, runtime mode, and Kaiad tenant policy after the realtime hello.
+func (e *Executor) Configure(dc *docker.Client, backend RuntimeBackend, kaiadConfigReady bool, workloadSource string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.docker = dc
+	if backend == "" {
+		backend = RuntimeDocker
+	}
+	e.backend = backend
+	e.kaiadConfigReady = kaiadConfigReady
+	if workloadSource == "" && kaiadConfigReady {
+		workloadSource = "github_repo"
+	}
+	e.workloadSource = workloadSource
+}
+
+func (e *Executor) kaiadAllowsWorkloads() bool {
+	if os.Getenv("SM_SKIP_KAIAD_CONFIG_WAIT") == "1" {
+		return true
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.kaiadConfigReady
+}
+
+// WorkloadSource returns the last workload mode from Kaiad hello ("github_repo" or "binary"), or empty if not ready.
+func (e *Executor) WorkloadSource() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.workloadSource
+}
+
+func (e *Executor) runtime() (RuntimeBackend, *docker.Client) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	b := e.backend
+	if b == "" {
+		b = RuntimeDocker
+	}
+	return b, e.docker
 }
 
 // RunShell preserves the original stub API for backward compatibility.
@@ -36,19 +94,30 @@ func RunShell(command string) (string, error) {
 }
 
 func (e *Executor) Execute(ctx context.Context, cmdType string, payload map[string]interface{}) CommandResult {
+	if cmdType != "cancel_run" && !e.kaiadAllowsWorkloads() {
+		return CommandResult{
+			Success: false,
+			Output:  `kaiad: agent configuration not ready; set Workload source in Kaiad Tenant Configuration (Settings), then reconnect the agent`,
+		}
+	}
+	backend, dc := e.runtime()
 	switch cmdType {
 	case "run_step":
 		return e.executeRunStep(ctx, payload)
 	case "run_cursor_plan":
-		return e.executePlanRunner(ctx, "cursor", payload)
+		return e.executePlanRunner(ctx, "cursor", backend, payload)
 	case "run_claude_plan":
-		return e.executePlanRunner(ctx, "claude", payload)
+		return e.executePlanRunner(ctx, "claude", backend, payload)
 	case "docker_op":
-		return e.executeDockerOp(ctx, payload)
+		return e.executeDockerOp(ctx, backend, dc, payload)
 	case "cancel_run":
 		return CommandResult{Success: true, Output: "cancelled"}
 	case "sync_desired_state":
 		return e.executeSyncDesiredState(payload)
+	case "run_toolchain":
+		return e.executeRunToolchain(ctx, payload)
+	case "receive_source_archive":
+		return e.executeReceiveSourceArchive(ctx, payload)
 	default:
 		return CommandResult{Success: false, Output: fmt.Sprintf("unknown command type: %s", cmdType)}
 	}
@@ -56,6 +125,9 @@ func (e *Executor) Execute(ctx context.Context, cmdType string, payload map[stri
 
 // HandleCommand satisfies transport.CommandHandler.
 func (e *Executor) HandleCommand(ctx context.Context, cmdType string, payload map[string]interface{}) (bool, string) {
+	if agentdebug.Enabled() {
+		log.Printf("[agent:executor] HandleCommand type=%s", cmdType)
+	}
 	r := e.Execute(ctx, cmdType, payload)
 	return r.Success, r.Output
 }
@@ -85,9 +157,22 @@ func (e *Executor) executeSyncDesiredState(payload map[string]interface{}) Comma
 	return CommandResult{Success: true, Output: fmt.Sprintf("sync_desired_state: %d entries", len(list))}
 }
 
-func (e *Executor) executeDockerOp(ctx context.Context, payload map[string]interface{}) CommandResult {
-	if e.docker == nil {
-		return CommandResult{Success: false, Output: "docker client not configured"}
+func (e *Executor) executeDockerOp(ctx context.Context, backend RuntimeBackend, dc *docker.Client, payload map[string]interface{}) CommandResult {
+	switch backend {
+	case RuntimeShell:
+		return CommandResult{
+			Success: false,
+			Output:  `docker_op is disabled: tenant agent runtime is "shell" (change agent runtime in Kaiad tenant settings)`,
+		}
+	case RuntimeKubernetes:
+		return CommandResult{
+			Success: false,
+			Output:  `docker_op is not mapped for "kubernetes" runtime yet; use run_step with kubectl`,
+		}
+	default:
+		if dc == nil {
+			return CommandResult{Success: false, Output: "docker client not configured"}
+		}
 	}
 	operation, _ := payload["operation"].(string)
 	args, _ := payload["args"].(map[string]interface{})
@@ -101,7 +186,7 @@ func (e *Executor) executeDockerOp(ctx context.Context, payload map[string]inter
 		if id == "" {
 			return CommandResult{Success: false, Output: "missing container id"}
 		}
-		if err := e.docker.StartContainer(ctx, id); err != nil {
+		if err := dc.StartContainer(ctx, id); err != nil {
 			return CommandResult{Success: false, Output: err.Error()}
 		}
 		return CommandResult{Success: true, Output: "container started"}
@@ -110,7 +195,7 @@ func (e *Executor) executeDockerOp(ctx context.Context, payload map[string]inter
 		if id == "" {
 			return CommandResult{Success: false, Output: "missing container id"}
 		}
-		if err := e.docker.StopContainer(ctx, id); err != nil {
+		if err := dc.StopContainer(ctx, id); err != nil {
 			return CommandResult{Success: false, Output: err.Error()}
 		}
 		return CommandResult{Success: true, Output: "container stopped"}
@@ -258,7 +343,7 @@ func writeExecutionArtifacts(workspacePath, executorID string, content string, m
 	return logPath, nil
 }
 
-func (e *Executor) executePlanRunner(ctx context.Context, executorID string, payload map[string]interface{}) CommandResult {
+func (e *Executor) executePlanRunner(ctx context.Context, executorID string, backend RuntimeBackend, payload map[string]interface{}) CommandResult {
 	prompt, _ := payload["prompt"].(string)
 	if strings.TrimSpace(prompt) == "" {
 		return CommandResult{Success: false, Output: "missing plan prompt"}
@@ -280,6 +365,12 @@ func (e *Executor) executePlanRunner(ctx context.Context, executorID string, pay
 	image := ""
 	planBin := planBinary(executorID)
 	if containerIsolationEnabled(executorID) {
+		if backend != RuntimeDocker {
+			return CommandResult{
+				Success: false,
+				Output:  `container isolation requires agent runtime "docker" (set tenant agent runtime in Kaiad)`,
+			}
+		}
 		image = runnerImage(executorID)
 		if image == "" {
 			return CommandResult{Success: false, Output: "container isolation enabled but runner image is not configured"}

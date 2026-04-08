@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["type", "agentId", "ts"],
+  "properties": {
+    "type": { "const": "host_stats" },
+    "agentId": { "type": "string" },
+    "ts": { "type": "string" },
+    "cpuPercent": { "type": "number", "minimum": 0, "maximum": 100 },
+    "memUsedBytes": { "type": "integer", "minimum": 0 },
+    "memTotalBytes": { "type": "integer", "minimum": 1 },
+    "memPercent": { "type": "number", "minimum": 0, "maximum": 100 },
+    "diskUsedBytes": { "type": "integer", "minimum": 0 },
+    "diskTotalBytes": { "type": "integer", "minimum": 1 },
+    "diskPath": { "type": "string" },
+    "netRxBytesPerSec": { "type": "number", "minimum": 0 },
+    "netTxBytesPerSec": { "type": "number", "minimum": 0 },
+    "processRSSBytes": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

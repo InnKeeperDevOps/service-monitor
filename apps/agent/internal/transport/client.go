@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/url"
 	"os"
@@ -11,10 +12,44 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/service-monitor/agent/internal/agentdebug"
 )
 
 type CommandHandler interface {
 	HandleCommand(ctx context.Context, cmdType string, payload map[string]interface{}) (success bool, output string)
+}
+
+// AgentHello is the first message from Kaiad /realtime (see packages/contracts agentHelloMessageSchema).
+type AgentHello struct {
+	Service string `json:"service"`
+	Runtime struct {
+		Backend string `json:"backend"`
+	} `json:"runtime"`
+	ConfigReady *bool `json:"configReady,omitempty"`
+	Workload    *struct {
+		Source        *string `json:"source"`
+		GithubRepo    string  `json:"githubRepo"`
+		DefaultBranch string  `json:"defaultBranch"`
+	} `json:"workload,omitempty"`
+}
+
+// ResolveKaiadConfig maps the hello payload to executor settings. When skipWaitEnv is true (SM_SKIP_KAIAD_CONFIG_WAIT), workloads are always allowed.
+func (h AgentHello) ResolveKaiadConfig(skipWaitEnv bool) (kaiadReady bool, workloadSource string) {
+	if skipWaitEnv {
+		return true, "github_repo"
+	}
+	if h.ConfigReady == nil {
+		kaiadReady = true
+	} else {
+		kaiadReady = *h.ConfigReady
+	}
+	if !kaiadReady {
+		return false, ""
+	}
+	if h.Workload != nil && h.Workload.Source != nil && *h.Workload.Source != "" {
+		return true, *h.Workload.Source
+	}
+	return true, "github_repo"
 }
 
 type heartbeatMessage struct {
@@ -55,6 +90,7 @@ type Client struct {
 	rng               *rand.Rand
 	handler           CommandHandler
 	onFirstAck        func()
+	onHello           func(AgentHello)
 
 	seenMu   sync.Mutex
 	seenCmds map[string]struct{}
@@ -63,6 +99,12 @@ type Client struct {
 	activeConn *websocket.Conn
 
 	ackOnce sync.Once
+
+	// protocolDebug logs WebSocket protocol interactions when set (see SM_AGENT_DEBUG or WithProtocolDebugLog).
+	protocolDebug func(format string, args ...interface{})
+
+	// hostStats, when set, runs after each heartbeat to send optional host_stats JSON (see packages/contracts).
+	hostStats func(agentID string) ([]byte, error)
 }
 
 type ClientOption func(*Client)
@@ -116,6 +158,29 @@ func OnFirstAck(fn func()) ClientOption {
 	}
 }
 
+// OnHello is invoked when the server sends type "hello" (includes tenant agent runtime from Kaiad).
+func OnHello(fn func(AgentHello)) ClientOption {
+	return func(c *Client) {
+		c.onHello = fn
+	}
+}
+
+// WithProtocolDebugLog sets a logger for inbound/outbound realtime frames. When nil and SM_AGENT_DEBUG is enabled,
+// the default logger uses the standard log package with prefix [agent:transport].
+func WithProtocolDebugLog(fn func(format string, args ...interface{})) ClientOption {
+	return func(c *Client) {
+		c.protocolDebug = fn
+	}
+}
+
+// WithHostStatsCollector sets a callback that returns JSON for a host_stats frame (or nil/empty to skip).
+// Non-fatal errors are logged when protocol debug is enabled; send failures end the session like heartbeat.
+func WithHostStatsCollector(fn func(agentID string) ([]byte, error)) ClientOption {
+	return func(c *Client) {
+		c.hostStats = fn
+	}
+}
+
 func NewClient(url string, agentID string, opts ...ClientOption) *Client {
 	c := &Client{
 		url:               url,
@@ -137,7 +202,19 @@ func NewClient(url string, agentID string, opts ...ClientOption) *Client {
 	if v := os.Getenv("SM_AGENT_VERSION"); v != "" && c.version == "0.1.0" {
 		c.version = v
 	}
+	if c.protocolDebug == nil && agentdebug.Enabled() {
+		c.protocolDebug = func(format string, args ...interface{}) {
+			log.Printf("[agent:transport] "+format, args...)
+		}
+	}
 	return c
+}
+
+func (c *Client) protoDebug(format string, args ...interface{}) {
+	if c.protocolDebug == nil {
+		return
+	}
+	c.protocolDebug(format, args...)
 }
 
 func (c *Client) Run() error {
@@ -158,6 +235,16 @@ func (c *Client) dialURL() string {
 	return u.String()
 }
 
+// CloseActiveForReconnect closes the WebSocket so RunContext reconnects and receives a fresh hello (e.g. after Kaiad settings change).
+func (c *Client) CloseActiveForReconnect() {
+	c.writeMu.Lock()
+	conn := c.activeConn
+	c.writeMu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+}
+
 func (c *Client) RunContext(ctx context.Context) error {
 	attempt := 0
 	for {
@@ -167,6 +254,7 @@ func (c *Client) RunContext(ctx context.Context) error {
 		dialer := websocket.DefaultDialer
 		conn, _, err := dialer.DialContext(ctx, c.dialURL(), nil)
 		if err != nil {
+			c.protoDebug("dial error attempt=%d: %v", attempt, err)
 			if err := c.sleepBackoff(ctx, attempt); err != nil {
 				return err
 			}
@@ -174,6 +262,7 @@ func (c *Client) RunContext(ctx context.Context) error {
 			continue
 		}
 		attempt = 0
+		c.protoDebug("websocket connected")
 
 		err = c.runSession(ctx, conn)
 
@@ -227,6 +316,10 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn) error {
 	if err := c.sendHeartbeat(); err != nil {
 		return err
 	}
+	c.protoDebug("session: initial heartbeat sent")
+	if err := c.sendHostStats(); err != nil {
+		return err
+	}
 
 	for {
 		select {
@@ -236,6 +329,9 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn) error {
 			return err
 		case <-ticker.C:
 			if err := c.sendHeartbeat(); err != nil {
+				return err
+			}
+			if err := c.sendHostStats(); err != nil {
 				return err
 			}
 		}
@@ -263,6 +359,31 @@ func (c *Client) sendHeartbeat() error {
 	if err := c.activeConn.WriteMessage(websocket.TextMessage, payload); err != nil {
 		return fmt.Errorf("send heartbeat: %w", err)
 	}
+	c.protoDebug("outbound heartbeat agentId=%s bytes=%d", c.agentID, len(payload))
+	return nil
+}
+
+func (c *Client) sendHostStats() error {
+	if c.hostStats == nil {
+		return nil
+	}
+	payload, err := c.hostStats(c.agentID)
+	if err != nil {
+		c.protoDebug("host_stats collect: %v", err)
+		return nil
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.activeConn == nil {
+		return fmt.Errorf("not connected")
+	}
+	if err := c.activeConn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		return fmt.Errorf("send host_stats: %w", err)
+	}
+	c.protoDebug("outbound host_stats bytes=%d", len(payload))
 	return nil
 }
 
@@ -307,11 +428,30 @@ func (c *Client) handleIncoming(ctx context.Context, errCh chan<- error, data []
 		CommandID string `json:"commandId"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
+		c.protoDebug("inbound invalid JSON (%d bytes): %v", len(data), err)
+		return
+	}
+	c.protoDebug("inbound type=%s commandId=%s bytes=%d", envelope.Type, envelope.CommandID, len(data))
+
+	if envelope.Type == "hello" {
+		var hello AgentHello
+		if json.Unmarshal(data, &hello) != nil {
+			return
+		}
+		b := hello.Runtime.Backend
+		if b == "" {
+			b = "(empty)"
+		}
+		c.protoDebug("hello runtime.backend=%s service=%s", b, hello.Service)
+		if c.onHello != nil {
+			c.onHello(hello)
+		}
 		return
 	}
 
 	// API responds to heartbeats with { type: "ack", accepted: true } (see apps/api server /realtime).
 	if envelope.Type == "heartbeat_ack" || envelope.Type == "ack" {
+		c.protoDebug("inbound server ack (firstAck callback may run)")
 		if c.onFirstAck != nil {
 			c.ackOnce.Do(c.onFirstAck)
 		}
@@ -319,11 +459,13 @@ func (c *Client) handleIncoming(ctx context.Context, errCh chan<- error, data []
 	}
 
 	if envelope.CommandID == "" {
+		c.protoDebug("inbound ignored (no commandId) type=%s", envelope.Type)
 		return
 	}
 	switch envelope.Type {
-	case "run_step", "docker_op", "cancel_run", "sync_desired_state", "run_cursor_plan", "run_claude_plan":
+	case "run_step", "docker_op", "cancel_run", "sync_desired_state", "run_cursor_plan", "run_claude_plan", "run_toolchain", "receive_source_archive":
 	default:
+		c.protoDebug("inbound ignored unknown command type=%s", envelope.Type)
 		return
 	}
 
@@ -338,6 +480,7 @@ func (c *Client) handleIncoming(ctx context.Context, errCh chan<- error, data []
 	c.seenCmds[envelope.CommandID] = struct{}{}
 	c.seenMu.Unlock()
 
+	c.protoDebug("dispatch command type=%s commandId=%s", envelope.Type, envelope.CommandID)
 	go c.executeAndAck(ctx, errCh, envelope.Type, envelope.CommandID, data)
 }
 
@@ -353,6 +496,7 @@ func (c *Client) executeAndAck(ctx context.Context, errCh chan<- error, cmdType,
 		if !success {
 			status = "failed"
 		}
+		c.protoDebug("handler result commandId=%s success=%v outputLen=%d", commandID, success, len(out))
 	}
 
 	ack := commandAckMessage{
@@ -372,6 +516,7 @@ func (c *Client) executeAndAck(ctx context.Context, errCh chan<- error, cmdType,
 		werr = c.activeConn.WriteMessage(websocket.TextMessage, payload)
 	}
 	c.writeMu.Unlock()
+	c.protoDebug("outbound command_ack commandId=%s status=%s bytes=%d", commandID, status, len(payload))
 	if werr != nil {
 		select {
 		case errCh <- fmt.Errorf("send command_ack: %w", werr):

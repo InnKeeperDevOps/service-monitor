@@ -22,7 +22,7 @@ import (
 // { type: "ack", accepted: true } for each agent message, matching packages/contracts.
 func apiLikeRealtimeSession(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"hello","service":"realtime"}`)); err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"hello","service":"realtime","runtime":{"backend":"docker"}}`)); err != nil {
 		t.Fatalf("hello: %v", err)
 	}
 }
@@ -148,7 +148,7 @@ func TestE2E_RealtimeTokenAppendedToDialURL(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"hello","service":"realtime"}`))
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"hello","service":"realtime","runtime":{"backend":"docker"}}`))
 		readUntilHeartbeat(t, conn)
 		writeAck(t, conn)
 		_, _, _ = conn.ReadMessage()
@@ -194,6 +194,8 @@ func TestE2E_AllPlatformCommandTypesYieldCommandAck(t *testing.T) {
 		{"sync_desired_state", "cmd-sync", `{"type":"sync_desired_state","commandId":"cmd-sync","desiredContainers":[{"serviceId":"s1","image":"nginx:latest","state":"running"}]}`},
 		{"run_cursor_plan", "cmd-cursor", `{"type":"run_cursor_plan","commandId":"cmd-cursor","prompt":"noop","workspacePath":"/tmp"}`},
 		{"run_claude_plan", "cmd-claude", `{"type":"run_claude_plan","commandId":"cmd-claude","prompt":"noop","workspacePath":"/tmp"}`},
+		{"run_toolchain", "cmd-tc", `{"type":"run_toolchain","commandId":"cmd-tc","language":"python3","path":"/tmp/nope.py"}`},
+		{"receive_source_archive", "cmd-arch", `{"type":"receive_source_archive","commandId":"cmd-arch","url":"https://example.invalid/app.tar.gz"}`},
 	}
 
 	for _, tc := range cmds {

@@ -161,4 +161,4 @@ pnpm typecheck
 
 - The API and worker need Redis for queues.
 - The API uses Postgres when `DATABASE_URL` is set.
-- In production mode, the Go agent requires enrollment token or saved credentials.
+- In production mode, the Go agent requires `SM_ENROLLMENT_TOKEN` unless you opt into file-backed credentials with `SM_AGENT_PERSIST_CREDENTIALS=1`.

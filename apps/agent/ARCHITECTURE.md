@@ -1,0 +1,229 @@
+# Kaiad Agent — Architecture
+
+This document describes the **Go runtime agent** (`github.com/service-monitor/agent`): how it fits into Kaiad, its internal packages, and the control/data flows between the agent, Docker, and the Kaiad realtime API.
+
+For runbooks, env vars, and CI coverage expectations, see [README.md](README.md). Product-level context lives in [../../README.md](../../README.md).
+
+## Role in the system
+
+The agent is an **outbound WebSocket client**. It connects to Kaiad’s `/realtime` endpoint, sends heartbeats and log events, and **executes remote commands** (shell steps, Docker operations, desired-state sync stubs, and plan runners). It does not expose an inbound HTTP server for the control plane; all control traffic is initiated by maintaining the WebSocket session.
+
+```mermaid
+flowchart LR
+  subgraph host["Agent host"]
+    A["agent binary"]
+    D["Docker Engine API\n(unix socket)"]
+    A <-->|HTTP over unix| D
+  end
+  subgraph kaiad["Kaiad (control plane)"]
+    R["/realtime WebSocket"]
+  end
+  A <-->|WebSocket JSON| R
+```
+
+## Module layout
+
+| Path | Responsibility |
+|------|----------------|
+| [`cmd/agent/main.go`](cmd/agent/main.go) | Process entry: env, credentials, Docker client, transport client, hello callback, log streaming bootstrap |
+| [`internal/transport`](internal/transport) | WebSocket client: dial, session loop, heartbeats, inbound message dispatch, `command_ack`, exponential backoff reconnect |
+| [`internal/executor`](internal/executor) | Implements `transport.CommandHandler`: command routing, shell/Docker/plan execution, Kaiad config gating |
+| [`internal/docker`](internal/docker) | Minimal Docker Engine HTTP API over the unix socket; container list/start/stop; log stream attachment |
+| [`internal/credentials`](internal/credentials) | Optional on-disk enrollment persistence (`SM_AGENT_PERSIST_CREDENTIALS`) |
+
+Shared **message shapes** for realtime traffic are defined in TypeScript/Zod in [`packages/contracts/src/realtime.ts`](../../packages/contracts/src/realtime.ts); the Go types mirror the JSON payloads (see `AgentHello` in `transport`).
+
+## Control flow: process startup
+
+1. **Configuration** — Read `SM_REALTIME_URL` (default `ws://localhost:3001/realtime`), `SM_AGENT_ID`, `SM_ENROLLMENT_TOKEN`, Docker socket `SM_DOCKER_SOCKET`. Optionally load persisted credentials when `SM_AGENT_PERSIST_CREDENTIALS=1`.
+2. **Production gate** — If `NODE_ENV=production` and there is no token and no persisted credential path in use, the process exits.
+3. **Clients** — Construct `docker.Client`, `executor.Executor`, then `transport.NewClient` with `WithCommandHandler(exec)` and `OnHello(...)`.
+4. **Run loop** — `client.RunContext(ctx)` owns the process lifetime: connect, handle session, reconnect with backoff on failure.
+
+## Transport layer (`internal/transport`)
+
+### Connection and resilience
+
+- **Dial URL** — Base WebSocket URL; if `SM_ENROLLMENT_TOKEN` is set, it is appended as a `token` query parameter (see `dialURL`).
+- **Sessions** — Each successful dial runs `runSession`: stores the active connection, starts a **read goroutine**, and runs a **heartbeat ticker** (default 10s, configurable via `WithHeartbeatInterval`).
+- **Reconnect** — On dial failure or session end, the client sleeps using **exponential backoff with jitter** (`internal/transport/backoff.go`, bounded by min/max durations), then redials. `CloseActiveForReconnect` closes the active socket so the outer loop reconnects and receives a fresh `hello` (used when Kaiad tenant config may have changed).
+
+### Inbound messages
+
+The read loop unmarshals a small envelope (`type`, `commandId`), then:
+
+| `type` | Behavior |
+|--------|----------|
+| `hello` | Parsed as `AgentHello`; `onHello` runs (main wires executor configuration and optional log streaming). |
+| `heartbeat_ack` / `ack` | Triggers `onFirstAck` once (e.g. persist credentials after first successful server acknowledgment). |
+| `run_step`, `docker_op`, `cancel_run`, `sync_desired_state`, `run_cursor_plan`, `run_claude_plan` | Deduplicated by `commandId`, then handled asynchronously via `CommandHandler`; result sent as `command_ack`. |
+
+Unknown or malformed messages are ignored or dropped safely; duplicate `commandId`s are ignored after the first execution.
+
+### Outbound messages
+
+- **Heartbeat** — JSON with `type: heartbeat`, agent id, timestamp, capacity, optional tenant/version fields.
+- **Log events** — `SendLogEvent` implements `docker.LogSender`; used by `StreamContainerLogs` to forward container log lines as `log_event` messages.
+- **Command completion** — `command_ack` with status `completed` or `failed` and textual output.
+
+## Executor (`internal/executor`)
+
+The executor is the **single implementation** of `transport.CommandHandler`. It holds:
+
+- Selected **runtime backend** from the last `hello`: `docker`, `kubernetes`, or `shell`.
+- **Kaiad config readiness** and **workload source** string, derived from `AgentHello.ResolveKaiadConfig` (see below).
+
+### Kaiad configuration gating
+
+Unless `SM_SKIP_KAIAD_CONFIG_WAIT=1`, most commands are rejected until the tenant is considered ready (`kaiadConfigReady` from hello / workload resolution). This prevents running workloads before operators configure the agent in Kaiad Settings. `cancel_run` is exempt from this gate.
+
+### Command types (summary)
+
+| Command | Purpose |
+|---------|---------|
+| `run_step` | Run `sh -c` with the provided shell string. |
+| `run_toolchain` | Run a script or binary with a named host toolchain (`language` + `path` + optional `args`, `cwd`, `env`). Supports `python3`, `java` (`.jar` only via `java -jar`), `node`, `go` (`go run` for `.go`, else execute path), `php`, `typescript` (default `npx --yes tsx`, override `SM_TYPESCRIPT_RUNNER`), `rust` (`.rs` compiled with `rustc` then executed), `swift`, `kotlin` (default `kotlin`, override `SM_KOTLIN_RUNNER`). Requires the tools on the agent `PATH`. |
+| `docker_op` | Dispatch by `operation` and `args` (e.g. start/stop container, `docker`/`docker-compose` CLI wrappers). Behavior depends on `RuntimeBackend`. |
+| `sync_desired_state` | Validates `desiredContainers` array; stub success message with entry count. |
+| `run_cursor_plan` / `run_claude_plan` | Invoke Cursor or Claude CLI (or isolated Docker runner) with prompt and workspace; artifacts under `<workspace>/.sm/logs/`. |
+
+Plan execution supports optional **container isolation** (`SM_EXECUTOR_ISOLATE_CONTAINERS`) with runner images and timeouts via env (see README).
+
+## Docker integration (`internal/docker`)
+
+- **Client** — Unix socket HTTP to Docker Engine (`/var/run/docker.sock` by default). Used for listing containers, start/stop, and log streaming.
+- **Log streaming** — `StreamContainerLogs` reads the attach stream line-by-line, classifies a coarse log level, and sends events through `LogSender` (the transport client).
+
+Log streaming of **existing** containers is started once after `hello` when the runtime backend is **docker**, unless `SM_ENABLE_LOG_STREAMING=0`.
+
+## Hello message and runtime selection
+
+After connect, Kaiad sends `type: "hello"` with tenant agent settings. The Go struct `AgentHello` aligns with `agentHelloMessageSchema` in contracts.
+
+Main uses `ResolveKaiadConfig` to compute:
+
+- Whether workloads are allowed yet (`configReady` / skip-env).
+- A workload source label: `github_repo` or `binary` (from `workload.source`), defaulting to `github_repo` when the field is absent.
+
+It then calls `executor.Configure` with:
+
+- `nil` docker client for shell-only mode, or the real client for docker mode.
+- The resolved `RuntimeBackend` enum.
+
+If configuration is not ready, main schedules a **20s timer** to call `CloseActiveForReconnect` so the agent periodically picks up Settings changes.
+
+## Binary workload mode (`workload.source: binary`)
+
+Tenant **Agent workload source** can be set to **binary** in Kaiad Settings (see [`TenantConfigurationSection`](../../apps/web/src/features/settings/TenantConfigurationSection.tsx)). That choice is persisted as `agentWorkloadSource` and included in every `hello` via [`buildAgentHelloPayload`](../../apps/api/src/agentHelloPayload.ts). The agent stores the resolved string on the executor ([`Executor.Configure`](internal/executor/executor.go); see also [`WorkloadSource`](internal/executor/executor.go)).
+
+**What the WebSocket carries:** control messages (hello, heartbeats, `run_step`, `docker_op`, plan runners, etc.) are **JSON text frames**. They do **not** embed large application binaries. The product copy for binary mode refers to **artifacts provided or staged by the control plane** relative to the agent host—delivery is expected to be **out of band** from the realtime channel (for example a mounted volume, image layer, object-store pull, or other deployment-specific path). The agent then **executes** whatever the control plane sends next (`run_step` shell, `docker_op`, `run_*_plan`, …) against paths on disk.
+
+**Implementation note:** today the same command handlers run regardless of `github_repo` vs `binary`; the mode is available via `Executor.WorkloadSource()` for future branching. There is no separate “download binary over `/realtime`” RPC in the Go agent yet.
+
+### Diagram: policy vs execution path
+
+```mermaid
+flowchart TB
+  subgraph kaiad["Kaiad control plane"]
+    UI["Settings: agentWorkloadSource = binary"]
+    API["API: tenant settings"]
+    WH["buildAgentHelloPayload"]
+    RT["/realtime WebSocket"]
+    W["Worker / jobs / storage\n(artifact build & placement)"]
+    UI --> API
+    API --> WH
+    WH --> RT
+    W -.->|"artifact to host\n(out of band)"| HOST
+  end
+  subgraph agent["Agent host"]
+    HOST["Filesystem path\n(e.g. workspace / volume)"]
+    AG["Go agent"]
+    EX["executor: run_step / docker_op / plans"]
+    AG --> EX
+    EX --> HOST
+  end
+  RT <-->|"hello + JSON commands"| AG
+```
+
+### Diagram: sequence from tenant setting to execution
+
+```mermaid
+sequenceDiagram
+  participant Op as Operator
+  participant Web as Kaiad Web
+  participant API as Kaiad API
+  participant Agent as Go agent
+  participant FS as Agent filesystem
+
+  Op->>Web: Set workload source = binary
+  Web->>API: PATCH tenant settings
+  Note over API: agentWorkloadSource persisted
+  Agent->>API: WebSocket connect + enroll
+  API-->>Agent: hello (workload.source = binary)
+  Note over Agent: executor.Configure(..., workloadSource = binary)
+  Note over Agent,FS: Artifact reaches host out of band\n(volume, sync, image, etc.)
+  API-->>Agent: run_step (shell targets staged binary path)
+  Agent->>FS: read / execute
+  Agent-->>API: command_ack
+```
+
+### Diagram: command handling (same surface for both workload modes)
+
+```mermaid
+flowchart LR
+  CMD["JSON command on /realtime\n(run_step, docker_op, ...)"]
+  TR["transport.Client\nhandleIncoming"]
+  EX["executor.Execute"]
+  MODE{"kaiadAllowsWorkloads?\n(+ command gate)"}
+  RS["run_step → shell"]
+  DO["docker_op → Docker API / CLI"]
+  PL["run_*_plan → cursor/claude\n(+ optional container)"]
+  CMD --> TR --> EX --> MODE
+  MODE --> RS
+  MODE --> DO
+  MODE --> PL
+```
+
+Binary mode primarily changes **operator expectations and hello metadata** so Kaiad and the agent agree that workloads are **artifact-based** rather than **Git-clone-based**; **execution** still flows through the shared command surface above.
+
+## Credentials (`internal/credentials`)
+
+- **Default:** stateless — token and URL come from the environment each run.
+- **Optional persistence:** when `SM_AGENT_PERSIST_CREDENTIALS=1`, JSON is read/written at `SM_CREDENTIAL_PATH` or `~/.service-monitor/agent-credential.json`. After the first successful `ack`, main may save enrollment material if persistence is enabled and the agent enrolled with a token.
+
+## Dependencies
+
+- **Go 1.22** — see [`go.mod`](go.mod).
+- **github.com/gorilla/websocket** — WebSocket client.
+- Docker access is via **stdlib `net/http`** over the unix socket, not the official Docker SDK.
+
+## Testing strategy
+
+Packages include unit tests (`executor`, `transport`, `docker`, `credentials`) and protocol/e2e-style tests where applicable. CI enforces a **minimum line coverage** threshold on this module (see README and `.github/workflows/ci.yml`).
+
+## Diagram: session and command handling
+
+```mermaid
+sequenceDiagram
+  participant Main
+  participant Client as transport.Client
+  participant Exec as executor.Executor
+  participant Kaiad as Kaiad /realtime
+
+  Main->>Client: RunContext
+  Client->>Kaiad: WebSocket connect (+token)
+  Kaiad-->>Client: hello
+  Client->>Main: OnHello (Configure executor, logs)
+  loop Heartbeats
+    Client->>Kaiad: heartbeat
+    Kaiad-->>Client: ack
+  end
+  Kaiad-->>Client: command (run_step / docker_op / ...)
+  Client->>Exec: HandleCommand
+  Exec-->>Client: success, output
+  Client->>Kaiad: command_ack
+```
+
+---
+
+When changing wire formats, update **`packages/contracts`** and keep the Go unmarshaling paths in `transport` and behavior in `executor` consistent with the API server’s `/realtime` implementation under `apps/api`.

@@ -6,6 +6,8 @@ export type TenantSettingsPatch = Partial<{
   defaultBranch: string;
   docsUrl: string | null;
   preferredExecutor: "cursor" | "claude" | null;
+  agentRuntimeBackend: "docker" | "kubernetes" | "shell" | null;
+  agentWorkloadSource: "github_repo" | "binary" | null;
   automationPolicy: TenantSettings["automationPolicy"] | null;
 }>;
 
@@ -58,6 +60,26 @@ export function mergeTenantSettingsPayload(
     }
   } else if (base.preferredExecutor !== undefined) {
     out.preferredExecutor = base.preferredExecutor;
+  }
+
+  if ("agentRuntimeBackend" in patch) {
+    if (patch.agentRuntimeBackend === null) {
+      /* omit */
+    } else if (patch.agentRuntimeBackend) {
+      out.agentRuntimeBackend = patch.agentRuntimeBackend;
+    }
+  } else if (base.agentRuntimeBackend !== undefined) {
+    out.agentRuntimeBackend = base.agentRuntimeBackend;
+  }
+
+  if ("agentWorkloadSource" in patch) {
+    if (patch.agentWorkloadSource === null) {
+      out.agentWorkloadSource = null;
+    } else if (patch.agentWorkloadSource) {
+      out.agentWorkloadSource = patch.agentWorkloadSource;
+    }
+  } else if (base.agentWorkloadSource !== undefined) {
+    out.agentWorkloadSource = base.agentWorkloadSource;
   }
 
   return out;

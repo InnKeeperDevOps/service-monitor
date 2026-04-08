@@ -60,6 +60,12 @@ export function TenantConfigurationSection({
   const [defaultBranch, setDefaultBranch] = useState("");
   const [docsUrl, setDocsUrl] = useState("");
   const [preferredExecutor, setPreferredExecutor] = useState<"" | "cursor" | "claude">("");
+  const [agentRuntimeBackend, setAgentRuntimeBackend] = useState<
+    "" | "docker" | "kubernetes" | "shell"
+  >("");
+  const [agentWorkloadSource, setAgentWorkloadSource] = useState<
+    "github_repo" | "binary" | "pending"
+  >("github_repo");
   const [reposInput, setReposInput] = useState("");
   const [branchesInput, setBranchesInput] = useState("");
   const [actionFlags, setActionFlags] = useState<Record<(typeof AUTOMATION_ACTIONS)[number], boolean>>({
@@ -84,6 +90,12 @@ export function TenantConfigurationSection({
       setDefaultBranch(data.defaultBranch);
       setDocsUrl(data.docsUrl ?? "");
       setPreferredExecutor(data.preferredExecutor ?? "");
+      setAgentRuntimeBackend(data.agentRuntimeBackend ?? "");
+      if (data.agentWorkloadSource === null) {
+        setAgentWorkloadSource("pending");
+      } else {
+        setAgentWorkloadSource(data.agentWorkloadSource === "binary" ? "binary" : "github_repo");
+      }
       const p = data.automationPolicy;
       setReposInput(p?.repos?.length ? p.repos.join(", ") : "");
       setBranchesInput(p?.branches?.length ? p.branches.join(", ") : "");
@@ -99,6 +111,8 @@ export function TenantConfigurationSection({
       setDefaultBranch("");
       setDocsUrl("");
       setPreferredExecutor("");
+      setAgentRuntimeBackend("");
+      setAgentWorkloadSource("github_repo");
       setReposInput("");
       setBranchesInput("");
       setActionFlags({
@@ -149,7 +163,9 @@ export function TenantConfigurationSection({
       githubRepo: githubRepo.trim(),
       defaultBranch: defaultBranch.trim(),
       docsUrl: docsUrl.trim() ? docsUrl.trim() : null,
-      preferredExecutor: preferredExecutor === "" ? null : preferredExecutor
+      preferredExecutor: preferredExecutor === "" ? null : preferredExecutor,
+      agentRuntimeBackend: agentRuntimeBackend === "" ? null : agentRuntimeBackend,
+      agentWorkloadSource: agentWorkloadSource === "pending" ? null : agentWorkloadSource
     };
 
     if (policyEmpty) {
@@ -352,6 +368,61 @@ export function TenantConfigurationSection({
             <option value="cursor">Cursor</option>
             <option value="claude">Claude</option>
           </select>
+        </label>
+        <label style={labelColStyle}>
+          <span style={{ color: "var(--color-text-secondary)" }}>Agent runtime (optional)</span>
+          <select
+            value={agentRuntimeBackend}
+            onChange={(e) =>
+              setAgentRuntimeBackend(e.target.value as "" | "docker" | "kubernetes" | "shell")
+            }
+            disabled={disabled}
+            aria-label="Agent runtime backend"
+            style={{
+              border: "1px solid var(--color-border)",
+              borderRadius: 6,
+              padding: "0.35rem 0.45rem",
+              background: "var(--color-surface)",
+              color: "var(--color-text-primary)",
+              maxWidth: 420
+            }}
+          >
+            <option value="">Default (Docker)</option>
+            <option value="docker">Docker</option>
+            <option value="kubernetes">Kubernetes</option>
+            <option value="shell">Shell only</option>
+          </select>
+          <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
+            Tells enrolled Go agents how to run workloads (Docker socket, kubectl, or shell). Applies on next WebSocket
+            connection.
+          </p>
+        </label>
+        <label style={labelColStyle}>
+          <span style={{ color: "var(--color-text-secondary)" }}>Agent workload source</span>
+          <select
+            value={agentWorkloadSource}
+            onChange={(e) =>
+              setAgentWorkloadSource(e.target.value as "github_repo" | "binary" | "pending")
+            }
+            disabled={disabled}
+            aria-label="Agent workload source"
+            style={{
+              border: "1px solid var(--color-border)",
+              borderRadius: 6,
+              padding: "0.35rem 0.45rem",
+              background: "var(--color-surface)",
+              color: "var(--color-text-primary)",
+              maxWidth: 420
+            }}
+          >
+            <option value="github_repo">GitHub repository (clone / run from repo above)</option>
+            <option value="binary">Binary from Kaiad (artifacts pushed by the control plane)</option>
+            <option value="pending">Not configured yet — agent waits for Kaiad</option>
+          </select>
+          <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
+            Whether the agent runs your app from the configured GitHub repo or executes binaries supplied by Kaiad. If you
+            choose &quot;Not configured yet&quot;, enrolled agents defer workloads until you save a concrete choice.
+          </p>
         </label>
 
         <div style={{ marginTop: "0.5rem", marginBottom: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>

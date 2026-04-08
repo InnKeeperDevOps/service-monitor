@@ -39,12 +39,22 @@ function extractCommandId(commandJson: string): string | null {
 
 export class RealtimeManager {
   private sessions = new Map<string, AgentSession>();
+  /** Last host_stats payload per agent (for observability / future UI). */
+  private hostStatsByAgent = new Map<string, unknown>();
   private redis?: PendingCommandRedis;
   private maxPending: number;
 
   constructor(opts: RealtimeManagerOptions = {}) {
     this.redis = opts.redis;
     this.maxPending = opts.maxPendingPerAgent ?? DEFAULT_MAX_PENDING;
+  }
+
+  setHostStats(agentId: string, payload: unknown): void {
+    this.hostStatsByAgent.set(agentId, payload);
+  }
+
+  getHostStats(agentId: string): unknown | undefined {
+    return this.hostStatsByAgent.get(agentId);
   }
 
   async registerAgent(session: AgentSession): Promise<void> {
@@ -61,6 +71,7 @@ export class RealtimeManager {
 
   unregisterAgent(agentId: string): void {
     this.sessions.delete(agentId);
+    this.hostStatsByAgent.delete(agentId);
   }
 
   private async removePendingByCommandId(agentId: string, commandId: string): Promise<boolean> {

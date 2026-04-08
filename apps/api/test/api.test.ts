@@ -1002,7 +1002,15 @@ describe("api", () => {
         }
       });
       const helloRaw = await helloPromise;
-      expect(JSON.parse(helloRaw)).toEqual({ type: "hello", service: "realtime" });
+      expect(JSON.parse(helloRaw)).toEqual(
+        expect.objectContaining({
+          type: "hello",
+          service: "realtime",
+          runtime: { backend: "docker" },
+          configReady: true,
+          workload: expect.objectContaining({ source: "github_repo" })
+        })
+      );
 
       const ackPromise = new Promise<string>((resolve, reject) => {
         ws.once("message", (d) => resolve(d.toString()));
@@ -1014,6 +1022,39 @@ describe("api", () => {
           agentId: "a-test",
           ts: new Date().toISOString(),
           capacity: 2
+        })
+      );
+      const ackRaw = await ackPromise;
+      expect(JSON.parse(ackRaw)).toEqual({ type: "ack", accepted: true });
+      ws.close();
+    });
+
+    it("sends hello then ack for a valid host_stats", async () => {
+      let resolveHello!: (v: string) => void;
+      const helloPromise = new Promise<string>((res) => {
+        resolveHello = res;
+      });
+      const ws = await app.injectWS("/realtime", {}, {
+        onInit: (sock) => {
+          sock.once("message", (d) => resolveHello(d.toString()));
+        }
+      });
+      await helloPromise;
+
+      const ackPromise = new Promise<string>((resolve, reject) => {
+        ws.once("message", (d) => resolve(d.toString()));
+        ws.once("error", reject);
+      });
+      ws.send(
+        JSON.stringify({
+          type: "host_stats",
+          agentId: "a-stats",
+          ts: new Date().toISOString(),
+          cpuPercent: 3.5,
+          memUsedBytes: 1000,
+          memTotalBytes: 8000,
+          netRxBytesPerSec: 10,
+          netTxBytesPerSec: 20
         })
       );
       const ackRaw = await ackPromise;

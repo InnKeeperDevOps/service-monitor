@@ -16,6 +16,13 @@ type Credential struct {
 	RealtimeURL string    `json:"realtimeUrl"`
 }
 
+// PersistenceEnabled is true when SM_AGENT_PERSIST_CREDENTIALS=1.
+// By default the agent is stateless: it does not read or write enrollment material on disk;
+// supply SM_ENROLLMENT_TOKEN, SM_AGENT_ID, and SM_REALTIME_URL via the environment (e.g. Kubernetes secrets).
+func PersistenceEnabled() bool {
+	return os.Getenv("SM_AGENT_PERSIST_CREDENTIALS") == "1"
+}
+
 func CredentialPath() string {
 	if p := os.Getenv("SM_CREDENTIAL_PATH"); p != "" {
 		return p
@@ -28,6 +35,9 @@ func CredentialPath() string {
 }
 
 func Save(cred Credential) error {
+	if !PersistenceEnabled() {
+		return nil
+	}
 	p := CredentialPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
@@ -40,6 +50,9 @@ func Save(cred Credential) error {
 }
 
 func Load() (*Credential, error) {
+	if !PersistenceEnabled() {
+		return nil, nil
+	}
 	data, err := os.ReadFile(CredentialPath())
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -55,6 +68,9 @@ func Load() (*Credential, error) {
 }
 
 func Exists() bool {
+	if !PersistenceEnabled() {
+		return false
+	}
 	_, err := os.Stat(CredentialPath())
 	return err == nil
 }

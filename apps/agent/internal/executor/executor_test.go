@@ -7,6 +7,12 @@ import (
 	"testing"
 )
 
+func newReadyExecutor() *Executor {
+	e := NewExecutor(nil)
+	e.Configure(nil, RuntimeDocker, true, "github_repo")
+	return e
+}
+
 func TestRunShell(t *testing.T) {
 	out, err := RunShell("echo ok")
 	if err != nil {
@@ -18,7 +24,7 @@ func TestRunShell(t *testing.T) {
 }
 
 func TestExecuteRunStep(t *testing.T) {
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "run_step", map[string]interface{}{
 		"shell": "echo hello",
 	})
@@ -31,7 +37,7 @@ func TestExecuteRunStep(t *testing.T) {
 }
 
 func TestExecuteRunStepMissingShell(t *testing.T) {
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "run_step", map[string]interface{}{})
 	if result.Success {
 		t.Fatal("expected failure for missing shell command")
@@ -39,7 +45,7 @@ func TestExecuteRunStepMissingShell(t *testing.T) {
 }
 
 func TestExecuteUnknownType(t *testing.T) {
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "bogus", nil)
 	if result.Success {
 		t.Fatal("expected failure for unknown command type")
@@ -57,8 +63,19 @@ func TestExecuteCancelRun(t *testing.T) {
 	}
 }
 
-func TestExecuteSyncDesiredState(t *testing.T) {
+func TestExecuteBlockedUntilKaiadConfig(t *testing.T) {
 	e := NewExecutor(nil)
+	result := e.Execute(context.Background(), "run_step", map[string]interface{}{"shell": "echo x"})
+	if result.Success {
+		t.Fatal("expected workload commands to wait for Kaiad hello")
+	}
+	if !strings.Contains(strings.ToLower(result.Output), "kaiad") {
+		t.Fatalf("expected kaiad wait message, got: %s", result.Output)
+	}
+}
+
+func TestExecuteSyncDesiredState(t *testing.T) {
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "sync_desired_state", map[string]interface{}{
 		"desiredContainers": []interface{}{
 			map[string]interface{}{"serviceId": "a", "image": "nginx", "state": "running"},
@@ -73,7 +90,7 @@ func TestExecuteSyncDesiredState(t *testing.T) {
 }
 
 func TestExecuteSyncDesiredStateInvalid(t *testing.T) {
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	if r := e.Execute(context.Background(), "sync_desired_state", map[string]interface{}{}); r.Success {
 		t.Fatal("expected failure without desiredContainers")
 	}
@@ -85,7 +102,7 @@ func TestExecuteSyncDesiredStateInvalid(t *testing.T) {
 }
 
 func TestHandleCommand(t *testing.T) {
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	success, output := e.HandleCommand(context.Background(), "run_step", map[string]interface{}{
 		"shell": "echo adapter",
 	})
@@ -98,7 +115,7 @@ func TestHandleCommand(t *testing.T) {
 }
 
 func TestDockerOpWithoutClient(t *testing.T) {
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "docker_op", map[string]interface{}{
 		"operation": "start",
 		"args":      map[string]interface{}{"container": "abc"},
@@ -108,9 +125,39 @@ func TestDockerOpWithoutClient(t *testing.T) {
 	}
 }
 
+func TestDockerOpShellRuntime(t *testing.T) {
+	e := NewExecutor(nil)
+	e.Configure(nil, RuntimeShell, true, "github_repo")
+	result := e.Execute(context.Background(), "docker_op", map[string]interface{}{
+		"operation": "start",
+		"args":      map[string]interface{}{"container": "abc"},
+	})
+	if result.Success {
+		t.Fatal("expected failure for shell-only runtime")
+	}
+	if !strings.Contains(strings.ToLower(result.Output), "shell") {
+		t.Fatalf("expected shell runtime message, got: %s", result.Output)
+	}
+}
+
+func TestDockerOpKubernetesRuntime(t *testing.T) {
+	e := NewExecutor(nil)
+	e.Configure(nil, RuntimeKubernetes, true, "github_repo")
+	result := e.Execute(context.Background(), "docker_op", map[string]interface{}{
+		"operation": "build",
+		"args":      map[string]interface{}{"path": "."},
+	})
+	if result.Success {
+		t.Fatal("expected failure for kubernetes runtime docker_op")
+	}
+	if !strings.Contains(strings.ToLower(result.Output), "kubernetes") {
+		t.Fatalf("expected kubernetes message, got: %s", result.Output)
+	}
+}
+
 func TestExecuteRunCursorPlan(t *testing.T) {
 	t.Setenv("SM_CURSOR_BIN", "/bin/echo")
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "run_cursor_plan", map[string]interface{}{
 		"prompt":        "propose a fix",
 		"workspacePath": t.TempDir(),
@@ -131,7 +178,7 @@ func TestExecuteRunCursorPlan(t *testing.T) {
 }
 
 func TestExecuteRunClaudePlanMissingPrompt(t *testing.T) {
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "run_claude_plan", map[string]interface{}{})
 	if result.Success {
 		t.Fatal("expected failure for missing prompt")
@@ -146,7 +193,7 @@ func TestExecuteRunPlanIsolationMissingImage(t *testing.T) {
 	t.Setenv("SM_EXECUTOR_RUNNER_IMAGE", "")
 	t.Setenv("SM_EXECUTOR_DOCKER_BIN", "/bin/echo")
 	t.Setenv("SM_CURSOR_BIN", "cursor")
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "run_cursor_plan", map[string]interface{}{
 		"prompt":        "test",
 		"workspacePath": t.TempDir(),
@@ -162,7 +209,7 @@ func TestExecuteRunPlanIsolationMissingImage(t *testing.T) {
 func TestExecuteRunPlanWritesAuditArtifacts(t *testing.T) {
 	t.Setenv("SM_CURSOR_BIN", "/bin/echo")
 	workspace := t.TempDir()
-	e := NewExecutor(nil)
+	e := newReadyExecutor()
 	result := e.Execute(context.Background(), "run_cursor_plan", map[string]interface{}{
 		"prompt":        "audit me",
 		"workspacePath": workspace,

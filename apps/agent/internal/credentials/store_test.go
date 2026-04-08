@@ -9,7 +9,32 @@ import (
 	"github.com/service-monitor/agent/internal/credentials"
 )
 
+func TestPersistenceDisabledDoesNotUseDisk(t *testing.T) {
+	t.Setenv("SM_AGENT_PERSIST_CREDENTIALS", "0")
+	dir := t.TempDir()
+	p := filepath.Join(dir, "agent-credential.json")
+	t.Setenv("SM_CREDENTIAL_PATH", p)
+
+	if err := credentials.Save(credentials.Credential{AgentID: "a", Token: "t"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("expected no credential file when persistence disabled, stat err=%v", err)
+	}
+	got, err := credentials.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil credential, got %+v", got)
+	}
+	if credentials.Exists() {
+		t.Fatal("Exists should be false when persistence disabled")
+	}
+}
+
 func TestSaveAndLoad(t *testing.T) {
+	t.Setenv("SM_AGENT_PERSIST_CREDENTIALS", "1")
 	dir := t.TempDir()
 	p := filepath.Join(dir, "creds", "agent-credential.json")
 	t.Setenv("SM_CREDENTIAL_PATH", p)
@@ -46,6 +71,7 @@ func TestSaveAndLoad(t *testing.T) {
 }
 
 func TestLoadMissingFileReturnsNil(t *testing.T) {
+	t.Setenv("SM_AGENT_PERSIST_CREDENTIALS", "1")
 	dir := t.TempDir()
 	t.Setenv("SM_CREDENTIAL_PATH", filepath.Join(dir, "nonexistent.json"))
 
@@ -59,6 +85,7 @@ func TestLoadMissingFileReturnsNil(t *testing.T) {
 }
 
 func TestSaveFilePermissions(t *testing.T) {
+	t.Setenv("SM_AGENT_PERSIST_CREDENTIALS", "1")
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "nested")
 	p := filepath.Join(subdir, "agent-credential.json")
@@ -87,6 +114,7 @@ func TestSaveFilePermissions(t *testing.T) {
 }
 
 func TestExistsReturnsFalseWhenMissing(t *testing.T) {
+	t.Setenv("SM_AGENT_PERSIST_CREDENTIALS", "1")
 	dir := t.TempDir()
 	t.Setenv("SM_CREDENTIAL_PATH", filepath.Join(dir, "nope.json"))
 
@@ -96,6 +124,7 @@ func TestExistsReturnsFalseWhenMissing(t *testing.T) {
 }
 
 func TestExistsReturnsTrueAfterSave(t *testing.T) {
+	t.Setenv("SM_AGENT_PERSIST_CREDENTIALS", "1")
 	dir := t.TempDir()
 	t.Setenv("SM_CREDENTIAL_PATH", filepath.Join(dir, "agent-credential.json"))
 

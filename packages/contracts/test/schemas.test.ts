@@ -6,6 +6,7 @@ import {
   agentCommandDispatchResponseSchema,
   agentCommandJobSchema,
   agentSchema,
+  agentHelloMessageSchema,
   agentToPlatformMessageSchema,
   apiErrorSchema,
   automationActionSchema,
@@ -211,6 +212,49 @@ describe("http.ts", () => {
           preferredExecutor: "vscode"
         })
       ).toThrow();
+    });
+
+    it("accepts agentRuntimeBackend", () => {
+      expect(() =>
+        tenantSettingsSchema.parse({
+          tenantId: "t-1",
+          githubRepo: "o/r",
+          defaultBranch: "main",
+          agentRuntimeBackend: "shell"
+        })
+      ).not.toThrow();
+    });
+
+    it("rejects invalid agentRuntimeBackend", () => {
+      expect(() =>
+        tenantSettingsSchema.parse({
+          tenantId: "t-1",
+          githubRepo: "o/r",
+          defaultBranch: "main",
+          agentRuntimeBackend: "podman"
+        })
+      ).toThrow();
+    });
+
+    it("accepts agentWorkloadSource", () => {
+      expect(() =>
+        tenantSettingsSchema.parse({
+          tenantId: "t-1",
+          githubRepo: "o/r",
+          defaultBranch: "main",
+          agentWorkloadSource: "binary"
+        })
+      ).not.toThrow();
+    });
+
+    it("accepts null agentWorkloadSource", () => {
+      const v = tenantSettingsSchema.parse({
+        tenantId: "t-1",
+        githubRepo: "o/r",
+        defaultBranch: "main",
+        agentWorkloadSource: null
+      });
+      expect(v.agentWorkloadSource).toBeNull();
     });
   });
 
@@ -835,6 +879,38 @@ describe("http.ts", () => {
 });
 
 describe("realtime.ts", () => {
+  describe("agentHelloMessageSchema", () => {
+    it("accepts minimal hello", () => {
+      expect(() =>
+        agentHelloMessageSchema.parse({
+          type: "hello",
+          service: "realtime"
+        })
+      ).not.toThrow();
+    });
+
+    it("accepts hello with runtime", () => {
+      const m = agentHelloMessageSchema.parse({
+        type: "hello",
+        service: "realtime",
+        runtime: { backend: "kubernetes" }
+      });
+      expect(m.runtime?.backend).toBe("kubernetes");
+    });
+
+    it("accepts hello with workload and configReady", () => {
+      const m = agentHelloMessageSchema.parse({
+        type: "hello",
+        service: "realtime",
+        runtime: { backend: "docker" },
+        configReady: false,
+        workload: { source: null, githubRepo: "a/b", defaultBranch: "main" }
+      });
+      expect(m.configReady).toBe(false);
+      expect(m.workload?.source).toBeNull();
+    });
+  });
+
   describe("agentToPlatformMessageSchema", () => {
     it("accepts heartbeat", () => {
       expect(() =>
@@ -867,6 +943,21 @@ describe("realtime.ts", () => {
           commandId: "c-1",
           status: "completed",
           ts: iso
+        })
+      ).not.toThrow();
+    });
+
+    it("accepts host_stats", () => {
+      expect(() =>
+        agentToPlatformMessageSchema.parse({
+          type: "host_stats",
+          agentId: "a-1",
+          ts: iso,
+          cpuPercent: 12.5,
+          memUsedBytes: 1_000_000,
+          memTotalBytes: 8_000_000_000,
+          netRxBytesPerSec: 1024,
+          netTxBytesPerSec: 512
         })
       ).not.toThrow();
     });
@@ -951,6 +1042,62 @@ describe("realtime.ts", () => {
           permissionsProfile: "restricted"
         })
       ).not.toThrow();
+    });
+
+    it("accepts run_toolchain", () => {
+      expect(() =>
+        platformToAgentMessageSchema.parse({
+          type: "run_toolchain",
+          commandId: "c-7",
+          language: "python3",
+          path: "/tmp/a.py",
+          args: ["--verbose"],
+          env: { PYTHONUNBUFFERED: "1" },
+          cwd: "/tmp"
+        })
+      ).not.toThrow();
+    });
+
+    it("accepts receive_source_archive with url", () => {
+      expect(() =>
+        platformToAgentMessageSchema.parse({
+          type: "receive_source_archive",
+          commandId: "c-8",
+          url: "https://storage.example.com/tenant/app.tar.gz",
+          destDir: "/var/lib/kaiad/workspaces/ws-1",
+          stripComponents: 1
+        })
+      ).not.toThrow();
+    });
+
+    it("accepts receive_source_archive with archivePath", () => {
+      expect(() =>
+        platformToAgentMessageSchema.parse({
+          type: "receive_source_archive",
+          commandId: "c-9",
+          archivePath: "/var/stage/php-app.tgz"
+        })
+      ).not.toThrow();
+    });
+
+    it("rejects receive_source_archive without url or archivePath", () => {
+      expect(() =>
+        platformToAgentMessageSchema.parse({
+          type: "receive_source_archive",
+          commandId: "c-10"
+        })
+      ).toThrow();
+    });
+
+    it("rejects receive_source_archive with both url and archivePath", () => {
+      expect(() =>
+        platformToAgentMessageSchema.parse({
+          type: "receive_source_archive",
+          commandId: "c-11",
+          url: "https://example.com/a.tar.gz",
+          archivePath: "/tmp/a.tar.gz"
+        })
+      ).toThrow();
     });
 
     it("rejects docker_op with bad operation", () => {

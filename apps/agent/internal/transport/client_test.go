@@ -15,6 +15,14 @@ import (
 	"github.com/service-monitor/agent/internal/transport"
 )
 
+// Matches apps/api /realtime first frame (packages/contracts agentHelloMessageSchema).
+func writeAPIHelloDocker(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"hello","service":"realtime","runtime":{"backend":"docker"}}`)); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+}
+
 func TestClient_ackMessageTriggersOnFirstAck(t *testing.T) {
 	t.Parallel()
 	var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
@@ -26,6 +34,8 @@ func TestClient_ackMessageTriggersOnFirstAck(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+
+		writeAPIHelloDocker(t, conn)
 
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -90,6 +100,8 @@ func TestClient_commandMessageTriggersCommandAck(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+
+		writeAPIHelloDocker(t, conn)
 
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
@@ -169,6 +181,8 @@ func TestClient_runCursorPlanMessageTriggersCommandAck(t *testing.T) {
 		}
 		defer conn.Close()
 
+		writeAPIHelloDocker(t, conn)
+
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
 		}
@@ -241,6 +255,8 @@ func TestClient_invalidIncomingJSONDoesNotStopHeartbeats(t *testing.T) {
 		}
 		defer conn.Close()
 
+		writeAPIHelloDocker(t, conn)
+
 		go func() {
 			time.Sleep(40 * time.Millisecond)
 			_ = conn.WriteMessage(websocket.TextMessage, []byte("not-json{{{"))
@@ -298,6 +314,8 @@ func TestClient_SendLogEventSendsFormattedMessage(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+
+		writeAPIHelloDocker(t, conn)
 
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -381,6 +399,8 @@ func TestClient_duplicateCommandIdOnlyOneCommandAck(t *testing.T) {
 			return
 		}
 		defer conn.Close()
+
+		writeAPIHelloDocker(t, conn)
 
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return

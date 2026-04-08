@@ -75,10 +75,11 @@ The image entrypoint runs `/usr/local/bin/agent` with no default shell; pass con
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SM_REALTIME_URL` | **Yes** (prod) | WebSocket URL for the realtime channel. **Production:** `wss://<your-host>/realtime`. **Local dev:** defaults to `ws://localhost:3001/realtime` if unset. |
-| `SM_ENROLLMENT_TOKEN` | **Yes** in production if no saved credential | One-time or rotating enrollment secret from the control plane. After first successful connection, the agent can persist credentials and omit this on later starts. |
-| `NODE_ENV` | Recommended | Set to `production` on real workloads so the agent fails closed without a token or saved credential. |
-| `SM_AGENT_ID` | Optional | Logical agent id (default `agent-local`). After enrollment, saved credentials may override this. |
-| `SM_CREDENTIAL_PATH` | Optional | Filesystem path for the JSON credential file. Default: `~/.service-monitor/agent-credential.json`. |
+| `SM_ENROLLMENT_TOKEN` | **Yes** in production (unless file persistence is enabled — see below) | One-time or rotating enrollment secret from the control plane. **Default (stateless):** keep supplying this via secrets on every start; nothing is written to disk. |
+| `NODE_ENV` | Recommended | Set to `production` on real workloads so the agent fails closed without a token (or without persisted credentials when enabled). |
+| `SM_AGENT_ID` | Optional | Logical agent id (default `agent-local`). When `SM_AGENT_PERSIST_CREDENTIALS=1`, a saved file may override this if you omit `SM_AGENT_ID`. |
+| `SM_AGENT_PERSIST_CREDENTIALS` | Optional | Set to `1` to opt into reading/writing the JSON credential file. **Default is off** (stateless). |
+| `SM_CREDENTIAL_PATH` | Optional | Filesystem path for the JSON credential file when persistence is enabled. Default: `~/.service-monitor/agent-credential.json`. |
 | `SM_DOCKER_SOCKET` | Optional | Path to the Docker API socket (default `/var/run/docker.sock`). |
 | `SM_ENABLE_LOG_STREAMING` | Optional | Set to `0` to disable streaming logs from existing containers on startup. |
 | `SM_AGENT_VERSION` | Optional | Reported agent version in heartbeats (defaults to `0.1.0` in code if unset). |
@@ -87,13 +88,16 @@ The image entrypoint runs `/usr/local/bin/agent` with no default shell; pass con
 
 For `run_cursor_plan` / `run_claude_plan` and related behavior, the agent reads additional variables (timeouts, binary paths, optional container-isolated runners). See [`apps/agent/README.md`](https://github.com/InnKeeperDevOps/kaiad/blob/main/apps/agent/README.md) in the repository for `SM_EXECUTOR_*`, `SM_CURSOR_BIN`, and `SM_CLAUDE_BIN`.
 
-## Enrollment and stored credentials
+## Enrollment and credentials
 
 1. **Create an enrollment token** in the Kaiad UI (Settings) or via the API (`POST /api/v1/agents/enrollment-tokens`) with a valid tenant session.
-2. Set `SM_ENROLLMENT_TOKEN` to that token and `SM_REALTIME_URL` to your control plane realtime URL.
-3. Start the agent. On first successful connection, it writes **`SM_CREDENTIAL_PATH`** (or the default under `~/.service-monitor/`) with `0600` permissions and can reconnect using that file **without** putting the raw token in the environment again.
+2. Set `SM_ENROLLMENT_TOKEN` and `SM_REALTIME_URL` (and usually `SM_AGENT_ID`) via your orchestrator’s secrets or `EnvironmentFile`.
 
-Rotate or revoke tokens at the control plane if a host is compromised; treat the credential file like a secret.
+**Stateless (default):** the agent does not persist enrollment material. Every pod or process restart must receive the same env-configured secrets (or a new token if you rotate).
+
+**Optional file persistence:** set **`SM_AGENT_PERSIST_CREDENTIALS=1`** if you want the legacy behavior: on first successful connection the agent writes **`SM_CREDENTIAL_PATH`** with `0600` permissions and can reload token/id/url from that file on later starts without passing the raw token in the environment.
+
+Rotate or revoke tokens at the control plane if a host is compromised; treat a persisted credential file like a secret.
 
 ## Run with systemd
 
@@ -129,7 +133,7 @@ docker run -d --name kaiad-agent --restart=unless-stopped \
   kaiad-agent:latest
 ```
 
-For a persistent credential file across restarts, mount a host directory and set `SM_CREDENTIAL_PATH=/data/agent-credential.json`.
+For a persistent credential file across restarts, set `SM_AGENT_PERSIST_CREDENTIALS=1`, mount a host directory, and set `SM_CREDENTIAL_PATH=/data/agent-credential.json`.
 
 ## Local development (monorepo)
 

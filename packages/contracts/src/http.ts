@@ -46,13 +46,25 @@ export const automationPolicySchema = z.object({
   actions: z.array(automationActionSchema)
 });
 
+export const agentRuntimeBackendSchema = z.enum(["docker", "kubernetes", "shell"]);
+
+/** How the enrolled agent obtains/runs the workload: clone from GitHub vs binary supplied by Kaiad. */
+export const agentWorkloadSourceSchema = z.enum(["github_repo", "binary"]);
+
 export const tenantSettingsSchema = z.object({
   tenantId: z.string(),
   githubRepo: z.string(),
   defaultBranch: z.string(),
   docsUrl: z.string().url().optional(),
   automationPolicy: automationPolicySchema.optional(),
-  preferredExecutor: z.enum(["cursor", "claude"]).optional()
+  preferredExecutor: z.enum(["cursor", "claude"]).optional(),
+  /** Where the Go agent runs workloads: Docker socket, Kubernetes CLI, or shell-only. */
+  agentRuntimeBackend: agentRuntimeBackendSchema.optional(),
+  /**
+   * Omit (legacy) = treat as GitHub repo mode and ready.
+   * `null` = operator has not finished Kaiad configuration; agent waits for a non-null value.
+   */
+  agentWorkloadSource: z.union([agentWorkloadSourceSchema, z.null()]).optional()
 });
 
 export const githubPolicyCheckRequestSchema = z.object({

@@ -1,0 +1,76 @@
+# Smoke-test the real agent binary against cmd/mock-realtime-server (same as README two-terminal flow).
+# Complements ci.yml `go-agent-tests`, which runs `go test ./...` (in-process httptest mocks).
+
+name: agent-mock-smoke
+
+on:
+  pull_request:
+    paths:
+      - "apps/agent/**"
+      - ".github/workflows/agent-mock-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/agent/**"
+      - ".github/workflows/agent-mock-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: apps/agent/go.sum
+
+      - name: Build mock realtime server and agent
+        run: |
+          go build -o "${RUNNER_TEMP}/mock-realtime-server" ./cmd/mock-realtime-server
+          go build -o "${RUNNER_TEMP}/agent" ./cmd/agent
+
+      - name: Run agent against mock (bounded)
+        env:
+          SM_SKIP_KAIAD_CONFIG_WAIT: "1"
+          SM_REALTIME_URL: "ws://127.0.0.1:3001/realtime"
+          SM_AGENT_ID: "ci-agent-mock-smoke"
+          SM_ENABLE_LOG_STREAMING: "0"
+        run: |
+          set -euo pipefail
+          MOCK_BIN="${RUNNER_TEMP}/mock-realtime-server"
+          AGENT_BIN="${RUNNER_TEMP}/agent"
+          "${MOCK_BIN}" -listen 127.0.0.1:3001 &
+          MOCK_PID=$!
+
+          cleanup() {
+            kill "${MOCK_PID}" 2>/dev/null || true
+            wait "${MOCK_PID}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          # Wait for the listen socket (mock logs and serves HTTP upgrade on /realtime).
+          for _ in $(seq 1 50); do
+            if (echo >/dev/tcp/127.0.0.1/3001) 2>/dev/null; then
+              break
+            fi
+            sleep 0.1
+          done
+
+          set +e
+          timeout 15s "${AGENT_BIN}"
+          AGENT_EXIT=$?
+          set -e
+
+          # 124 = SIGTERM from timeout(1): agent was still running and talking to the mock.
+          if [ "${AGENT_EXIT}" -eq 124 ]; then
+            echo "agent mock smoke ok (stopped after time limit)"
+            exit 0
+          fi
+
+          echo "agent exited unexpectedly with code ${AGENT_EXIT}"
+          exit 1

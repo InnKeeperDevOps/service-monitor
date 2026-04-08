@@ -97,6 +97,7 @@ import {
   upsertTenantSettings
 } from "./store.js";
 import { createNamedQueue, createRedisConnectionFromEnv } from "@sm/queue";
+import { buildRealtimeAgentHello } from "./agentHelloPayload.js";
 import { ensureCoreSchema } from "@sm/db";
 
 const startedAt = Date.now();
@@ -662,7 +663,11 @@ export function buildServer(opts: BuildServerOptions = {}) {
         agentTenantId = "t-1";
       }
 
-      socket.send(JSON.stringify({ type: "hello", service: "realtime" }));
+      let helloSettings: TenantSettings | undefined;
+      if (agentTenantId) {
+        helloSettings = await getTenantSettings(agentTenantId);
+      }
+      socket.send(JSON.stringify(buildRealtimeAgentHello(helloSettings)));
       let registeredAgentId: string | undefined;
 
       socket.on("message", (raw) => {
@@ -707,6 +712,14 @@ export function buildServer(opts: BuildServerOptions = {}) {
           if (msg.tenantId && !agentTenantId) {
             agentTenantId = msg.tenantId;
           }
+        }
+
+        if (msg.type === "host_stats") {
+          if (!registeredAgentId) {
+            registeredAgentId = msg.agentId;
+            realtimeManager.registerAgent({ agentId: msg.agentId, socket }).catch(() => {});
+          }
+          realtimeManager.setHostStats(msg.agentId, parsedJson);
         }
 
         if (msg.type === "command_ack" && registeredAgentId) {
