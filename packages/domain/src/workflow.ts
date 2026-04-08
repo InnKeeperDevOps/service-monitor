@@ -73,7 +73,7 @@ export const WORKFLOW_EVENT_DATA_SPEC: Record<
   agentRestarted: { optionalKeys: [], requiredKeys: [] }
 };
 
-export function isWorkflowEventKind(kind: WorkflowNodeKind): boolean {
+export function isWorkflowEventKind(kind: WorkflowNodeKind): kind is (typeof WORKFLOW_EVENT_KINDS)[number] {
   return EVENT_KIND_SET.has(kind);
 }
 

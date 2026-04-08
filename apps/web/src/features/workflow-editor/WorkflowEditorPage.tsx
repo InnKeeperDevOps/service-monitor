@@ -513,10 +513,6 @@ export function WorkflowEditorPage() {
       setStatusMessage({ type: "error", text: "Edges cannot target event nodes" });
       return;
     }
-    if (sourceNode.data.nodeType === "event" && targetNode.data.nodeType === "event") {
-      setStatusMessage({ type: "error", text: "Event nodes cannot connect to other event nodes" });
-      return;
-    }
     setEdges((current) => {
       const exists = current.some(
         (edge) =>
