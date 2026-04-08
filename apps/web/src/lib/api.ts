@@ -99,19 +99,11 @@ export type MonitoredService = {
 
 export type WorkflowGraphNode = {
   id: string;
+  type: "event" | "action" | "control";
+  kind: string;
   position?: { x: number; y: number };
-} & (
-  | { type: "onBuild"; data?: { displayName?: string } }
-  | { type: "onStartup"; data?: { displayName?: string } }
-  | { type: "onCrash"; data?: { displayName?: string } }
-  | { type: "onShutdown"; data?: { displayName?: string } }
-  | { type: "onLogPattern"; data: { filter: string; displayName?: string } }
-  | { type: "onSchedule"; data: { schedule: string; displayName?: string } }
-  | {
-      type: string;
-      data?: Record<string, unknown>;
-    }
-);
+  data?: Record<string, unknown>;
+};
 
 export type WorkflowGraph = {
   id: string;

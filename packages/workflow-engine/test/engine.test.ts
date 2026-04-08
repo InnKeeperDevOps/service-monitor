@@ -11,9 +11,9 @@ describe("workflow engine", () => {
     expect(() =>
       validateWorkflowGraph(
         [
-          { id: "t", type: "onCrash" },
-          { id: "run", type: "runClaudePlan" },
-          { id: "out", type: "slackNotify" }
+          { id: "t", type: "event", kind: "onCrash" },
+          { id: "run", type: "action", kind: "runClaudePlan" },
+          { id: "out", type: "action", kind: "slackNotify" }
         ],
         [
           { from: "t", to: "run" },
@@ -27,36 +27,38 @@ describe("workflow engine", () => {
     expect(() =>
       validateWorkflowGraph(
         [
-          { id: "a", type: "onCrash" },
-          { id: "b", type: "runShell" }
+          { id: "a", type: "event", kind: "onCrash" },
+          { id: "b", type: "action", kind: "runShell" },
+          { id: "c", type: "control", kind: "loop" }
         ],
         [
           { from: "a", to: "b" },
-          { from: "b", to: "a" }
+          { from: "b", to: "c" },
+          { from: "c", to: "b" }
         ]
       )
     ).toThrow(/cycle/i);
   });
 
-  it("rejects a graph with no trigger nodes", () => {
+  it("rejects a graph with no event nodes", () => {
     expect(() =>
       validateWorkflowGraph(
         [
-          { id: "x", type: "dockerRun" },
-          { id: "y", type: "emailNotify" }
+          { id: "x", type: "action", kind: "dockerRun" },
+          { id: "y", type: "action", kind: "emailNotify" }
         ],
         [{ from: "x", to: "y" }]
       )
-    ).toThrow(/at least one trigger/i);
+    ).toThrow(/at least one event/i);
   });
 
-  it("rejects non-trigger nodes unreachable from any trigger", () => {
+  it("rejects non-event nodes unreachable from any event", () => {
     expect(() =>
       validateWorkflowGraph(
         [
-          { id: "t", type: "onCrash" },
-          { id: "ok", type: "runShell" },
-          { id: "orphan", type: "genericWebhook" }
+          { id: "t", type: "event", kind: "onCrash" },
+          { id: "ok", type: "action", kind: "runShell" },
+          { id: "orphan", type: "action", kind: "genericWebhook" }
         ],
         [
           { from: "t", to: "ok" }
@@ -95,9 +97,9 @@ describe("executeWorkflow", () => {
 
     const result = await executeWorkflow(
       [
-        { id: "t", type: "onCrash" },
-        { id: "sh", type: "runShell" },
-        { id: "notify", type: "slackNotify" }
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "sh", type: "action", kind: "runShell" },
+        { id: "notify", type: "action", kind: "slackNotify" }
       ],
       [
         { from: "t", to: "sh" },
@@ -127,10 +129,10 @@ describe("executeWorkflow", () => {
 
     const result = await executeWorkflow(
       [
-        { id: "t", type: "onSchedule" },
-        { id: "a", type: "runShell" },
-        { id: "b", type: "dockerRun" },
-        { id: "j", type: "join" }
+        { id: "t", type: "event", kind: "onSchedule" },
+        { id: "a", type: "action", kind: "runShell" },
+        { id: "b", type: "action", kind: "dockerRun" },
+        { id: "j", type: "control", kind: "join" }
       ],
       [
         { from: "t", to: "a" },
@@ -166,11 +168,11 @@ describe("executeWorkflow", () => {
 
     const result = await executeWorkflow(
       [
-        { id: "t", type: "onCrash" },
-        { id: "fail-branch", type: "runShell" },
-        { id: "ok-branch", type: "runShell" },
-        { id: "after-fail", type: "slackNotify" },
-        { id: "after-ok", type: "slackNotify" }
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "fail-branch", type: "action", kind: "runShell" },
+        { id: "ok-branch", type: "action", kind: "runShell" },
+        { id: "after-fail", type: "action", kind: "slackNotify" },
+        { id: "after-ok", type: "action", kind: "slackNotify" }
       ],
       [
         { from: "t", to: "fail-branch" },
@@ -203,10 +205,10 @@ describe("executeWorkflow", () => {
 
     const result = await executeWorkflow(
       [
-        { id: "t", type: "onCrash" },
-        { id: "branch", type: "branchIf" },
-        { id: "true-path", type: "runShell" },
-        { id: "false-path", type: "emailNotify" }
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "branch", type: "control", kind: "branchIf" },
+        { id: "true-path", type: "action", kind: "runShell" },
+        { id: "false-path", type: "action", kind: "emailNotify" }
       ],
       [
         { from: "t", to: "branch" },
@@ -236,10 +238,10 @@ describe("executeWorkflow", () => {
 
     const result = await executeWorkflow(
       [
-        { id: "t1", type: "onCrash" },
-        { id: "t2", type: "onStartup" },
-        { id: "shared", type: "runShell" },
-        { id: "notify", type: "slackNotify" }
+        { id: "t1", type: "event", kind: "onCrash" },
+        { id: "t2", type: "event", kind: "onStartup" },
+        { id: "shared", type: "action", kind: "runShell" },
+        { id: "notify", type: "action", kind: "slackNotify" }
       ],
       [
         { from: "t1", to: "shared" },
@@ -257,5 +259,83 @@ describe("executeWorkflow", () => {
     expect(log).toContain("notify");
     expect(result.context.outputs["shared"]).toBe("shared-done");
     expect(result.context.outputs["notify"]).toBe("notify-done");
+  });
+
+  it("marks node as failed when handler is missing", async () => {
+    const result = await executeWorkflow(
+      [
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "a", type: "action", kind: "runShell" }
+      ],
+      [{ from: "t", to: "a" }],
+      {
+        onCrash: async () => ({ success: true, output: "ok" })
+      },
+      makeCtx()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.nodeResults["a"]).toEqual({
+      success: false,
+      output: "No handler for kind: runShell"
+    });
+  });
+
+  it("captures thrown handler errors as failed node results", async () => {
+    const result = await executeWorkflow(
+      [
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "a", type: "action", kind: "runShell" }
+      ],
+      [{ from: "t", to: "a" }],
+      {
+        onCrash: async () => ({ success: true, output: "ok" }),
+        runShell: async () => {
+          throw new Error("boom");
+        }
+      },
+      makeCtx()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.nodeResults["a"]).toEqual({
+      success: false,
+      output: "boom"
+    });
+  });
+
+  it("branchIf false branch executes and true branch is skipped", async () => {
+    const log: string[] = [];
+    const handlers: Record<string, NodeHandler> = {
+      onCrash: trackingHandler(log),
+      branchIf: async (nodeId) => {
+        log.push(nodeId);
+        return { success: true, output: "branched", branchTaken: "false" };
+      },
+      runShell: trackingHandler(log),
+      emailNotify: trackingHandler(log)
+    };
+
+    const result = await executeWorkflow(
+      [
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "branch", type: "control", kind: "branchIf" },
+        { id: "true-path", type: "action", kind: "runShell" },
+        { id: "false-path", type: "action", kind: "emailNotify" }
+      ],
+      [
+        { from: "t", to: "branch" },
+        { from: "branch", to: "true-path" },
+        { from: "branch", to: "false-path" }
+      ],
+      handlers,
+      makeCtx()
+    );
+
+    expect(result.success).toBe(true);
+    expect(log).toContain("false-path");
+    expect(log).not.toContain("true-path");
+    expect(result.context.outputs["false-path"]).toBe("false-path-done");
+    expect(result.context.outputs["true-path"]).toBeUndefined();
   });
 });

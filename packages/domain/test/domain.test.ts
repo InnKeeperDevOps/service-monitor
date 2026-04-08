@@ -30,10 +30,10 @@ describe("domain", () => {
   it("returns topological waves", () => {
     const waves = topologicalWaves(
       [
-        { id: "a", type: "onStartup" },
-        { id: "b", type: "runShell" },
-        { id: "c", type: "dockerRun" },
-        { id: "d", type: "join" }
+        { id: "a", type: "event", kind: "onStartup" },
+        { id: "b", type: "action", kind: "runShell" },
+        { id: "c", type: "action", kind: "dockerRun" },
+        { id: "d", type: "control", kind: "join" }
       ],
       [
         { from: "a", to: "b" },

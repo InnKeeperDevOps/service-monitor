@@ -108,6 +108,15 @@ describe("agents API", () => {
     expect(body.agents).toHaveLength(1);
     expect(body.agents[0]).toMatchObject({ id: "a-seed-1", websocketConnected: false });
   });
+
+  it("lists an agent after recordAgentHeartbeat (simulated realtime enrollment)", async () => {
+    await domainStore.recordAgentHeartbeat("t-1", { agentId: "a-realtime-1", version: "0.3.0" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/agents", headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { agents: { id: string; version: string | null }[] };
+    expect(body.agents).toHaveLength(1);
+    expect(body.agents[0]).toMatchObject({ id: "a-realtime-1", version: "0.3.0" });
+  });
 });
 
 describe("services API", () => {
@@ -164,7 +173,7 @@ describe("services API", () => {
     const svc = await domainStore.createService("t-1", { name: "svc-active", repo: "o/r", branch: "main" });
     const graph = await domainStore.createWorkflowGraph("t-1", {
       serviceId: svc.id,
-      nodes: [{ id: "n1", type: "onCrash" }],
+      nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
       edges: []
     });
 
@@ -194,7 +203,7 @@ describe("workflows API", () => {
       headers: AUTH,
       payload: {
         serviceId: svc.id,
-        nodes: [{ id: "n1", type: "onCrash" }, { id: "n2", type: "runShell" }],
+        nodes: [{ id: "n1", type: "event", kind: "onCrash" }, { id: "n2", type: "action", kind: "runShell" }],
         edges: [{ from: "n1", to: "n2" }]
       }
     });
@@ -210,7 +219,7 @@ describe("workflows API", () => {
     const svc = await domainStore.createService("t-1", { name: "app2", repo: "o/r2", branch: "main" });
     const payload = {
       serviceId: svc.id,
-      nodes: [{ id: "n1", type: "onCrash" }],
+      nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
       edges: []
     };
 
@@ -228,7 +237,7 @@ describe("workflows API", () => {
       headers: AUTH,
       payload: {
         serviceId: svc.id,
-        nodes: [{ id: "n1", type: "onCrash" }],
+        nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
         edges: []
       }
     });
@@ -255,7 +264,7 @@ describe("workflows API", () => {
       headers: AUTH,
       payload: {
         serviceId: svc.id,
-        nodes: [{ id: "n1", type: "onCrash" }, { id: "n2", type: "runShell" }],
+        nodes: [{ id: "n1", type: "event", kind: "onCrash" }, { id: "n2", type: "action", kind: "runShell" }],
         edges: [{ from: "n1", to: "n2" }]
       }
     });
@@ -285,8 +294,8 @@ describe("workflows API", () => {
       payload: {
         serviceId: svc.id,
         nodes: [
-          { id: "n1", type: "onCrash" },
-          { id: "n2", type: "runShell", data: { command: "echo ok" } }
+          { id: "n1", type: "event", kind: "onCrash" },
+          { id: "n2", type: "action", kind: "runShell", data: { command: "echo ok" } }
         ],
         edges: [{ from: "n1", to: "n2" }]
       }
@@ -311,7 +320,7 @@ describe("workflows API", () => {
       headers: AUTH,
       payload: {
         serviceId: svc.id,
-        nodes: [{ id: "n1", type: "onCrash", data: { schedule: "*/5 * * * *" } }],
+        nodes: [{ id: "n1", type: "event", kind: "onCrash", data: { schedule: "*/5 * * * *" } }],
         edges: []
       }
     });

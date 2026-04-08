@@ -1,35 +1,38 @@
-/** MVP workflow node kinds (triggers, actions, control). */
-export const WORKFLOW_NODE_TYPES = [
-  // Triggers
+export const WORKFLOW_NODE_CATEGORIES = ["event", "action", "control"] as const;
+export type WorkflowNodeType = (typeof WORKFLOW_NODE_CATEGORIES)[number];
+
+export const WORKFLOW_EVENT_KINDS = [
   "onBuild",
   "onStartup",
   "onCrash",
   "onShutdown",
   "onLogPattern",
   "onSchedule",
-  // Docker/shell actions
+  "agentStarted",
+  "agentStopped",
+  "agentOnline",
+  "agentOffline",
+  "agentCrashed",
+  "agentRestarted"
+] as const;
+
+export const WORKFLOW_CONTROL_KINDS = ["branchIf", "join", "wait", "if", "loop"] as const;
+
+export const WORKFLOW_ACTION_KINDS = [
   "runShell",
   "dockerBuild",
   "dockerRun",
   "composeUp",
   "composeDown",
-  // Environment
   "setEnv",
   "injectSecret",
-  // Control flow
-  "wait",
-  "join",
-  "branchIf",
   "template",
-  // Remediation
   "runCursorPlan",
   "runClaudePlan",
-  // Integrations
   "httpRequest",
   "slackNotify",
   "emailNotify",
   "genericWebhook",
-  // GitHub
   "clone",
   "checkoutBranch",
   "createPR",
@@ -38,25 +41,22 @@ export const WORKFLOW_NODE_TYPES = [
   "dispatchWorkflow",
   "commentOnPR",
   "createIssue",
-  "addLabels",
+  "addLabels"
 ] as const;
 
-export type WorkflowNodeType = (typeof WORKFLOW_NODE_TYPES)[number];
+export type WorkflowNodeKind =
+  | (typeof WORKFLOW_EVENT_KINDS)[number]
+  | (typeof WORKFLOW_ACTION_KINDS)[number]
+  | (typeof WORKFLOW_CONTROL_KINDS)[number];
 
-export const WORKFLOW_TRIGGER_TYPES = [
-  "onBuild",
-  "onStartup",
-  "onCrash",
-  "onShutdown",
-  "onLogPattern",
-  "onSchedule"
-] as const satisfies readonly WorkflowNodeType[];
-
-const TRIGGER_SET = new Set<string>(WORKFLOW_TRIGGER_TYPES);
+const EVENT_KIND_SET = new Set<string>(WORKFLOW_EVENT_KINDS);
+const ACTION_KIND_SET = new Set<string>(WORKFLOW_ACTION_KINDS);
+const CONTROL_KIND_SET = new Set<string>(WORKFLOW_CONTROL_KINDS);
+const NODE_CATEGORY_SET = new Set<string>(WORKFLOW_NODE_CATEGORIES);
 const CRON_SCHEDULE_REGEX = /^(\S+\s+){4}\S+$/;
 
-export const WORKFLOW_TRIGGER_DATA_SPEC: Record<
-  (typeof WORKFLOW_TRIGGER_TYPES)[number],
+export const WORKFLOW_EVENT_DATA_SPEC: Record<
+  (typeof WORKFLOW_EVENT_KINDS)[number],
   { optionalKeys: readonly string[]; requiredKeys: readonly string[] }
 > = {
   onBuild: { optionalKeys: [], requiredKeys: [] },
@@ -64,21 +64,50 @@ export const WORKFLOW_TRIGGER_DATA_SPEC: Record<
   onCrash: { optionalKeys: [], requiredKeys: [] },
   onShutdown: { optionalKeys: [], requiredKeys: [] },
   onLogPattern: { optionalKeys: [], requiredKeys: ["filter"] },
-  onSchedule: { optionalKeys: [], requiredKeys: ["schedule"] }
+  onSchedule: { optionalKeys: [], requiredKeys: ["schedule"] },
+  agentStarted: { optionalKeys: [], requiredKeys: [] },
+  agentStopped: { optionalKeys: [], requiredKeys: [] },
+  agentOnline: { optionalKeys: [], requiredKeys: [] },
+  agentOffline: { optionalKeys: [], requiredKeys: [] },
+  agentCrashed: { optionalKeys: [], requiredKeys: [] },
+  agentRestarted: { optionalKeys: [], requiredKeys: [] }
 };
 
-export function isWorkflowTriggerType(type: WorkflowNodeType): boolean {
-  return TRIGGER_SET.has(type);
+export function isWorkflowEventKind(kind: WorkflowNodeKind): boolean {
+  return EVENT_KIND_SET.has(kind);
 }
 
-export function allowedTriggerDataKeys(type: (typeof WORKFLOW_TRIGGER_TYPES)[number]): Set<string> {
-  const spec = WORKFLOW_TRIGGER_DATA_SPEC[type];
+export function allowedEventDataKeys(kind: (typeof WORKFLOW_EVENT_KINDS)[number]): Set<string> {
+  const spec = WORKFLOW_EVENT_DATA_SPEC[kind];
   return new Set(["displayName", ...spec.optionalKeys, ...spec.requiredKeys]);
+}
+
+/** Backward-compatible aliases for code paths not yet migrated. */
+export const WORKFLOW_NODE_TYPES = [
+  ...WORKFLOW_EVENT_KINDS,
+  ...WORKFLOW_ACTION_KINDS,
+  ...WORKFLOW_CONTROL_KINDS
+] as const;
+export const WORKFLOW_TRIGGER_TYPES = [
+  "onBuild",
+  "onStartup",
+  "onCrash",
+  "onShutdown",
+  "onLogPattern",
+  "onSchedule"
+] as const;
+export const WORKFLOW_TRIGGER_DATA_SPEC = WORKFLOW_EVENT_DATA_SPEC;
+export function isWorkflowTriggerType(kind: WorkflowNodeKind): boolean {
+  return new Set<string>(WORKFLOW_TRIGGER_TYPES).has(kind);
+}
+export function allowedTriggerDataKeys(kind: (typeof WORKFLOW_TRIGGER_TYPES)[number]): Set<string> {
+  return allowedEventDataKeys(kind);
 }
 
 export interface WorkflowNode {
   id: string;
   type: WorkflowNodeType;
+  kind: WorkflowNodeKind;
   position?: { x: number; y: number };
   data?: Record<string, unknown>;
 }
@@ -95,8 +124,6 @@ export interface WorkflowValidationError {
   edgeIndex?: number;
 }
 
-const NODE_TYPE_SET = new Set<string>(WORKFLOW_NODE_TYPES);
-
 export function validateWorkflowGraph(
   nodes: WorkflowNode[],
   edges: WorkflowEdge[]
@@ -109,44 +136,64 @@ export function validateWorkflowGraph(
   }
 
   const nodeIds = new Set(nodes.map((n) => n.id));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
 
   for (const node of nodes) {
-    if (!NODE_TYPE_SET.has(node.type)) {
+    if (!NODE_CATEGORY_SET.has(node.type)) {
       errors.push({ code: "INVALID_NODE_TYPE", message: `Unknown node type "${node.type}"`, nodeId: node.id });
+      continue;
     }
 
-    if (TRIGGER_SET.has(node.type)) {
-      const triggerType = node.type as (typeof WORKFLOW_TRIGGER_TYPES)[number];
-      const allowedKeys = allowedTriggerDataKeys(triggerType);
+    if (!node.kind) {
+      errors.push({ code: "INVALID_NODE_KIND", message: `Node "${node.id}" is missing required "kind"`, nodeId: node.id });
+      continue;
+    }
+
+    if (
+      (node.type === "event" && !EVENT_KIND_SET.has(node.kind)) ||
+      (node.type === "action" && !ACTION_KIND_SET.has(node.kind)) ||
+      (node.type === "control" && !CONTROL_KIND_SET.has(node.kind))
+    ) {
+      errors.push({
+        code: "INVALID_NODE_KIND",
+        message: `Node "${node.id}" has kind "${node.kind}" incompatible with type "${node.type}"`,
+        nodeId: node.id
+      });
+      continue;
+    }
+
+    if (node.type === "event") {
+      const eventKind = node.kind as (typeof WORKFLOW_EVENT_KINDS)[number];
+      const allowedKeys = allowedEventDataKeys(eventKind);
       const data = node.data ?? {};
       for (const key of Object.keys(data)) {
         if (!allowedKeys.has(key)) {
           errors.push({
-            code: "INVALID_TRIGGER_DATA",
-            message: `Trigger "${node.type}" does not allow data key "${key}"`,
+            code: "INVALID_EVENT_DATA",
+            message: `Event "${node.kind}" does not allow data key "${key}"`,
             nodeId: node.id
           });
         }
       }
 
-      const spec = WORKFLOW_TRIGGER_DATA_SPEC[triggerType];
+      const spec = WORKFLOW_EVENT_DATA_SPEC[eventKind];
       for (const requiredKey of spec.requiredKeys) {
         const value = data[requiredKey];
         if (typeof value !== "string" || value.trim().length === 0) {
           errors.push({
-            code: "MISSING_TRIGGER_DATA",
-            message: `Trigger "${node.type}" requires non-empty "${requiredKey}"`,
+            code: "MISSING_EVENT_DATA",
+            message: `Event "${node.kind}" requires non-empty "${requiredKey}"`,
             nodeId: node.id
           });
         }
       }
 
-      if (triggerType === "onSchedule") {
+      if (eventKind === "onSchedule") {
         const scheduleValue = data.schedule;
         if (typeof scheduleValue === "string" && scheduleValue.trim().length > 0 && !CRON_SCHEDULE_REGEX.test(scheduleValue.trim())) {
           errors.push({
-            code: "INVALID_TRIGGER_DATA",
-            message: `Trigger "onSchedule" has invalid cron schedule "${scheduleValue}"`,
+            code: "INVALID_EVENT_DATA",
+            message: `Event "onSchedule" has invalid cron schedule "${scheduleValue}"`,
             nodeId: node.id
           });
         }
@@ -154,9 +201,9 @@ export function validateWorkflowGraph(
     }
   }
 
-  const hasTrigger = nodes.some((n) => TRIGGER_SET.has(n.type));
-  if (!hasTrigger) {
-    errors.push({ code: "NO_TRIGGER", message: "Workflow must contain at least one trigger node" });
+  const hasEvent = nodes.some((n) => n.type === "event");
+  if (!hasEvent) {
+    errors.push({ code: "NO_EVENT", message: "Workflow must contain at least one event node" });
   }
 
   for (let i = 0; i < edges.length; i++) {
@@ -166,6 +213,28 @@ export function validateWorkflowGraph(
     }
     if (!nodeIds.has(edge.to)) {
       errors.push({ code: "DANGLING_EDGE", message: `Edge target "${edge.to}" does not match any node`, edgeIndex: i });
+    }
+    const sourceNode = nodeById.get(edge.from);
+    const targetNode = nodeById.get(edge.to);
+    if (!sourceNode || !targetNode) {
+      continue;
+    }
+
+    if (sourceNode.type === "event" && targetNode.type === "event") {
+      errors.push({
+        code: "INVALID_EDGE_DIRECTION",
+        message: `Event node "${edge.from}" cannot connect to event node "${edge.to}"`,
+        edgeIndex: i
+      });
+      continue;
+    }
+
+    if (targetNode.type === "event") {
+      errors.push({
+        code: "INVALID_EDGE_DIRECTION",
+        message: `Edges cannot target event node "${edge.to}"`,
+        edgeIndex: i
+      });
     }
   }
 
@@ -185,10 +254,10 @@ export function validateWorkflowGraph(
 
   const reachable = new Set<string>();
   const queue: string[] = [];
-  for (const trigger of nodes) {
-    if (TRIGGER_SET.has(trigger.type) && !reachable.has(trigger.id)) {
-      reachable.add(trigger.id);
-      queue.push(trigger.id);
+  for (const eventNode of nodes) {
+    if (eventNode.type === "event" && !reachable.has(eventNode.id)) {
+      reachable.add(eventNode.id);
+      queue.push(eventNode.id);
     }
   }
 
@@ -203,10 +272,10 @@ export function validateWorkflowGraph(
   }
 
   for (const node of nodes) {
-    if (!TRIGGER_SET.has(node.type) && !reachable.has(node.id)) {
+    if (node.type !== "event" && !reachable.has(node.id)) {
       errors.push({
         code: "UNREACHABLE_NODE",
-        message: `Node "${node.id}" is not reachable from any trigger`,
+        message: `Node "${node.id}" is not reachable from any event`,
         nodeId: node.id
       });
     }

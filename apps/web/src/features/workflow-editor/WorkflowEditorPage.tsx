@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useMemo, type DragEvent } from "react";
 import {
-  allowedTriggerDataKeys,
+  allowedEventDataKeys,
+  WORKFLOW_ACTION_KINDS,
+  WORKFLOW_CONTROL_KINDS,
+  WORKFLOW_EVENT_KINDS,
   WORKFLOW_NODE_TYPES,
-  WORKFLOW_TRIGGER_TYPES,
-  isWorkflowTriggerType,
+  isWorkflowEventKind,
   validateWorkflowGraph,
   type WorkflowNode,
+  type WorkflowNodeKind,
   type WorkflowNodeType
 } from "@sm/domain";
 import {
@@ -28,36 +31,10 @@ import { api, type WorkflowGraph, type WorkflowGraphNode, type MonitoredService 
 import { Button } from "../../components/Button.js";
 import { Input } from "../../components/Input.js";
 
-const MVP_PALETTE: { title: string; types: readonly WorkflowNodeType[] }[] = [
-  { title: "Triggers", types: WORKFLOW_TRIGGER_TYPES },
-  {
-    title: "Actions",
-    types: [
-      "runCursorPlan",
-      "runClaudePlan",
-      "dockerRun",
-      "dockerBuild",
-      "runShell",
-      "composeUp",
-      "composeDown"
-    ]
-  },
-  { title: "Control", types: ["branchIf", "join", "wait", "setEnv", "injectSecret", "template"] },
-  {
-    title: "Integration",
-    types: [
-      "httpRequest",
-      "slackNotify",
-      "emailNotify",
-      "genericWebhook",
-      "clone",
-      "checkoutBranch",
-      "createPR",
-      "mergePR",
-      "push",
-      "dispatchWorkflow"
-    ]
-  }
+const MVP_PALETTE: { title: string; types: readonly WorkflowNodeKind[] }[] = [
+  { title: "Events", types: WORKFLOW_EVENT_KINDS },
+  { title: "Control", types: WORKFLOW_CONTROL_KINDS },
+  { title: "Actions", types: WORKFLOW_ACTION_KINDS }
 ];
 
 const DEFERRED_PALETTE: { title: string; types: string[] }[] = [
@@ -66,6 +43,7 @@ const DEFERRED_PALETTE: { title: string; types: string[] }[] = [
 ];
 
 type WorkflowEditorNodeData = {
+  nodeKind: WorkflowNodeKind;
   nodeType: WorkflowNodeType;
   label: string;
   displayName?: string;
@@ -82,14 +60,16 @@ type WorkflowEditorNodeData = {
 };
 
 const NODE_TYPE_SET = new Set<string>(WORKFLOW_NODE_TYPES);
+const EVENT_KIND_SET = new Set<string>(WORKFLOW_EVENT_KINDS);
+const CONTROL_KIND_SET = new Set<string>(WORKFLOW_CONTROL_KINDS);
 
 const INITIAL_NODES: Node<WorkflowEditorNodeData>[] = [
-  { id: "t1", position: { x: 0, y: 120 }, data: { nodeType: "onCrash", label: "onCrash" } },
-  { id: "br", position: { x: 220, y: 120 }, data: { nodeType: "branchIf", label: "branchIf", condition: "severity=critical" } },
-  { id: "p1", position: { x: 460, y: 30 }, data: { nodeType: "runCursorPlan", label: "runCursorPlan" } },
-  { id: "p2", position: { x: 460, y: 220 }, data: { nodeType: "runClaudePlan", label: "runClaudePlan" } },
-  { id: "jn", position: { x: 700, y: 120 }, data: { nodeType: "join", label: "join" } },
-  { id: "sl", position: { x: 920, y: 120 }, data: { nodeType: "slackNotify", label: "slackNotify", channel: "#alerts" } }
+  { id: "t1", position: { x: 0, y: 120 }, data: { nodeType: "event", nodeKind: "onCrash", label: "onCrash" } },
+  { id: "br", position: { x: 220, y: 120 }, data: { nodeType: "control", nodeKind: "branchIf", label: "branchIf", condition: "severity=critical" } },
+  { id: "p1", position: { x: 460, y: 30 }, data: { nodeType: "action", nodeKind: "runCursorPlan", label: "runCursorPlan" } },
+  { id: "p2", position: { x: 460, y: 220 }, data: { nodeType: "action", nodeKind: "runClaudePlan", label: "runClaudePlan" } },
+  { id: "jn", position: { x: 700, y: 120 }, data: { nodeType: "control", nodeKind: "join", label: "join" } },
+  { id: "sl", position: { x: 920, y: 120 }, data: { nodeType: "action", nodeKind: "slackNotify", label: "slackNotify", channel: "#alerts" } }
 ];
 
 const INITIAL_EDGES: Edge[] = [
@@ -103,16 +83,26 @@ const INITIAL_EDGES: Edge[] = [
 
 const TRIGGER_PARAM_KEYS = new Set(["filter", "schedule"]);
 
-function isTriggerNodeType(nodeType: WorkflowNodeType): nodeType is (typeof WORKFLOW_TRIGGER_TYPES)[number] {
-  return isWorkflowTriggerType(nodeType);
+function isWorkflowNodeKind(value: string): value is WorkflowNodeKind {
+  return NODE_TYPE_SET.has(value);
 }
 
-function sanitizeDataForNodeType(nodeType: WorkflowNodeType, data: WorkflowEditorNodeData): WorkflowEditorNodeData {
+function resolveNodeTypeFromKind(nodeKind: WorkflowNodeKind): WorkflowNodeType {
+  if (EVENT_KIND_SET.has(nodeKind)) {
+    return "event";
+  }
+  if (CONTROL_KIND_SET.has(nodeKind)) {
+    return "control";
+  }
+  return "action";
+}
+
+function sanitizeDataForNode(nodeType: WorkflowNodeType, nodeKind: WorkflowNodeKind, data: WorkflowEditorNodeData): WorkflowEditorNodeData {
   const nextData = { ...data };
-  if (isTriggerNodeType(nodeType)) {
-    const allowedKeys = allowedTriggerDataKeys(nodeType);
+  if (nodeType === "event" && isWorkflowEventKind(nodeKind)) {
+    const allowedKeys = allowedEventDataKeys(nodeKind);
     for (const key of Object.keys(nextData)) {
-      if (key === "nodeType" || key === "label") {
+      if (key === "nodeType" || key === "nodeKind" || key === "label") {
         continue;
       }
       if (!allowedKeys.has(key)) {
@@ -129,11 +119,11 @@ function sanitizeDataForNodeType(nodeType: WorkflowNodeType, data: WorkflowEdito
 
 function getNodeLabel(data: WorkflowEditorNodeData): string {
   const custom = typeof data.displayName === "string" ? data.displayName.trim() : "";
-  return custom.length > 0 ? custom : data.nodeType;
+  return custom.length > 0 ? custom : data.nodeKind;
 }
 
 function sanitizeNodeData(data: WorkflowEditorNodeData): Record<string, unknown> | undefined {
-  const { nodeType, label: _label, ...rest } = data;
+  const { nodeType: _nodeType, nodeKind: _nodeKind, label: _label, ...rest } = data;
   const entries = Object.entries(rest).filter(([, value]) => value !== undefined && value !== null && value !== "");
   if (entries.length === 0) {
     return undefined;
@@ -141,14 +131,11 @@ function sanitizeNodeData(data: WorkflowEditorNodeData): Record<string, unknown>
   return Object.fromEntries(entries);
 }
 
-function isWorkflowNodeType(value: string): value is WorkflowNodeType {
-  return NODE_TYPE_SET.has(value);
-}
-
 function toDomainNodes(nodes: Node<WorkflowEditorNodeData>[]): WorkflowNode[] {
   return nodes.map((n) => ({
     id: n.id,
     type: n.data.nodeType,
+    kind: n.data.nodeKind,
     position: n.position,
     data: sanitizeNodeData(n.data)
   }));
@@ -158,6 +145,7 @@ function toWorkflowNodes(nodes: Node<WorkflowEditorNodeData>[]): WorkflowGraphNo
   return nodes.map((n) => ({
     id: n.id,
     type: n.data.nodeType,
+    kind: n.data.nodeKind,
     position: n.position,
     data: sanitizeNodeData(n.data)
   }));
@@ -290,14 +278,16 @@ export function WorkflowEditorPage() {
 
       setNodes(
         graph.nodes.map((n, i) => {
-          const nodeType = isWorkflowNodeType(n.type) ? n.type : "runShell";
+          const nodeType: WorkflowNodeType = n.type;
+          const nodeKind = isWorkflowNodeKind(n.kind) ? n.kind : "runShell";
           const data = (n.data ?? {}) as Record<string, unknown>;
           const displayName = typeof data.displayName === "string" ? data.displayName : "";
           const mergedData: WorkflowEditorNodeData = {
             ...data,
             nodeType,
+            nodeKind,
             displayName,
-            label: displayName.trim() || nodeType
+            label: displayName.trim() || nodeKind
           };
           return {
           id: n.id,
@@ -421,7 +411,7 @@ export function WorkflowEditorPage() {
     (e: DragEvent) => {
       e.preventDefault();
       const nodeType = e.dataTransfer.getData("application/reactflow");
-      if (!nodeType) return;
+      if (!nodeType || !isWorkflowNodeKind(nodeType)) return;
 
       const position = reactFlow
         ? reactFlow.screenToFlowPosition({ x: e.clientX, y: e.clientY })
@@ -432,7 +422,8 @@ export function WorkflowEditorPage() {
         id: newId,
         position,
         data: {
-          nodeType: nodeType as WorkflowNodeType,
+          nodeType: resolveNodeTypeFromKind(nodeType),
+          nodeKind: nodeType,
           label: nodeType
         },
       };
@@ -463,9 +454,10 @@ export function WorkflowEditorPage() {
         n.id === nodeId
           ? (() => {
             let nextData = { ...n.data, [key]: value } as WorkflowEditorNodeData;
-            if (key === "nodeType") {
-              const nextType = value as WorkflowNodeType;
-              nextData = sanitizeDataForNodeType(nextType, { ...nextData, nodeType: nextType });
+            if (key === "nodeKind") {
+              const nextKind = value as WorkflowNodeKind;
+              const nextType = resolveNodeTypeFromKind(nextKind);
+              nextData = sanitizeDataForNode(nextType, nextKind, { ...nextData, nodeType: nextType, nodeKind: nextKind });
             }
             nextData.label = getNodeLabel(nextData);
             return { ...n, data: nextData };
@@ -512,6 +504,19 @@ export function WorkflowEditorPage() {
     if (connection.source === connection.target) {
       return;
     }
+    const sourceNode = nodes.find((node) => node.id === connection.source);
+    const targetNode = nodes.find((node) => node.id === connection.target);
+    if (!sourceNode || !targetNode) {
+      return;
+    }
+    if (targetNode.data.nodeType === "event") {
+      setStatusMessage({ type: "error", text: "Edges cannot target event nodes" });
+      return;
+    }
+    if (sourceNode.data.nodeType === "event" && targetNode.data.nodeType === "event") {
+      setStatusMessage({ type: "error", text: "Event nodes cannot connect to other event nodes" });
+      return;
+    }
     setEdges((current) => {
       const exists = current.some(
         (edge) =>
@@ -525,7 +530,7 @@ export function WorkflowEditorPage() {
       }
       return addEdge({ ...connection, id: `e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }, current);
     });
-  }, []);
+  }, [nodes]);
 
   const handleDeleteSelectedNode = useCallback(() => {
     if (!selectedNodeId) return;
@@ -707,9 +712,9 @@ function NodeConfigPanel({
   onDisconnectNode: () => void;
   onClose: () => void;
 }) {
-  const nodeType = node.data.nodeType;
-  const showFilterField = nodeType === "onLogPattern";
-  const showScheduleField = nodeType === "onSchedule";
+  const nodeKind = node.data.nodeKind;
+  const showFilterField = nodeKind === "onLogPattern";
+  const showScheduleField = nodeKind === "onSchedule";
 
   return (
     <div>
@@ -732,10 +737,10 @@ function NodeConfigPanel({
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
         <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-          <span style={{ color: "var(--color-text-secondary)" }}>Node type</span>
+          <span style={{ color: "var(--color-text-secondary)" }}>Node kind</span>
           <select
-            value={String(node.data.nodeType)}
-            onChange={(e) => onUpdate(node.id, "nodeType", e.target.value)}
+            value={String(node.data.nodeKind)}
+            onChange={(e) => onUpdate(node.id, "nodeKind", e.target.value)}
             style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.3rem", background: "var(--color-surface)", color: "var(--color-text-primary)" }}
           >
             {WORKFLOW_NODE_TYPES.map((nodeType) => (
@@ -745,11 +750,14 @@ function NodeConfigPanel({
             ))}
           </select>
         </label>
+        <div style={{ color: "var(--color-text-secondary)", fontSize: "0.75rem" }}>
+          Category: <strong>{node.data.nodeType}</strong>
+        </div>
         <Input
           label="Display name"
           value={String(node.data.displayName ?? "")}
           onChange={(e) => onUpdate(node.id, "displayName", e.target.value)}
-          placeholder={String(node.data.nodeType)}
+          placeholder={String(node.data.nodeKind)}
         />
         {showFilterField && (
           <Input
@@ -767,7 +775,7 @@ function NodeConfigPanel({
             onChange={(e) => onUpdate(node.id, "schedule", e.target.value)}
           />
         )}
-        {node.data.nodeType === "runShell" && (
+        {node.data.nodeKind === "runShell" && (
           <Input
             label="Command"
             placeholder="npm test"
@@ -775,7 +783,7 @@ function NodeConfigPanel({
             onChange={(e) => onUpdate(node.id, "command", e.target.value)}
           />
         )}
-        {node.data.nodeType === "httpRequest" && (
+        {node.data.nodeKind === "httpRequest" && (
           <>
             <Input
               label="HTTP method"
@@ -791,7 +799,7 @@ function NodeConfigPanel({
             />
           </>
         )}
-        {node.data.nodeType === "slackNotify" && (
+        {node.data.nodeKind === "slackNotify" && (
           <>
             <Input
               label="Channel"
@@ -807,7 +815,7 @@ function NodeConfigPanel({
             />
           </>
         )}
-        {node.data.nodeType === "branchIf" && (
+        {(node.data.nodeKind === "branchIf" || node.data.nodeKind === "if" || node.data.nodeKind === "loop") && (
           <Input
             label="Condition"
             placeholder="severity=critical"
@@ -815,7 +823,7 @@ function NodeConfigPanel({
             onChange={(e) => onUpdate(node.id, "condition", e.target.value)}
           />
         )}
-        {node.data.nodeType === "template" && (
+        {node.data.nodeKind === "template" && (
           <Input
             label="Template"
             placeholder="{{ incident.message }}"

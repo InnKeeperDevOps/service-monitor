@@ -548,18 +548,19 @@ describe("http.ts", () => {
   });
 
   describe("workflowGraphNodeSchema", () => {
-    it("accepts node with optional data", () => {
+    it("accepts node with type and kind", () => {
       expect(() =>
         workflowGraphNodeSchema.parse({
           id: "n1",
-          type: "step",
+          type: "action",
+          kind: "runShell",
           data: { label: "Build" }
         })
       ).not.toThrow();
     });
 
-    it("rejects missing id", () => {
-      expect(() => workflowGraphNodeSchema.parse({ type: "step" })).toThrow();
+    it("rejects missing kind", () => {
+      expect(() => workflowGraphNodeSchema.parse({ id: "n1", type: "action" })).toThrow();
     });
   });
 
@@ -576,7 +577,7 @@ describe("http.ts", () => {
   });
 
   describe("workflowGraphSchema", () => {
-    const baseNodes = [{ id: "n1", type: "start" }];
+    const baseNodes = [{ id: "n1", type: "event", kind: "onCrash" }];
     const baseEdges = [{ from: "n1", to: "n2" }];
 
     it("accepts graph", () => {
@@ -613,7 +614,8 @@ describe("http.ts", () => {
       expect(() =>
         workflowGraphNodeSchema.parse({
           id: "n1",
-          type: "onSchedule",
+          type: "event",
+          kind: "onSchedule",
           data: { schedule: "*/5 * * * *" }
         })
       ).not.toThrow();
@@ -623,7 +625,8 @@ describe("http.ts", () => {
       expect(() =>
         workflowGraphNodeSchema.parse({
           id: "n1",
-          type: "onCrash",
+          type: "event",
+          kind: "onCrash",
           data: { schedule: "*/5 * * * *" }
         })
       ).toThrow();
@@ -633,7 +636,8 @@ describe("http.ts", () => {
       expect(() =>
         workflowGraphNodeSchema.parse({
           id: "n1",
-          type: "onLogPattern",
+          type: "event",
+          kind: "onLogPattern",
           data: {}
         })
       ).toThrow();
@@ -645,7 +649,7 @@ describe("http.ts", () => {
       expect(() =>
         createWorkflowGraphRequestSchema.parse({
           serviceId: "svc-1",
-          nodes: [{ id: "n1", type: "start" }],
+          nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
           edges: []
         })
       ).not.toThrow();
@@ -671,7 +675,7 @@ describe("http.ts", () => {
               tenantId: "t-1",
               serviceId: "svc-1",
               version: 1,
-              nodes: [{ id: "n1", type: "start" }],
+              nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
               edges: [],
               isActive: true
             }
@@ -694,7 +698,7 @@ describe("http.ts", () => {
       expect(() =>
         executeWorkflowRequestSchema.parse({
           serviceId: "svc-1",
-          nodes: [{ id: "n1", type: "onCrash" }],
+          nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
           edges: []
         })
       ).not.toThrow();

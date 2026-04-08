@@ -70,9 +70,9 @@ export async function executeWorkflow(
           return;
         }
 
-        const handler = handlers[node.type];
+        const handler = handlers[node.kind];
         if (!handler) {
-          const result: NodeResult = { success: false, output: `No handler for type: ${node.type}` };
+          const result: NodeResult = { success: false, output: `No handler for kind: ${node.kind}` };
           nodeResults[nodeId] = result;
           failed.add(nodeId);
           return;
@@ -87,7 +87,7 @@ export async function executeWorkflow(
             failed.add(nodeId);
           }
 
-          if (node.type === "branchIf" && result.branchTaken) {
+          if (node.kind === "branchIf" && result.branchTaken) {
             const targets = outgoing.get(nodeId) ?? [];
             const takenIndex = result.branchTaken === "true" ? 0 : 1;
             for (let i = 0; i < targets.length; i++) {

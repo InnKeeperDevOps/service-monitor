@@ -49,6 +49,7 @@ import {
   topologicalWaves,
   validateWorkflowGraph as validateDomainWorkflowGraph,
   type WorkflowNode,
+  type WorkflowNodeKind,
   type WorkflowNodeType
 } from "@sm/domain";
 import { fetchGithubAppSlug, getInstallationMetadata, GitHubAppClient } from "@sm/github";
@@ -101,7 +102,7 @@ import { buildRealtimeAgentHello } from "./agentHelloPayload.js";
 import { ensureCoreSchema } from "@sm/db";
 
 const startedAt = Date.now();
-const WORKFLOW_NODE_TYPE_SET = new Set<string>(WORKFLOW_NODE_TYPES);
+const WORKFLOW_NODE_KIND_SET = new Set<string>(WORKFLOW_NODE_TYPES);
 
 async function buildMeResponse(store: AuthStore, session: SessionInfo) {
   let rows = await store.findMembershipsWithTenants(session.id);
@@ -129,11 +130,12 @@ async function buildMeResponse(store: AuthStore, session: SessionInfo) {
 }
 
 function toEngineWorkflowNodes(
-  nodes: Array<{ id: string; type: string; data?: Record<string, unknown>; position?: { x: number; y: number } }>
+  nodes: Array<{ id: string; type: string; kind: string; data?: Record<string, unknown>; position?: { x: number; y: number } }>
 ): WorkflowNode[] {
   return nodes.map((node) => ({
     id: node.id,
     type: node.type as WorkflowNodeType,
+    kind: node.kind as WorkflowNodeKind,
     data: node.data,
     position: node.position
   }));
@@ -147,11 +149,11 @@ type DryRunNodeResult = {
 
 type DryRunHandler = (nodeId: string, node: WorkflowNode) => Promise<DryRunNodeResult>;
 
-function createDryRunHandlers(): Record<WorkflowNodeType, DryRunHandler> {
-  const handlers = {} as Record<WorkflowNodeType, DryRunHandler>;
-  for (const nodeType of WORKFLOW_NODE_TYPES) {
-    handlers[nodeType] = async (nodeId, node) => {
-      if (node.type === "branchIf") {
+function createDryRunHandlers(): Record<WorkflowNodeKind, DryRunHandler> {
+  const handlers = {} as Record<WorkflowNodeKind, DryRunHandler>;
+  for (const nodeKind of WORKFLOW_NODE_TYPES) {
+    handlers[nodeKind] = async (nodeId, node) => {
+      if (node.kind === "branchIf") {
         const condition = String(node.data?.condition ?? "").trim().toLowerCase();
         const truthy = condition.length > 0 && condition !== "false" && condition !== "0";
         return {
@@ -160,16 +162,16 @@ function createDryRunHandlers(): Record<WorkflowNodeType, DryRunHandler> {
           output: `Dry run branch "${truthy ? "true" : "false"}" selected`
         };
       }
-      if (node.type === "runShell") {
+      if (node.kind === "runShell") {
         const command = String(node.data?.command ?? "echo hello").trim();
         return { success: true, output: `Dry run would execute: ${command}` };
       }
-      if (node.type === "httpRequest") {
+      if (node.kind === "httpRequest") {
         const method = String(node.data?.method ?? "GET").toUpperCase();
         const url = String(node.data?.url ?? "https://example.com");
         return { success: true, output: `Dry run would request: ${method} ${url}` };
       }
-      return { success: true, output: `Dry run executed ${node.type} (${nodeId})` };
+      return { success: true, output: `Dry run executed ${node.kind} (${nodeId})` };
     };
   }
   return handlers;
@@ -178,7 +180,7 @@ function createDryRunHandlers(): Record<WorkflowNodeType, DryRunHandler> {
 async function executeDryRunGraph(
   nodes: WorkflowNode[],
   edges: Array<{ from: string; to: string }>,
-  handlers: Record<WorkflowNodeType, DryRunHandler>
+  handlers: Record<WorkflowNodeKind, DryRunHandler>
 ): Promise<{ success: boolean; nodeResults: Record<string, DryRunNodeResult> }> {
   const nodeResults: Record<string, DryRunNodeResult> = {};
   const failed = new Set<string>();
@@ -214,9 +216,9 @@ async function executeDryRunGraph(
             return;
           }
 
-          const handler = handlers[node.type];
+          const handler = handlers[node.kind];
           if (!handler) {
-            nodeResults[nodeId] = { success: false, output: `No dry-run handler for ${node.type}` };
+            nodeResults[nodeId] = { success: false, output: `No dry-run handler for ${node.kind}` };
             failed.add(nodeId);
             return;
           }
@@ -228,7 +230,7 @@ async function executeDryRunGraph(
             return;
           }
 
-          if (node.type === "branchIf" && result.branchTaken) {
+          if (node.kind === "branchIf" && result.branchTaken) {
             const targets = outgoing.get(nodeId) ?? [];
             const takenIndex = result.branchTaken === "true" ? 0 : 1;
             for (let i = 0; i < targets.length; i++) {
@@ -453,6 +455,9 @@ function createLazyDomainStore(resolve: () => Promise<DomainStore>): DomainStore
       get().then((s) => s.updateIncidentStatus(tenantId, id, status)),
     listAgents: (tenantId) => get().then((s) => s.listAgents(tenantId)),
     getAgent: (tenantId, id) => get().then((s) => s.getAgent(tenantId, id)),
+    recordAgentHeartbeat: (tenantId, data) =>
+      get().then((s) => s.recordAgentHeartbeat(tenantId, data)),
+    markAgentOffline: (tenantId, agentId) => get().then((s) => s.markAgentOffline(tenantId, agentId)),
     listServices: (tenantId) => get().then((s) => s.listServices(tenantId)),
     getService: (tenantId, id) => get().then((s) => s.getService(tenantId, id)),
     createService: (tenantId, data) => get().then((s) => s.createService(tenantId, data)),
@@ -705,16 +710,36 @@ export function buildServer(opts: BuildServerOptions = {}) {
         const msg: AgentToPlatformMessage = parsed.data;
 
         if (msg.type === "heartbeat") {
+          if (msg.tenantId && !agentTenantId) {
+            agentTenantId = msg.tenantId;
+          }
+          const tenantForStore = agentTenantId;
+          if (
+            tenantForStore &&
+            (!msg.tenantId || msg.tenantId === tenantForStore)
+          ) {
+            void domainStore
+              .recordAgentHeartbeat(tenantForStore, {
+                agentId: msg.agentId,
+                version: msg.agentVersion ?? null
+              })
+              .catch(() => {});
+          }
           if (!registeredAgentId) {
             registeredAgentId = msg.agentId;
             realtimeManager.registerAgent({ agentId: msg.agentId, socket }).catch(() => {});
           }
-          if (msg.tenantId && !agentTenantId) {
-            agentTenantId = msg.tenantId;
-          }
         }
 
         if (msg.type === "host_stats") {
+          if (agentTenantId) {
+            void domainStore
+              .recordAgentHeartbeat(agentTenantId, {
+                agentId: msg.agentId,
+                version: null
+              })
+              .catch(() => {});
+          }
           if (!registeredAgentId) {
             registeredAgentId = msg.agentId;
             realtimeManager.registerAgent({ agentId: msg.agentId, socket }).catch(() => {});
@@ -747,6 +772,9 @@ export function buildServer(opts: BuildServerOptions = {}) {
       socket.on("close", () => {
         if (registeredAgentId) {
           realtimeManager.unregisterAgent(registeredAgentId);
+          if (agentTenantId) {
+            void domainStore.markAgentOffline(agentTenantId, registeredAgentId).catch(() => {});
+          }
         }
       });
     });
@@ -1936,12 +1964,12 @@ export function buildServer(opts: BuildServerOptions = {}) {
       );
     }
     const body = parsedBody.data;
-    const invalidNodeType = body.nodes.find((node) => !WORKFLOW_NODE_TYPE_SET.has(node.type));
-    if (invalidNodeType) {
+    const invalidNodeKind = body.nodes.find((node) => !WORKFLOW_NODE_KIND_SET.has(node.kind));
+    if (invalidNodeKind) {
       return reply.status(400).send(
         apiErrorSchema.parse({
           code: "BAD_REQUEST",
-          message: `Unknown workflow node type: ${invalidNodeType.type}`,
+          message: `Unknown workflow node kind: ${invalidNodeKind.kind}`,
           correlationId: (req as any).correlationId
         })
       );
@@ -1971,7 +1999,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
       if (!nodeResult) {
         return {
           nodeId: node.id,
-          nodeType: node.type,
+          nodeType: node.kind,
           success: false,
           output: "Skipped (branch condition not taken)"
         };
@@ -1979,7 +2007,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
       const output = nodeResult.output == null ? undefined : String(nodeResult.output);
       return {
         nodeId: node.id,
-        nodeType: node.type,
+        nodeType: node.kind,
         success: nodeResult.success,
         output
       };

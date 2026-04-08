@@ -149,64 +149,152 @@ export const updateIncidentStatusRequestSchema = z.object({
   status: incidentStatusSchema
 });
 
-const workflowTriggerTypes = ["onBuild", "onStartup", "onCrash", "onShutdown", "onLogPattern", "onSchedule"] as const;
-const WORKFLOW_TRIGGER_TYPE_SET = new Set<string>(workflowTriggerTypes);
+export const workflowNodeTypeSchema = z.enum(["event", "action", "control"]);
+export const workflowEventKindSchema = z.enum([
+  "onBuild",
+  "onStartup",
+  "onCrash",
+  "onShutdown",
+  "onLogPattern",
+  "onSchedule",
+  "agentStarted",
+  "agentStopped",
+  "agentOnline",
+  "agentOffline",
+  "agentCrashed",
+  "agentRestarted"
+]);
+export const workflowControlKindSchema = z.enum(["branchIf", "join", "wait", "if", "loop"]);
+export const workflowActionKindSchema = z.enum([
+  "runShell",
+  "dockerBuild",
+  "dockerRun",
+  "composeUp",
+  "composeDown",
+  "setEnv",
+  "injectSecret",
+  "template",
+  "runCursorPlan",
+  "runClaudePlan",
+  "httpRequest",
+  "slackNotify",
+  "emailNotify",
+  "genericWebhook",
+  "clone",
+  "checkoutBranch",
+  "createPR",
+  "mergePR",
+  "push",
+  "dispatchWorkflow",
+  "commentOnPR",
+  "createIssue",
+  "addLabels"
+]);
 const workflowNodeBaseShape = {
   id: z.string(),
   position: z.object({ x: z.number(), y: z.number() }).optional()
 };
 
-function triggerDataSchema(shape: z.ZodRawShape) {
+function eventDataSchema(shape: z.ZodRawShape) {
   return z.object({
     displayName: z.string().optional(),
     ...shape
   }).strict();
 }
 
-const triggerNodeSchemas = [
+const eventNodeSchemas = [
   z.object({
     ...workflowNodeBaseShape,
-    type: z.literal("onBuild"),
-    data: triggerDataSchema({}).optional()
+    type: z.literal("event"),
+    kind: z.literal("onBuild"),
+    data: eventDataSchema({}).optional()
   }),
   z.object({
     ...workflowNodeBaseShape,
-    type: z.literal("onStartup"),
-    data: triggerDataSchema({}).optional()
+    type: z.literal("event"),
+    kind: z.literal("onStartup"),
+    data: eventDataSchema({}).optional()
   }),
   z.object({
     ...workflowNodeBaseShape,
-    type: z.literal("onCrash"),
-    data: triggerDataSchema({}).optional()
+    type: z.literal("event"),
+    kind: z.literal("onCrash"),
+    data: eventDataSchema({}).optional()
   }),
   z.object({
     ...workflowNodeBaseShape,
-    type: z.literal("onShutdown"),
-    data: triggerDataSchema({}).optional()
+    type: z.literal("event"),
+    kind: z.literal("onShutdown"),
+    data: eventDataSchema({}).optional()
   }),
   z.object({
     ...workflowNodeBaseShape,
-    type: z.literal("onLogPattern"),
-    data: triggerDataSchema({ filter: z.string().min(1) })
+    type: z.literal("event"),
+    kind: z.literal("onLogPattern"),
+    data: eventDataSchema({ filter: z.string().min(1) })
   }),
   z.object({
     ...workflowNodeBaseShape,
-    type: z.literal("onSchedule"),
-    data: triggerDataSchema({ schedule: z.string().min(1) })
+    type: z.literal("event"),
+    kind: z.literal("onSchedule"),
+    data: eventDataSchema({ schedule: z.string().min(1) })
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("agentStarted"),
+    data: eventDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("agentStopped"),
+    data: eventDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("agentOnline"),
+    data: eventDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("agentOffline"),
+    data: eventDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("agentCrashed"),
+    data: eventDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("agentRestarted"),
+    data: eventDataSchema({}).optional()
   })
 ] as const;
 
-const workflowNonTriggerNodeSchema = z.object({
+const workflowActionNodeSchema = z.object({
   ...workflowNodeBaseShape,
-  type: z.string().refine((type) => !WORKFLOW_TRIGGER_TYPE_SET.has(type), {
-    message: "Non-trigger schema does not accept trigger node types"
-  }),
+  type: z.literal("action"),
+  kind: workflowActionKindSchema,
+  data: z.record(z.unknown()).optional()
+});
+
+const workflowControlNodeSchema = z.object({
+  ...workflowNodeBaseShape,
+  type: z.literal("control"),
+  kind: workflowControlKindSchema,
   data: z.record(z.unknown()).optional()
 });
 
 export const workflowGraphNodeSchema = z.union([
-  z.discriminatedUnion("type", triggerNodeSchemas),
-  workflowNonTriggerNodeSchema
+  z.discriminatedUnion("kind", eventNodeSchemas),
+  workflowActionNodeSchema,
+  workflowControlNodeSchema
 ]);
 
 export const workflowGraphEdgeSchema = z.object({
