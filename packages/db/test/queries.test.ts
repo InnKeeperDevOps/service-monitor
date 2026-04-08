@@ -7,6 +7,8 @@ import {
   updateIncidentStatus,
   listAgents,
   getAgent,
+  recordAgentHeartbeat,
+  markAgentOffline,
   listServices,
   createService,
   listWorkflowGraphs,
@@ -201,6 +203,34 @@ describe("getAgent", () => {
   it("returns undefined when missing", async () => {
     const result = await getAgent(mockQuery([]), "t1", "nope");
     expect(result).toBeUndefined();
+  });
+});
+
+describe("recordAgentHeartbeat", () => {
+  it("runs upsert SQL", async () => {
+    const query = mockQuery([]);
+    await recordAgentHeartbeat(query, "t1", { agentId: "a1", version: "1.0.0" });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO agents"),
+      ["a1", "t1", "1.0.0"],
+    );
+  });
+
+  it("passes null version for COALESCE behavior in SQL", async () => {
+    const query = mockQuery([]);
+    await recordAgentHeartbeat(query, "t1", { agentId: "a1", version: null });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("ON CONFLICT (id) DO UPDATE"),
+      ["a1", "t1", null],
+    );
+  });
+});
+
+describe("markAgentOffline", () => {
+  it("runs update SQL", async () => {
+    const query = mockQuery([]);
+    await markAgentOffline(query, "t1", "a1");
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("UPDATE agents SET status"), ["a1", "t1"]);
   });
 });
 

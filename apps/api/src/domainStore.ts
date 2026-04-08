@@ -17,6 +17,11 @@ export type DomainStore = {
 
   listAgents(tenantId: string): Promise<Agent[]>;
   getAgent(tenantId: string, id: string): Promise<Agent | undefined>;
+  recordAgentHeartbeat(
+    tenantId: string,
+    data: { agentId: string; version: string | null },
+  ): Promise<void>;
+  markAgentOffline(tenantId: string, agentId: string): Promise<void>;
 
   listServices(tenantId: string): Promise<MonitoredService[]>;
   getService(tenantId: string, id: string): Promise<MonitoredService | undefined>;
@@ -98,6 +103,31 @@ export function createMemoryDomainStore(): DomainStore {
     async getAgent(tenantId, id) {
       const a = agents.get(id);
       return a && a.tenantId === tenantId ? a : undefined;
+    },
+
+    async recordAgentHeartbeat(tenantId, data) {
+      const existing = agents.get(data.agentId);
+      if (existing && existing.tenantId !== tenantId) {
+        return;
+      }
+      const now = new Date().toISOString();
+      const next: Agent = {
+        id: data.agentId,
+        tenantId,
+        name: existing?.name ?? null,
+        version: data.version ?? existing?.version ?? null,
+        status: "online",
+        lastSeenAt: now,
+        certFingerprint: existing?.certFingerprint ?? null,
+        allowedCapabilities: existing?.allowedCapabilities ?? []
+      };
+      agents.set(data.agentId, next);
+    },
+
+    async markAgentOffline(tenantId, agentId) {
+      const a = agents.get(agentId);
+      if (!a || a.tenantId !== tenantId) return;
+      agents.set(agentId, { ...a, status: "offline" });
     },
 
     async listServices(tenantId) {

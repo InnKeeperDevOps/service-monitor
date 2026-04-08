@@ -172,6 +172,31 @@ export async function getAgent(
   return rows.length > 0 ? mapAgent(rows[0]) : undefined;
 }
 
+/** Creates or updates a row when an agent sends realtime telemetry for this tenant. */
+export async function recordAgentHeartbeat(
+  query: QueryFn,
+  tenantId: string,
+  data: { agentId: string; version: string | null },
+): Promise<void> {
+  await query(
+    `INSERT INTO agents (id, tenant_id, name, version, status, last_seen_at, cert_fingerprint, allowed_capabilities)
+     VALUES ($1, $2, NULL, $3, 'online', NOW(), NULL, ARRAY[]::text[])
+     ON CONFLICT (id) DO UPDATE SET
+       version = COALESCE(EXCLUDED.version, agents.version),
+       last_seen_at = NOW(),
+       status = 'online'
+     WHERE agents.tenant_id = EXCLUDED.tenant_id`,
+    [data.agentId, tenantId, data.version],
+  );
+}
+
+export async function markAgentOffline(query: QueryFn, tenantId: string, agentId: string): Promise<void> {
+  await query(
+    `UPDATE agents SET status = 'offline' WHERE id = $1 AND tenant_id = $2`,
+    [agentId, tenantId],
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Monitored Services
 // ---------------------------------------------------------------------------

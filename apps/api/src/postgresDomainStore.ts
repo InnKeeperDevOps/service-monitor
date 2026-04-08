@@ -16,6 +16,9 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
       queries.updateIncidentStatus(queryFn, tenantId, id, status),
     listAgents: (tenantId) => queries.listAgents(queryFn, tenantId),
     getAgent: (tenantId, id) => queries.getAgent(queryFn, tenantId, id),
+    recordAgentHeartbeat: (tenantId, data) =>
+      queries.recordAgentHeartbeat(queryFn, tenantId, data),
+    markAgentOffline: (tenantId, agentId) => queries.markAgentOffline(queryFn, tenantId, agentId),
     listServices: (tenantId) => queries.listServices(queryFn, tenantId),
     getService: (tenantId, id) => queries.getService(queryFn, tenantId, id),
     createService: (tenantId, data) => queries.createService(queryFn, tenantId, data),
