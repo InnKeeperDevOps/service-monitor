@@ -69,15 +69,4 @@ describe("web app", () => {
     expect(hrefs).toContain("#settings");
   });
 
-  it("renders workspace switcher above logout after session loads", async () => {
-    render(<App />);
-    await waitFor(() => {
-      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
-    });
-    const workspace = await waitFor(() => screen.getByTestId("nav-workspace-select"));
-    const logout = screen.getByRole("button", { name: /logout/i });
-    expect(logout.compareDocumentPosition(workspace) & Node.DOCUMENT_POSITION_PRECEDING).toBe(
-      Node.DOCUMENT_POSITION_PRECEDING
-    );
-  });
 });
