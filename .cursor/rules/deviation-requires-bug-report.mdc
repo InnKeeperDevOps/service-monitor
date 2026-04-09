@@ -1,0 +1,74 @@
+---
+description: MANDATORY — any deviation between implementation and plans or PROJECT_DEFINITION.md requires a bug file in e2e/playwright/bugs/
+alwaysApply: true
+---
+
+# Deviations require a bug report
+
+If you discover — at any point during a conversation — that the **current implementation diverges from**:
+
+- a plan in `.cursor/plans/*.plan.md`, or
+- `PROJECT_DEFINITION.md` at the workspace root, or
+- an accepted design or contract described in `service-monitor/AGENTS.md` or its rules,
+
+you **must** create a bug file before continuing.
+
+## What counts as a deviation
+
+| Example | Deviation? |
+|---------|-----------|
+| A feature described in a plan is not implemented | ✅ Yes |
+| An API contract in a plan differs from the actual route | ✅ Yes |
+| A UI field exists in the plan but is missing from the component | ✅ Yes |
+| The implemented behaviour contradicts `PROJECT_DEFINITION.md` | ✅ Yes |
+| A test asserts something the plan says should work, but it fails | ✅ Yes |
+| A code refactor that does not change observable behaviour | ❌ No |
+| An enhancement not mentioned in any plan | ❌ No (create a plan instead) |
+
+## Bug file location and naming
+
+```
+e2e/playwright/bugs/BUG-<AREA>-<NNN>.md
+```
+
+- `AREA` — short uppercase tag for the affected subsystem (e.g. `AGT`, `API`, `UI`, `WRK`, `AUTH`).
+- `NNN` — three-digit sequence number, incrementing within that area.
+
+Before creating a new file, `ls e2e/playwright/bugs/` to find the next unused number.
+
+## Required sections
+
+Every bug file must contain at minimum:
+
+```markdown
+# BUG-<AREA>-<NNN>: <one-line title>
+
+**Detected by:** <how it was found — test name, code review, plan comparison>
+**Severity:** Critical | High | Medium | Low
+**Status:** Open
+
+## Summary
+<Two sentences: what should happen vs what actually happens.>
+
+## Affected plan / definition reference
+<Quote or link the relevant section of the plan or PROJECT_DEFINITION.md.>
+
+## Reproduction steps
+<Numbered list.>
+
+## Root cause
+<What in the code causes this.>
+
+## Fix direction
+<High-level approach; code sketch if helpful.>
+```
+
+## When to create the bug
+
+- **Immediately** when you notice the deviation — do not defer it to the end of the session.
+- **Before** implementing a workaround or fix, so the bug is on record.
+- If you implement a fix in the same session, update `**Status:** Resolved` and add a `## Resolution` section.
+
+## Do not skip this
+
+Short tasks, "obvious" fixes, and refactors are **not exempt**. If the deviation is real, the file is required. If you cannot create the file (no write access), state that explicitly.

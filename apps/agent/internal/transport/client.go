@@ -26,7 +26,9 @@ type AgentHello struct {
 		Backend string `json:"backend"`
 	} `json:"runtime"`
 	ConfigReady *bool `json:"configReady,omitempty"`
-	Workload    *struct {
+	// PreferredExecutor is the AI CLI the agent should use for automated fix plans ("cursor" or "claude").
+	PreferredExecutor string `json:"preferredExecutor,omitempty"`
+	Workload          *struct {
 		Source        *string `json:"source"`
 		GithubRepo    string  `json:"githubRepo"`
 		DefaultBranch string  `json:"defaultBranch"`

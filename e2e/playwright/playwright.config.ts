@@ -10,6 +10,13 @@ const webAppDir = path.join(repoRoot, "apps/web");
  * Browser E2E. Default: serve built web app on 127.0.0.1:5173 via `vite preview`.
  * Set BASE_URL to use another origin (e.g. staging); webServer is skipped in that case.
  * Set PW_SKIP_WEBSERVER=1 to disable auto-start (you must run the app yourself).
+ *
+ * Full-stack mode (UI + real Kaiad API + real WebSocket):
+ *   BASE_URL=http://localhost:3001 PW_SKIP_WEBSERVER=1 pnpm e2e
+ *   (start Kaiad manually: cd apps/api && KAIAD_SKIP_SETUP_GATE=1 REDIS_DISABLED=1 node dist/server.js)
+ *
+ * Smoke / mocked-API mode (default):
+ *   pnpm e2e
  */
 const baseURL = process.env.BASE_URL?.trim() || "http://127.0.0.1:5173";
 const skipWebServer = process.env.PW_SKIP_WEBSERVER === "1";

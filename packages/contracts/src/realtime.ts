@@ -11,6 +11,8 @@ export const agentHelloMessageSchema = z.object({
     .optional(),
   /** When false, the agent should defer workloads until the operator sets tenant agent configuration in Kaiad. */
   configReady: z.boolean().optional(),
+  /** Which AI CLI the agent should invoke when running automated fix plans (cursor or claude). */
+  preferredExecutor: z.enum(["cursor", "claude"]).optional(),
   workload: z
     .object({
       source: z.enum(["github_repo", "binary"]).nullable(),

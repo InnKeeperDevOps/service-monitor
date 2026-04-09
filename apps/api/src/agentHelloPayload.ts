@@ -29,6 +29,7 @@ export function buildRealtimeAgentHello(settings: TenantSettings | undefined) {
     service: "realtime",
     runtime: { backend: runtimeBackend },
     configReady,
+    ...(settings?.preferredExecutor ? { preferredExecutor: settings.preferredExecutor } : {}),
     workload: {
       source: workloadSource,
       githubRepo: settings?.githubRepo ?? "",

@@ -19,6 +19,8 @@ type HelloPayload struct {
 	WorkloadSource string
 	GithubRepo     string
 	DefaultBranch  string
+	// PreferredExecutor is the AI CLI for automated fix plans ("cursor" or "claude"). Omitted when empty.
+	PreferredExecutor string
 }
 
 // DefaultHello returns a dev-friendly hello matching typical Kaiad defaults.
@@ -31,13 +33,14 @@ func DefaultHello() HelloPayload {
 }
 
 type helloWire struct {
-	Type    string `json:"type"`
-	Service string `json:"service"`
-	Runtime struct {
+	Type              string `json:"type"`
+	Service           string `json:"service"`
+	Runtime           struct {
 		Backend string `json:"backend"`
 	} `json:"runtime"`
-	ConfigReady bool `json:"configReady"`
-	Workload    struct {
+	ConfigReady       bool    `json:"configReady"`
+	PreferredExecutor string  `json:"preferredExecutor,omitempty"`
+	Workload          struct {
 		Source        *string `json:"source"`
 		GithubRepo    string  `json:"githubRepo"`
 		DefaultBranch string  `json:"defaultBranch"`
@@ -54,6 +57,7 @@ func (h HelloPayload) marshalJSON() ([]byte, error) {
 	hw.Service = "realtime"
 	hw.Runtime.Backend = backend
 	hw.ConfigReady = h.ConfigReady
+	hw.PreferredExecutor = h.PreferredExecutor
 	hw.Workload.GithubRepo = h.GithubRepo
 	hw.Workload.DefaultBranch = h.DefaultBranch
 
