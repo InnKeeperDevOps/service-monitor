@@ -17,13 +17,17 @@ import {
   applyNodeChanges,
   Background,
   Controls,
+  Handle,
   MiniMap,
+  Position,
   ReactFlow,
   type Connection,
   type Edge,
   type EdgeChange,
   type Node,
   type NodeChange,
+  type NodeProps,
+  type NodeTypes,
   type ReactFlowInstance
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -59,18 +63,12 @@ type WorkflowEditorNodeData = {
   [key: string]: unknown;
 };
 
+type WorkflowEditorVisualType = "eventNode" | "actionNode" | "controlNode";
+type WorkflowEditorNode = Node<WorkflowEditorNodeData, WorkflowEditorVisualType>;
+
 const NODE_TYPE_SET = new Set<string>(WORKFLOW_NODE_TYPES);
 const EVENT_KIND_SET = new Set<string>(WORKFLOW_EVENT_KINDS);
 const CONTROL_KIND_SET = new Set<string>(WORKFLOW_CONTROL_KINDS);
-
-const INITIAL_NODES: Node<WorkflowEditorNodeData>[] = [
-  { id: "t1", position: { x: 0, y: 120 }, data: { nodeType: "event", nodeKind: "onCrash", label: "onCrash" } },
-  { id: "br", position: { x: 220, y: 120 }, data: { nodeType: "control", nodeKind: "branchIf", label: "branchIf", condition: "severity=critical" } },
-  { id: "p1", position: { x: 460, y: 30 }, data: { nodeType: "action", nodeKind: "runCursorPlan", label: "runCursorPlan" } },
-  { id: "p2", position: { x: 460, y: 220 }, data: { nodeType: "action", nodeKind: "runClaudePlan", label: "runClaudePlan" } },
-  { id: "jn", position: { x: 700, y: 120 }, data: { nodeType: "control", nodeKind: "join", label: "join" } },
-  { id: "sl", position: { x: 920, y: 120 }, data: { nodeType: "action", nodeKind: "slackNotify", label: "slackNotify", channel: "#alerts" } }
-];
 
 const INITIAL_EDGES: Edge[] = [
   { id: "e0", source: "t1", target: "br" },
@@ -96,6 +94,25 @@ function resolveNodeTypeFromKind(nodeKind: WorkflowNodeKind): WorkflowNodeType {
   }
   return "action";
 }
+
+function resolveVisualType(nodeType: WorkflowNodeType): WorkflowEditorVisualType {
+  if (nodeType === "event") {
+    return "eventNode";
+  }
+  if (nodeType === "control") {
+    return "controlNode";
+  }
+  return "actionNode";
+}
+
+const INITIAL_NODES: WorkflowEditorNode[] = [
+  { id: "t1", type: resolveVisualType("event"), position: { x: 0, y: 120 }, data: { nodeType: "event", nodeKind: "onCrash", label: "onCrash" } },
+  { id: "br", type: resolveVisualType("control"), position: { x: 220, y: 120 }, data: { nodeType: "control", nodeKind: "branchIf", label: "branchIf", condition: "severity=critical" } },
+  { id: "p1", type: resolveVisualType("action"), position: { x: 460, y: 30 }, data: { nodeType: "action", nodeKind: "runCursorPlan", label: "runCursorPlan" } },
+  { id: "p2", type: resolveVisualType("action"), position: { x: 460, y: 220 }, data: { nodeType: "action", nodeKind: "runClaudePlan", label: "runClaudePlan" } },
+  { id: "jn", type: resolveVisualType("control"), position: { x: 700, y: 120 }, data: { nodeType: "control", nodeKind: "join", label: "join" } },
+  { id: "sl", type: resolveVisualType("action"), position: { x: 920, y: 120 }, data: { nodeType: "action", nodeKind: "slackNotify", label: "slackNotify", channel: "#alerts" } }
+];
 
 function sanitizeDataForNode(nodeType: WorkflowNodeType, nodeKind: WorkflowNodeKind, data: WorkflowEditorNodeData): WorkflowEditorNodeData {
   const nextData = { ...data };
@@ -131,7 +148,7 @@ function sanitizeNodeData(data: WorkflowEditorNodeData): Record<string, unknown>
   return Object.fromEntries(entries);
 }
 
-function toDomainNodes(nodes: Node<WorkflowEditorNodeData>[]): WorkflowNode[] {
+function toDomainNodes(nodes: WorkflowEditorNode[]): WorkflowNode[] {
   return nodes.map((n) => ({
     id: n.id,
     type: n.data.nodeType,
@@ -141,7 +158,7 @@ function toDomainNodes(nodes: Node<WorkflowEditorNodeData>[]): WorkflowNode[] {
   }));
 }
 
-function toWorkflowNodes(nodes: Node<WorkflowEditorNodeData>[]): WorkflowGraphNode[] {
+function toWorkflowNodes(nodes: WorkflowEditorNode[]): WorkflowGraphNode[] {
   return nodes.map((n) => ({
     id: n.id,
     type: n.data.nodeType,
@@ -156,7 +173,7 @@ function toWorkflowEdges(edges: Edge[]) {
 }
 
 export function WorkflowEditorPage() {
-  const [nodes, setNodes] = useState<Node<WorkflowEditorNodeData>[]>(INITIAL_NODES);
+  const [nodes, setNodes] = useState<WorkflowEditorNode[]>(INITIAL_NODES);
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [saving, setSaving] = useState(false);
   const [loadingApi, setLoadingApi] = useState(false);
@@ -171,7 +188,7 @@ export function WorkflowEditorPage() {
   const [paletteFilter, setPaletteFilter] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const [reactFlow, setReactFlow] = useState<ReactFlowInstance<Node<WorkflowEditorNodeData>, Edge> | null>(null);
+  const [reactFlow, setReactFlow] = useState<ReactFlowInstance<WorkflowEditorNode, Edge> | null>(null);
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) ?? null : null;
   const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) ?? null : null;
@@ -290,7 +307,8 @@ export function WorkflowEditorPage() {
             label: displayName.trim() || nodeKind
           };
           return {
-          id: n.id,
+            id: n.id,
+            type: resolveVisualType(nodeType),
             position: n.position ?? { x: i * 220, y: 120 },
             data: mergedData
           };
@@ -418,11 +436,13 @@ export function WorkflowEditorPage() {
         : { x: e.clientX, y: e.clientY };
 
       const newId = `node_${Date.now()}`;
-      const newNode: Node<WorkflowEditorNodeData> = {
+      const nodeCategory = resolveNodeTypeFromKind(nodeType);
+      const newNode: WorkflowEditorNode = {
         id: newId,
+        type: resolveVisualType(nodeCategory),
         position,
         data: {
-          nodeType: resolveNodeTypeFromKind(nodeType),
+          nodeType: nodeCategory,
           nodeKind: nodeType,
           label: nodeType
         },
@@ -433,7 +453,7 @@ export function WorkflowEditorPage() {
     [reactFlow]
   );
 
-  const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node<WorkflowEditorNodeData>) => {
+  const handleNodeClick = useCallback((_event: React.MouseEvent, node: WorkflowEditorNode) => {
     setSelectedNodeId(node.id);
     setSelectedEdgeId(null);
   }, []);
@@ -460,14 +480,14 @@ export function WorkflowEditorPage() {
               nextData = sanitizeDataForNode(nextType, nextKind, { ...nextData, nodeType: nextType, nodeKind: nextKind });
             }
             nextData.label = getNodeLabel(nextData);
-            return { ...n, data: nextData };
+            return { ...n, type: resolveVisualType(nextData.nodeType), data: nextData };
           })()
           : n
       )
     );
   }, []);
 
-  const handleNodesChange = useCallback((changes: NodeChange<Node<WorkflowEditorNodeData>>[]) => {
+  const handleNodesChange = useCallback((changes: NodeChange<WorkflowEditorNode>[]) => {
     setNodes((current) => applyNodeChanges(changes, current));
     if (selectedNodeId && changes.some((change) => change.type === "remove" && change.id === selectedNodeId)) {
       setSelectedNodeId(null);
@@ -650,6 +670,7 @@ export function WorkflowEditorPage() {
             <ReactFlow
               nodes={nodes}
               edges={edges}
+              nodeTypes={WORKFLOW_NODE_RENDERERS}
               onInit={setReactFlow}
               onNodesChange={handleNodesChange}
               onEdgesChange={handleEdgesChange}
@@ -695,6 +716,105 @@ export function WorkflowEditorPage() {
   );
 }
 
+type WorkflowCategoryNodeProps = NodeProps<WorkflowEditorNode>;
+
+function WorkflowEventNode({ data }: WorkflowCategoryNodeProps) {
+  return (
+    <div
+      style={{
+        minWidth: 132,
+        minHeight: 46,
+        padding: "0.5rem 0.75rem",
+        border: "1px solid var(--color-info)",
+        borderRadius: 999,
+        background: "var(--color-info-bg)",
+        color: "var(--color-info)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        textAlign: "center",
+        fontSize: "0.75rem",
+        fontWeight: 600
+      }}
+    >
+      <Handle type="target" position={Position.Top} />
+      <span>{getNodeLabel(data)}</span>
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  );
+}
+
+function WorkflowActionNode({ data }: WorkflowCategoryNodeProps) {
+  return (
+    <div
+      style={{
+        minWidth: 144,
+        minHeight: 56,
+        padding: "0.65rem 0.8rem",
+        border: "1px solid var(--color-border)",
+        borderRadius: 10,
+        background: "var(--color-surface)",
+        color: "var(--color-text-primary)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        textAlign: "center",
+        fontSize: "0.75rem",
+        fontWeight: 600
+      }}
+    >
+      <Handle type="target" position={Position.Top} />
+      <span>{getNodeLabel(data)}</span>
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  );
+}
+
+function WorkflowControlNode({ data }: WorkflowCategoryNodeProps) {
+  return (
+    <div
+      style={{
+        width: 140,
+        height: 86,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        position: "relative"
+      }}
+    >
+      <Handle type="target" position={Position.Top} />
+      <div
+        style={{
+          width: 90,
+          height: 90,
+          border: "1px solid var(--color-warning)",
+          background: "var(--color-warning-bg)",
+          color: "var(--color-warning)",
+          clipPath: "polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          padding: "0.65rem",
+          boxSizing: "border-box",
+          fontSize: "0.72rem",
+          fontWeight: 700,
+          lineHeight: 1.1
+        }}
+      >
+        {getNodeLabel(data)}
+      </div>
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  );
+}
+
+const WORKFLOW_NODE_RENDERERS: NodeTypes = {
+  eventNode: WorkflowEventNode,
+  actionNode: WorkflowActionNode,
+  controlNode: WorkflowControlNode
+};
+
 function NodeConfigPanel({
   node,
   onUpdate,
@@ -702,7 +822,7 @@ function NodeConfigPanel({
   onDisconnectNode,
   onClose,
 }: {
-  node: Node<WorkflowEditorNodeData>;
+  node: WorkflowEditorNode;
   onUpdate: (nodeId: string, key: string, value: string) => void;
   onDeleteNode: () => void;
   onDisconnectNode: () => void;
