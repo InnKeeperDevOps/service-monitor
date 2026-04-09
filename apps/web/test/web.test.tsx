@@ -19,7 +19,10 @@ vi.mock("../src/lib/api.js", async (importOriginal) => {
           email: "test@example.com",
           role: "admin",
           tenantId: "t1",
-          memberships: [{ tenantId: "t1", tenantName: "Alpha", role: "owner" }]
+          memberships: [
+            { tenantId: "t1", tenantName: "Alpha", role: "owner" },
+            { tenantId: "t2", tenantName: "Beta", role: "admin" }
+          ]
         })
       ),
       logout: vi.fn()
@@ -28,6 +31,7 @@ vi.mock("../src/lib/api.js", async (importOriginal) => {
 });
 
 import { App } from "../src/app.js";
+import { api } from "../src/lib/api.js";
 
 beforeEach(() => {
   window.location.hash = "";
@@ -67,6 +71,40 @@ describe("web app", () => {
     expect(hrefs).toContain("#services");
     expect(hrefs).toContain("#workflows");
     expect(hrefs).toContain("#settings");
+  });
+
+  it("shows tenant switcher above logout in the sidebar", async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    });
+
+    const select = screen.getByTestId("nav-workspace-select");
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["Alpha", "Beta"]);
+
+    const logoutButton = screen.getByRole("button", { name: /logout/i });
+    const orderBits = select.compareDocumentPosition(logoutButton);
+    expect(orderBits & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("falls back to active tenant when /me omits memberships", async () => {
+    vi.mocked(api.me).mockResolvedValueOnce({
+      id: "u1",
+      email: "test@example.com",
+      role: "admin",
+      tenantId: "t1",
+    } as any);
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    });
+
+    const select = screen.getByTestId("nav-workspace-select") as HTMLSelectElement;
+    expect(select.value).toBe("t1");
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["t1"]);
   });
 
 });

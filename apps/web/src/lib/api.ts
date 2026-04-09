@@ -3,16 +3,30 @@ import type { AuthUser } from "./useAuth.js";
 
 /** Maps `/api/v1/me` JSON to `AuthUser` for React context. */
 export function meResponseToAuthUser(m: MeResponse): AuthUser {
+  const incomingMemberships = Array.isArray((m as { memberships?: unknown }).memberships)
+    ? (m as { memberships: Array<{ tenantId: string; tenantName: string; role: AuthUser["role"] }> }).memberships
+    : [];
+  const memberships =
+    incomingMemberships.length > 0
+      ? incomingMemberships.map((row) => ({
+          tenantId: row.tenantId,
+          tenantName: row.tenantName,
+          role: row.role
+        }))
+      : [
+          {
+            tenantId: m.tenantId,
+            tenantName: m.tenantId,
+            role: m.role
+          }
+        ];
+
   return {
     id: m.id,
     email: m.email,
     role: m.role,
     tenantId: m.tenantId,
-    memberships: m.memberships.map((row) => ({
-      tenantId: row.tenantId,
-      tenantName: row.tenantName,
-      role: row.role,
-    })),
+    memberships
   };
 }
 

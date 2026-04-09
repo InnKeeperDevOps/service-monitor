@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -26,6 +26,7 @@ import { AuthContext, buildAuthState, type AuthUser } from "./lib/useAuth.js";
 import { Card } from "./components/Card.js";
 import { Badge } from "./components/Badge.js";
 import { Button } from "./components/Button.js";
+import { TenantSwitcher } from "./components/TenantSwitcher.js";
 
 type Route =
   | "dashboard"
@@ -105,13 +106,21 @@ function AppMain() {
     hasToken() ? readNavFromHash().tenantConfigTenantId : null
   );
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [meResolved, setMeResolved] = useState(false);
 
   const authState = useMemo(() => buildAuthState(user), [user]);
 
   useEffect(() => {
-    if (hasToken()) {
-      api.me().then((m) => setUser(meResponseToAuthUser(m))).catch(() => {});
+    if (!hasToken()) {
+      setMeResolved(true);
+      return;
     }
+    api.me()
+      .then((m) => setUser(meResponseToAuthUser(m)))
+      .catch((err) => {
+        console.error("[app] GET /api/v1/me failed", err);
+      })
+      .finally(() => setMeResolved(true));
   }, []);
 
   useEffect(() => {
@@ -167,6 +176,16 @@ function AppMain() {
     return true;
   });
 
+  const handleTenantSwitch = useCallback(
+    (u: AuthUser) => {
+      setUser(u);
+      if (route === "tenantConfig" && tenantConfigTenantId && tenantConfigTenantId !== u.tenantId) {
+        window.location.hash = `tenant-config/${encodeURIComponent(u.tenantId)}`;
+      }
+    },
+    [route, tenantConfigTenantId]
+  );
+
   return (
     <AuthContext value={authState}>
       <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", minHeight: "100vh" }}>
@@ -201,6 +220,7 @@ function AppMain() {
             );
           })}
           <div style={{ flex: 1 }} />
+          <TenantSwitcher user={user} meResolved={meResolved} onUserUpdated={handleTenantSwitch} />
           <button
             onClick={() => api.logout()}
             style={{

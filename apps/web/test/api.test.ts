@@ -1,3 +1,4 @@
+import type { MeResponse } from "@sm/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api, meResponseToAuthUser } from "../src/lib/api.js";
 
@@ -23,6 +24,47 @@ describe("api lib", () => {
       tenantId: "t-1",
       memberships: [{ tenantId: "t-1", tenantName: "Acme", role: "owner" }]
     });
+  });
+
+  it("synthesizes a single membership from active tenant when memberships is empty", () => {
+    const authUser = meResponseToAuthUser({
+      id: "u-1",
+      email: "u@example.com",
+      role: "admin",
+      tenantId: "t-1",
+      memberships: []
+    });
+
+    expect(authUser.memberships).toEqual([
+      { tenantId: "t-1", tenantName: "t-1", role: "admin" }
+    ]);
+  });
+
+  it("synthesizes membership when /me omits memberships", () => {
+    const authUser = meResponseToAuthUser({
+      id: "u-1",
+      email: "u@example.com",
+      role: "viewer",
+      tenantId: "t-solo"
+    } as MeResponse);
+
+    expect(authUser.memberships).toEqual([
+      { tenantId: "t-solo", tenantName: "t-solo", role: "viewer" }
+    ]);
+  });
+
+  it("ignores non-array memberships and falls back to active tenant", () => {
+    const authUser = meResponseToAuthUser({
+      id: "u-1",
+      email: "u@example.com",
+      role: "operator",
+      tenantId: "t-1",
+      memberships: "invalid" as unknown as []
+    } as MeResponse);
+
+    expect(authUser.memberships).toEqual([
+      { tenantId: "t-1", tenantName: "t-1", role: "operator" }
+    ]);
   });
 
   it("sends bearer token and json body for workflow create", async () => {

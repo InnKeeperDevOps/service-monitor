@@ -23,7 +23,7 @@ export default defineConfig({
     allowedHosts: ["localhost", "127.0.0.1", "panel.kaiad.dev"]
   },
   test: {
-    include: ["test/**/*.test.tsx"],
+    include: ["test/**/*.test.{ts,tsx}"],
     environment: "jsdom",
     setupFiles: ["./test/setup.ts"],
     coverage: {
