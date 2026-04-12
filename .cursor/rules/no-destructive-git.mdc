@@ -1,0 +1,18 @@
+---
+description: Prevent data loss from destructive git commands
+globs: *
+alwaysApply: true
+---
+# No Destructive Git Commands
+
+**NEVER** run commands that permanently delete untracked files or uncommitted work without explicit user confirmation.
+
+## Rules
+
+1. **No `git clean`**: NEVER run `git clean -fd` or `git clean -xdf`. This deletes untracked files (like `.env` files, new uncommitted scripts, or local configs) permanently.
+2. **Stashing Untracked Files**: If you need to stash changes to clear the working tree, ALWAYS use `git stash -u` (or `--include-untracked`). Standard `git stash` leaves untracked files behind, which can then block merges or checkouts.
+3. **No Blind Hard Resets**: NEVER run `git reset --hard` without verifying what is being lost.
+4. **Merge Conflicts**: If untracked files or uncommitted changes block a merge or checkout, DO NOT force the operation by deleting the files. Either:
+   - Stash everything including untracked files (`git stash -u`)
+   - Ask the user what they want to do with the conflicting files.
+5. **Always Check Status**: Run `git status` to see what untracked files exist before doing branch operations. If there are untracked files that look like important configuration or new source files, alert the user rather than implicitly destroying them to proceed with a workflow.
