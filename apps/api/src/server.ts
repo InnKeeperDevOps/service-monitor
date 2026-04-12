@@ -393,7 +393,10 @@ function createLazyDomainStore(resolve: () => Promise<DomainStore>): DomainStore
     deleteService: (tenantId, id) => get().then((s) => s.deleteService(tenantId, id)),
     listWorkflowGraphs: (tenantId) => get().then((s) => s.listWorkflowGraphs(tenantId)),
     getWorkflowGraph: (tenantId, workflowId) => get().then((s) => s.getWorkflowGraph(tenantId, workflowId)),
-    createWorkflowGraph: (tenantId, data) => get().then((s) => s.createWorkflowGraph(tenantId, data))
+    createWorkflowGraph: (tenantId, data) => get().then((s) => s.createWorkflowGraph(tenantId, data)),
+    listSshKeys: (tenantId) => get().then((s) => s.listSshKeys(tenantId)),
+    createSshKey: (tenantId, data) => get().then((s) => s.createSshKey(tenantId, data)),
+    deleteSshKey: (tenantId, id) => get().then((s) => s.deleteSshKey(tenantId, id))
   };
 }
 
@@ -475,7 +478,7 @@ function githubInstallUrlFromSlug(slug: string): string {
   return `https://github.com/apps/${encodeURIComponent(slug)}/installations/new`;
 }
 
-/** Resolve public slug + install URL from env, config, or GitHub GET /app (no user-entered slug required). */
+/** Resolve public slug + install URL from env, config (no user-entered slug required). */
 async function resolveGithubInstallInfo(cfg: KaiadConfig | null): Promise<{
   appSlug: string | null;
   installUrl: string | null;
@@ -488,15 +491,6 @@ async function resolveGithubInstallInfo(cfg: KaiadConfig | null): Promise<{
   const fromFile = gh?.appSlug?.trim();
   if (fromFile) {
     return { appSlug: fromFile, installUrl: githubInstallUrlFromSlug(fromFile) };
-  }
-  const appIdStr = process.env.GITHUB_APP_ID ?? gh?.appId?.trim() ?? "";
-  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY ?? gh?.privateKeyPem?.trim() ?? "";
-  const appIdNum = Number(appIdStr);
-  if (Number.isFinite(appIdNum) && appIdNum > 0 && privateKey) {
-    const slug = await fetchGithubAppSlug({ appId: appIdNum, privateKey });
-    if (slug) {
-      return { appSlug: slug, installUrl: githubInstallUrlFromSlug(slug) };
-    }
   }
   return { appSlug: null, installUrl: null };
 }
@@ -1056,7 +1050,6 @@ export function buildServer(opts: BuildServerOptions = {}) {
         })
       );
     }
-    applyGithubAppToEnv(next.githubApp!);
     return { ok: true };
   });
 
@@ -1879,9 +1872,6 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
     if (config.internalApiToken) process.env.INTERNAL_API_TOKEN = config.internalApiToken;
     if (config.internalApiUrl) process.env.INTERNAL_API_URL = config.internalApiUrl;
     if (config.defaultWebhookTenantId) process.env.DEFAULT_WEBHOOK_TENANT_ID = config.defaultWebhookTenantId;
-    if (config.githubApp) {
-      applyGithubAppToEnv(config.githubApp);
-    }
     if (config.oauth?.googleClientId) {
       process.env.GOOGLE_CLIENT_ID = config.oauth.googleClientId;
       process.env.GOOGLE_CLIENT_SECRET = config.oauth.googleClientSecret ?? "";

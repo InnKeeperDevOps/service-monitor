@@ -2,7 +2,7 @@ import { ensureCoreSchema } from "@sm/db";
 import { createMemoryTenantStore, __resetMemoryTenantStoreForTests, type TenantStore } from "./memoryTenantStore.js";
 import { createPostgresTenantStore } from "./postgresTenantStore.js";
 import { resolveTenantStoreBackend } from "./storeAdapter.js";
-import type { GithubInstallationSettings, TenantSettings } from "@sm/contracts";
+import type { TenantSettings } from "@sm/contracts";
 
 let storePromise: Promise<TenantStore> | null = null;
 
@@ -44,17 +44,6 @@ export async function getTenantSettings(tenantId: string): Promise<TenantSetting
 
 export async function upsertTenantSettings(settings: TenantSettings): Promise<TenantSettings> {
   return (await getStore()).upsertTenantSettings(settings);
-}
-
-export async function listGithubInstallationsForTenant(tenantId: string): Promise<GithubInstallationSettings[]> {
-  return (await getStore()).listGithubInstallationsForTenant(tenantId);
-}
-
-export async function upsertGithubInstallationForTenant(
-  tenantId: string,
-  installation: GithubInstallationSettings
-): Promise<GithubInstallationSettings> {
-  return (await getStore()).upsertGithubInstallationForTenant(tenantId, installation);
 }
 
 /** Test helper: reset backend selection and in-memory tenant data */
