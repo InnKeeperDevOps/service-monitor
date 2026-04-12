@@ -167,9 +167,7 @@ describe("http.ts", () => {
     it("accepts minimal settings", () => {
       expect(() =>
         tenantSettingsSchema.parse({
-          tenantId: "t-1",
-          gitRepoUrl: "o/r",
-          defaultBranch: "main"
+          tenantId: "t-1"
         })
       ).not.toThrow();
     });
@@ -178,8 +176,6 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          gitRepoUrl: "o/r",
-          defaultBranch: "main",
           docsUrl: "not-a-url"
         })
       ).toThrow();
@@ -189,8 +185,6 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          gitRepoUrl: "o/r",
-          defaultBranch: "main",
           preferredExecutor: "claude"
         })
       ).not.toThrow();
@@ -200,8 +194,6 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          gitRepoUrl: "o/r",
-          defaultBranch: "main",
           preferredExecutor: "vscode"
         })
       ).toThrow();
@@ -211,8 +203,6 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          gitRepoUrl: "o/r",
-          defaultBranch: "main",
           agentRuntimeBackend: "shell"
         })
       ).not.toThrow();
@@ -222,32 +212,9 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          gitRepoUrl: "o/r",
-          defaultBranch: "main",
           agentRuntimeBackend: "podman"
         })
       ).toThrow();
-    });
-
-    it("accepts agentWorkloadSource", () => {
-      expect(() =>
-        tenantSettingsSchema.parse({
-          tenantId: "t-1",
-          gitRepoUrl: "o/r",
-          defaultBranch: "main",
-          agentWorkloadSource: "binary"
-        })
-      ).not.toThrow();
-    });
-
-    it("accepts null agentWorkloadSource", () => {
-      const v = tenantSettingsSchema.parse({
-        tenantId: "t-1",
-        gitRepoUrl: "o/r",
-        defaultBranch: "main",
-        agentWorkloadSource: null
-      });
-      expect(v.agentWorkloadSource).toBeNull();
     });
   });
 
@@ -275,20 +242,9 @@ describe("http.ts", () => {
   describe("upsertTenantSettingsRequestSchema", () => {
     it("matches tenantSettingsSchema", () => {
       const v = upsertTenantSettingsRequestSchema.parse({
-        tenantId: "t-1",
-        gitRepoUrl: "o/r",
-        defaultBranch: "main"
+        tenantId: "t-1"
       });
       expect(v.tenantId).toBe("t-1");
-    });
-
-    it("rejects missing defaultBranch", () => {
-      expect(() =>
-        upsertTenantSettingsRequestSchema.parse({
-          tenantId: "t-1",
-          gitRepoUrl: "o/r"
-        })
-      ).toThrow();
     });
   });
 
@@ -831,18 +787,6 @@ describe("realtime.ts", () => {
         runtime: { backend: "kubernetes" }
       });
       expect(m.runtime?.backend).toBe("kubernetes");
-    });
-
-    it("accepts hello with workload and configReady", () => {
-      const m = agentHelloMessageSchema.parse({
-        type: "hello",
-        service: "realtime",
-        runtime: { backend: "docker" },
-        configReady: false,
-        workload: { source: null, gitRepoUrl: "a/b", defaultBranch: "main" }
-      });
-      expect(m.configReady).toBe(false);
-      expect(m.workload?.source).toBeNull();
     });
   });
 

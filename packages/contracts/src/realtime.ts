@@ -9,18 +9,8 @@ export const agentHelloMessageSchema = z.object({
       backend: z.enum(["docker", "kubernetes", "shell"])
     })
     .optional(),
-  /** When false, the agent should defer workloads until the operator sets tenant agent configuration in Kaiad. */
-  configReady: z.boolean().optional(),
   /** Which AI CLI the agent should invoke when running automated fix plans (cursor or claude). */
-  preferredExecutor: z.enum(["cursor", "claude"]).optional(),
-  workload: z
-    .object({
-      source: z.enum(["git_repo", "binary"]).nullable(),
-      gitRepoUrl: z.string(),
-      sshKeyId: z.string().nullable().optional(),
-      defaultBranch: z.string()
-    })
-    .optional()
+  preferredExecutor: z.enum(["cursor", "claude"]).optional()
 });
 
 export type AgentHelloMessage = z.infer<typeof agentHelloMessageSchema>;

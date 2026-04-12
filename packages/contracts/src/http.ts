@@ -48,24 +48,13 @@ export const automationPolicySchema = z.object({
 
 export const agentRuntimeBackendSchema = z.enum(["docker", "kubernetes", "shell"]);
 
-/** How the enrolled agent obtains/runs the workload: clone from GitHub vs binary supplied by Kaiad. */
-export const agentWorkloadSourceSchema = z.enum(["git_repo", "binary"]);
-
 export const tenantSettingsSchema = z.object({
   tenantId: z.string(),
-  gitRepoUrl: z.string().optional(),
-  sshKeyId: z.string().nullable().optional(),
-  defaultBranch: z.string(),
   docsUrl: z.string().url().optional(),
   automationPolicy: automationPolicySchema.optional(),
   preferredExecutor: z.enum(["cursor", "claude"]).optional(),
   /** Where the Go agent runs workloads: Docker socket, Kubernetes CLI, or shell-only. */
-  agentRuntimeBackend: agentRuntimeBackendSchema.optional(),
-  /**
-   * Omit (legacy) = treat as git repo mode and ready.
-   * `null` = operator has not finished Kaiad configuration; agent waits for a non-null value.
-   */
-  agentWorkloadSource: z.union([agentWorkloadSourceSchema, z.null()]).optional()
+  agentRuntimeBackend: agentRuntimeBackendSchema.optional()
 });
 
 export const githubPolicyCheckRequestSchema = z.object({
@@ -159,6 +148,8 @@ export const workflowEventKindSchema = z.enum([
   "agentStopped",
   "agentOnline",
   "agentOffline",
+  "agentConnected",
+  "agentDisconnected",
   "agentCrashed",
   "agentRestarted",
   "onServiceConfigurationUpdate"
@@ -260,6 +251,18 @@ const eventNodeSchemas = [
     ...workflowNodeBaseShape,
     type: z.literal("event"),
     kind: z.literal("agentOffline"),
+    data: eventDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("agentConnected"),
+    data: eventDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("agentDisconnected"),
     data: eventDataSchema({}).optional()
   }),
   z.object({
