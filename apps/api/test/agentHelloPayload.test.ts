@@ -2,42 +2,39 @@ import { describe, expect, it } from "vitest";
 import { buildRealtimeAgentHello } from "../src/agentHelloPayload.js";
 
 describe("buildRealtimeAgentHello", () => {
-  it("uses ready git mode when settings omit agentWorkloadSource (legacy)", () => {
-    const h = buildRealtimeAgentHello({
-      tenantId: "t-1",
-      gitRepoUrl: "https://git.example.com/acme/app.git",
-      defaultBranch: "main"
-    });
-    expect(h.configReady).toBe(true);
-    expect(h.workload?.source).toBe("git_repo");
-    expect(h.workload?.gitRepoUrl).toBe("https://git.example.com/acme/app.git");
-  });
-
-  it("marks not ready when agentWorkloadSource is null", () => {
-    const h = buildRealtimeAgentHello({
-      tenantId: "t-1",
-      gitRepoUrl: "https://git.example.com/acme/app.git",
-      defaultBranch: "main",
-      agentWorkloadSource: null
-    });
-    expect(h.configReady).toBe(false);
-    expect(h.workload?.source).toBeNull();
-  });
-
-  it("passes through binary workload", () => {
-    const h = buildRealtimeAgentHello({
-      tenantId: "t-1",
-      gitRepoUrl: "https://git.example.com/acme/app.git",
-      defaultBranch: "main",
-      agentWorkloadSource: "binary"
-    });
-    expect(h.configReady).toBe(true);
-    expect(h.workload?.source).toBe("binary");
-  });
-
-  it("defaults when no tenant row", () => {
+  it("defaults to docker backend when no settings exist", () => {
     const h = buildRealtimeAgentHello(undefined);
-    expect(h.configReady).toBe(true);
-    expect(h.workload?.source).toBe("git_repo");
+    expect(h.runtime?.backend).toBe("docker");
+  });
+
+  it("reflects kubernetes backend from settings", () => {
+    const h = buildRealtimeAgentHello({
+      tenantId: "t-1",
+      agentRuntimeBackend: "kubernetes"
+    });
+    expect(h.runtime?.backend).toBe("kubernetes");
+  });
+
+  it("reflects shell backend from settings", () => {
+    const h = buildRealtimeAgentHello({
+      tenantId: "t-1",
+      agentRuntimeBackend: "shell"
+    });
+    expect(h.runtime?.backend).toBe("shell");
+  });
+
+  it("includes preferredExecutor when configured", () => {
+    const h = buildRealtimeAgentHello({
+      tenantId: "t-1",
+      preferredExecutor: "claude"
+    });
+    expect(h.preferredExecutor).toBe("claude");
+  });
+
+  it("omits preferredExecutor when not configured", () => {
+    const h = buildRealtimeAgentHello({
+      tenantId: "t-1"
+    });
+    expect(h.preferredExecutor).toBeUndefined();
   });
 });

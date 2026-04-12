@@ -7,36 +7,12 @@ export function buildRealtimeAgentHello(settings: TenantSettings | undefined) {
     runtimeBackend = settings.agentRuntimeBackend;
   }
 
-  let configReady = true;
-  let workloadSource: "git_repo" | "binary" | null = "git_repo";
-
-  if (settings) {
-    const raw = settings.agentWorkloadSource;
-    if (raw === undefined) {
-      configReady = true;
-      workloadSource = "git_repo";
-    } else if (raw === null) {
-      configReady = false;
-      workloadSource = null;
-    } else {
-      configReady = true;
-      workloadSource = raw;
-    }
-  }
-
   try {
     return agentHelloMessageSchema.parse({
       type: "hello",
       service: "realtime",
       runtime: { backend: runtimeBackend },
-      configReady,
-      ...(settings?.preferredExecutor ? { preferredExecutor: settings.preferredExecutor } : {}),
-      workload: {
-        source: workloadSource,
-        gitRepoUrl: settings?.gitRepoUrl ?? "",
-        sshKeyId: settings?.sshKeyId ?? null,
-        defaultBranch: settings?.defaultBranch ?? ""
-      }
+      ...(settings?.preferredExecutor ? { preferredExecutor: settings.preferredExecutor } : {})
     });
   } catch (e) {
     console.error("Parse Error in buildRealtimeAgentHello:", e);

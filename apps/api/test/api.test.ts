@@ -233,7 +233,7 @@ describe("api", () => {
       method: "POST",
       url: "/api/v1/settings",
       headers: { authorization: "Bearer dev-token" },
-      payload: { tenantId: "t-2", gitRepoUrl: "o/r", defaultBranch: "main" }
+      payload: { tenantId: "t-2", agentRuntimeBackend: "shell" }
     });
     expect(response.statusCode).toBe(403);
   });
@@ -453,9 +453,7 @@ describe("api", () => {
         expect.objectContaining({
           type: "hello",
           service: "realtime",
-          runtime: { backend: "docker" },
-          configReady: true,
-          workload: expect.objectContaining({ source: "git_repo" })
+          runtime: { backend: "docker" }
         })
       );
 

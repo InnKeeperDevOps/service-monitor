@@ -507,6 +507,21 @@ export function buildServer(opts: BuildServerOptions = {}) {
   app.register(websocket);
   app.register(correlationIdPlugin);
 
+  app.setErrorHandler((error, request, reply) => {
+    console.error("[fastify errorHandler]", error);
+    if ((error as any).issues) {
+      return reply.status(400).send({
+        code: "BAD_REQUEST",
+        message: "Validation failed",
+        details: (error as any).issues
+      });
+    }
+    return reply.status(500).send({
+      code: "INTERNAL_SERVER_ERROR",
+      message: (error as any).message || "Internal server error"
+    });
+  });
+
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const publicDir = path.join(__dirname, "public");
   app.register(fastifyStatic, {

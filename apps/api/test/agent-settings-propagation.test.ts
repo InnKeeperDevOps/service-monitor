@@ -54,9 +54,7 @@ type HelloFrame = {
   type: string;
   service: string;
   runtime?: { backend: string };
-  configReady?: boolean;
   preferredExecutor?: string;
-  workload?: { source: string | null; gitRepoUrl: string; defaultBranch: string };
 };
 
 /** Connect to /realtime and capture the first (hello) frame. */
@@ -115,8 +113,6 @@ describe("AT-AGT-001: Agent runtime — agentRuntimeBackend reflected in hello",
     // Operator changes the tenant settings.
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       agentRuntimeBackend: "kubernetes"
     });
 
@@ -130,8 +126,6 @@ describe("AT-AGT-001: Agent runtime — agentRuntimeBackend reflected in hello",
   it("reflects shell backend after settings change and reconnect", async () => {
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       agentRuntimeBackend: "shell"
     });
 
@@ -144,8 +138,6 @@ describe("AT-AGT-001: Agent runtime — agentRuntimeBackend reflected in hello",
   it("reflects updated backend when operator switches from shell to docker and agent reconnects", async () => {
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       agentRuntimeBackend: "shell"
     });
 
@@ -157,8 +149,6 @@ describe("AT-AGT-001: Agent runtime — agentRuntimeBackend reflected in hello",
     // Operator switches back to docker.
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       agentRuntimeBackend: "docker"
     });
 
@@ -184,8 +174,6 @@ describe("AT-AGT-002: Preferred executor — preferredExecutor reflected in hell
   it("reflects preferredExecutor=cursor in hello after settings change and reconnect", async () => {
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       preferredExecutor: "cursor"
     });
 
@@ -198,8 +186,6 @@ describe("AT-AGT-002: Preferred executor — preferredExecutor reflected in hell
   it("reflects preferredExecutor=claude in hello after settings change and reconnect", async () => {
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       preferredExecutor: "claude"
     });
 
@@ -212,8 +198,6 @@ describe("AT-AGT-002: Preferred executor — preferredExecutor reflected in hell
   it("reflects updated executor when operator switches from cursor to claude and agent reconnects", async () => {
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       preferredExecutor: "cursor"
     });
 
@@ -225,8 +209,6 @@ describe("AT-AGT-002: Preferred executor — preferredExecutor reflected in hell
     // Operator switches to claude.
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       preferredExecutor: "claude"
     });
 
@@ -239,8 +221,6 @@ describe("AT-AGT-002: Preferred executor — preferredExecutor reflected in hell
   it("omits preferredExecutor from hello after settings are cleared and agent reconnects", async () => {
     await upsertTenantSettings({
       tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
       preferredExecutor: "claude"
     });
 
@@ -251,9 +231,7 @@ describe("AT-AGT-002: Preferred executor — preferredExecutor reflected in hell
 
     // Operator clears the preferredExecutor (saves settings without the field).
     await upsertTenantSettings({
-      tenantId: "t-1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main"
+      tenantId: "t-1"
     });
 
     const { ws: ws2, hello: hello2 } = await connectAndCaptureHello();
