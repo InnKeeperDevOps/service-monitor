@@ -471,6 +471,8 @@ async function swapAuthStoreToPostgres(
 ): Promise<void> {
   const { Pool } = await import("pg");
   const pool = new Pool({ connectionString: databaseUrl });
+  const { ensureCoreSchema } = await import("@sm/db");
+  await ensureCoreSchema(pool);
   swappable.swap(createPostgresAuthStore(pool));
 }
 
