@@ -41,9 +41,6 @@ importers:
       '@sm/domain':
         specifier: workspace:*
         version: link:../../packages/domain
-      '@sm/github':
-        specifier: workspace:*
-        version: link:../../packages/github
       '@sm/queue':
         specifier: workspace:*
         version: link:../../packages/queue
@@ -139,9 +136,6 @@ importers:
       '@sm/domain':
         specifier: workspace:*
         version: link:../../packages/domain
-      '@sm/github':
-        specifier: workspace:*
-        version: link:../../packages/github
       '@sm/queue':
         specifier: workspace:*
         version: link:../../packages/queue

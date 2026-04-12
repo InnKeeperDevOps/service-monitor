@@ -19,7 +19,6 @@
     "@sm/contracts": "workspace:*",
     "@sm/db": "workspace:^",
     "@sm/domain": "workspace:*",
-    "@sm/github": "workspace:*",
     "@sm/queue": "workspace:*",
     "bullmq": "^5.47.2",
     "pg": "^8.14.1"

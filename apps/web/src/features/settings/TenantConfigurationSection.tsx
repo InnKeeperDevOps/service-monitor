@@ -1,7 +1,6 @@
 import type { TenantSettings } from "@sm/contracts";
 import { Building2 } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
-import { api } from "../../lib/api.js";
+import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import type { TenantSettingsPatch } from "./mergeTenantSettings.js";
 
 const AUTOMATION_ACTIONS = ["create_pr", "merge_pr", "dispatch_workflow", "push"] as const;
@@ -75,15 +74,6 @@ export function TenantConfigurationSection({
     push: false
   });
 
-  const installationRepoDatalistId = useMemo(
-    () => `sm-tenant-gh-repos-${tenantId.replace(/[^a-zA-Z0-9_-]/g, "_")}`,
-    [tenantId]
-  );
-  const [installationRepoChoices, setInstallationRepoChoices] = useState<string[]>([]);
-  const [loadingInstallationRepos, setLoadingInstallationRepos] = useState(false);
-  const [installationReposError, setInstallationReposError] = useState<string | null>(null);
-  const [githubInstallUrl, setGithubInstallUrl] = useState<string | null>(null);
-
   useEffect(() => {
     if (data) {
       setGitRepoUrl(data.gitRepoUrl);
@@ -123,25 +113,6 @@ export function TenantConfigurationSection({
       });
     }
   }, [data]);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getGithubAppSettings()
-      .then((settings) => {
-        if (!cancelled) {
-          setGithubInstallUrl(settings.installUrl ?? null);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setGithubInstallUrl(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -183,25 +154,6 @@ export function TenantConfigurationSection({
     await savePatch(patch);
   }
 
-  async function loadRepositoriesFromInstallation() {
-    setInstallationReposError(null);
-    setLoadingInstallationRepos(true);
-    try {
-      const { repos } = await api.listGithubInstallationRepos();
-      setInstallationRepoChoices(repos);
-    } catch (e) {
-      setInstallationRepoChoices([]);
-      setInstallationReposError((e as Error).message);
-    } finally {
-      setLoadingInstallationRepos(false);
-    }
-  }
-
-  function fillAutomationReposFromInstallation() {
-    if (installationRepoChoices.length === 0) return;
-    setReposInput(installationRepoChoices.join(", "));
-  }
-
   const disabled = !canEdit || loading || isSaving;
 
   return (
@@ -230,99 +182,12 @@ export function TenantConfigurationSection({
               value={gitRepoUrl}
               onChange={(e) => setGitRepoUrl(e.target.value)}
               disabled={disabled}
-              placeholder="acme/platform"
+              placeholder="git@github.com:acme/platform.git"
               style={{ ...inputStyle, flex: "1 1 200px", maxWidth: "100%", minWidth: 0 }}
-              list={installationRepoDatalistId}
-              aria-label="GitHub repository"
+              aria-label="Git repository URL"
               required
             />
-            {canEdit && (
-              <button
-                type="button"
-                disabled={disabled || loadingInstallationRepos}
-                onClick={() => void loadRepositoriesFromInstallation()}
-                style={{
-                  background: "var(--color-surface-muted)",
-                  color: "var(--color-text-primary)",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: 6,
-                  padding: "0.4rem 0.65rem",
-                  fontSize: "0.8rem",
-                  cursor: disabled || loadingInstallationRepos ? "not-allowed" : "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {loadingInstallationRepos ? "Loading…" : "Load repos from installation"}
-              </button>
-            )}
-            {canEdit &&
-              (githubInstallUrl ? (
-                <a
-                  href={githubInstallUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label="Manage repos and permissions on GitHub"
-                  style={{
-                    display: "inline-block",
-                    background: "var(--color-surface-muted)",
-                    color: "var(--color-text-primary)",
-                    border: "1px solid var(--color-border)",
-                    borderRadius: 6,
-                    padding: "0.4rem 0.65rem",
-                    fontSize: "0.8rem",
-                    textDecoration: "none",
-                    whiteSpace: "nowrap"
-                  }}
-                >
-                  Manage repos and permissions on GitHub
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  disabled
-                  aria-label="Manage repos and permissions on GitHub"
-                  style={{
-                    background: "var(--color-surface-muted)",
-                    color: "var(--color-text-secondary)",
-                    border: "1px solid var(--color-border)",
-                    borderRadius: 6,
-                    padding: "0.4rem 0.65rem",
-                    fontSize: "0.8rem",
-                    cursor: "not-allowed",
-                    whiteSpace: "nowrap"
-                  }}
-                >
-                  Manage repos and permissions on GitHub
-                </button>
-              ))}
           </div>
-          {installationReposError && (
-            <p style={{ color: "var(--color-danger)", fontSize: "0.8rem", margin: "0.35rem 0 0" }} role="alert">
-              {installationReposError}
-            </p>
-          )}
-          {!githubInstallUrl && canEdit && (
-            <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
-              Configure GitHub App settings first to enable repository access management.
-            </p>
-          )}
-          {installationRepoChoices.length > 0 && !installationReposError && (
-            <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
-              {installationRepoChoices.length} repositor{installationRepoChoices.length === 1 ? "y" : "ies"} available as
-              suggestions (type or pick from the list).
-            </p>
-          )}
-          {canEdit && (
-            <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
-              If a repository is missing, use &quot;Manage repos and permissions on GitHub&quot;, then click
-              &nbsp;&quot;Load repos from installation&quot; again.
-            </p>
-          )}
-          <datalist id={installationRepoDatalistId}>
-            {installationRepoChoices.map((r) => (
-              <option key={r} value={r} />
-            ))}
-          </datalist>
         </label>
         <label style={labelColStyle}>
           <span style={{ color: "var(--color-text-secondary)" }}>Default branch</span>
@@ -420,7 +285,7 @@ export function TenantConfigurationSection({
             <option value="pending">Not configured yet — agent waits for Kaiad</option>
           </select>
           <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
-            Whether the agent runs your app from the configured GitHub repo or executes binaries supplied by Kaiad. If you
+            Whether the agent runs your app from the configured Git repo or executes binaries supplied by Kaiad. If you
             choose &quot;Not configured yet&quot;, enrolled agents defer workloads until you save a concrete choice.
           </p>
         </label>
@@ -437,29 +302,8 @@ export function TenantConfigurationSection({
               disabled={disabled}
               placeholder="org/repo-a, org/repo-b"
               style={{ ...inputStyle, flex: "1 1 200px", maxWidth: "100%", minWidth: 0 }}
-              list={installationRepoDatalistId}
               aria-label="Automation allowed repositories"
             />
-            {canEdit && (
-              <button
-                type="button"
-                disabled={disabled || installationRepoChoices.length === 0}
-                onClick={fillAutomationReposFromInstallation}
-                title="Replaces the allowlist with every repo from the tenant installation (load repos first)."
-                style={{
-                  background: "var(--color-surface-muted)",
-                  color: "var(--color-text-primary)",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: 6,
-                  padding: "0.4rem 0.65rem",
-                  fontSize: "0.8rem",
-                  cursor: disabled || installationRepoChoices.length === 0 ? "not-allowed" : "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Fill allowlist from installation
-              </button>
-            )}
           </div>
         </label>
         <label style={labelColStyle}>

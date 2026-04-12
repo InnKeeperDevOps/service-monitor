@@ -19,7 +19,6 @@
     "@sm/contracts": "workspace:*",
     "@sm/db": "workspace:*",
     "@sm/domain": "workspace:*",
-    "@sm/github": "workspace:*",
     "@sm/queue": "workspace:*",
     "@sm/web": "workspace:*",
     "@sm/worker": "workspace:*",
