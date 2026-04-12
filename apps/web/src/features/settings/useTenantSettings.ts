@@ -1,7 +1,7 @@
 import { tenantSettingsSchema, type TenantSettings } from "@sm/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.js";
-import { mergeTenantSettingsPayload, type TenantSettingsPatch } from "./mergeTenantSettings.js";
+import { mergeTenantSettings, type TenantSettingsPatch } from "./mergeTenantSettings.js";
 
 export function useTenantSettings(tenantId: string | null) {
   const [data, setData] = useState<TenantSettings | null>(null);
@@ -42,7 +42,8 @@ export function useTenantSettings(tenantId: string | null) {
       setIsSaving(true);
       setError(null);
       try {
-        const merged = mergeTenantSettingsPayload(tenantId, dataRef.current, patch);
+        const base: TenantSettings = dataRef.current ?? { tenantId };
+        const merged = mergeTenantSettings(base, patch as Partial<TenantSettings>);
         const parsed = tenantSettingsSchema.safeParse(merged);
         if (!parsed.success) {
           const msg = parsed.error.issues.map((issue) => issue.message).join("; ");

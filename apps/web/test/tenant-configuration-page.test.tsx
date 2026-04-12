@@ -65,20 +65,19 @@ describe("TenantConfigurationPage", () => {
   it("submits merged tenant settings on save", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main"
+      docsUrl: "https://docs.acme.com"
     });
     updateSettings.mockImplementation(async (payload) => payload);
 
     render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
 
-    const repoInput = await screen.findByLabelText("Git repository URL");
+    const docsInput = await screen.findByLabelText("Documentation URL");
     await waitFor(() => {
-      expect(repoInput).toHaveValue("acme/app");
+      expect(docsInput).toHaveValue("https://docs.acme.com");
     });
-    fireEvent.change(repoInput, { target: { value: "other/repo" } });
+    fireEvent.change(docsInput, { target: { value: "https://new.docs.acme.com" } });
     await waitFor(() => {
-      expect(repoInput).toHaveValue("other/repo");
+      expect(docsInput).toHaveValue("https://new.docs.acme.com");
     });
     fireEvent.click(screen.getByRole("button", { name: "Save tenant settings" }));
 
@@ -86,8 +85,7 @@ describe("TenantConfigurationPage", () => {
       expect(updateSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           tenantId: "t1",
-          gitRepoUrl: "other/repo",
-          defaultBranch: "main"
+          docsUrl: "https://new.docs.acme.com"
         })
       );
     });
@@ -96,8 +94,7 @@ describe("TenantConfigurationPage", () => {
   it("kill switch posts full tenant payload including empty automation policy", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      gitRepoUrl: "acme/app",
-      defaultBranch: "main",
+      docsUrl: "https://docs.acme.com",
       automationPolicy: {
         repos: ["acme/app"],
         branches: ["main"],
@@ -109,14 +106,13 @@ describe("TenantConfigurationPage", () => {
 
     render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
 
-    await screen.findByLabelText("Git repository URL");
+    await screen.findByLabelText("Documentation URL");
     fireEvent.click(screen.getByRole("button", { name: "Kill Switch — Disable All Automation" }));
 
     await waitFor(() => {
       expect(updateSettings).toHaveBeenCalledWith({
         tenantId: "t1",
-        gitRepoUrl: "acme/app",
-        defaultBranch: "main",
+        docsUrl: "https://docs.acme.com",
         automationPolicy: { repos: [], branches: [], actions: [] }
       });
     });

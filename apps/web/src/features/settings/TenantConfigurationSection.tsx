@@ -55,16 +55,11 @@ export function TenantConfigurationSection({
   savePatch,
   onClearError
 }: Props) {
-  const [gitRepoUrl, setGitRepoUrl] = useState("");
-  const [defaultBranch, setDefaultBranch] = useState("");
   const [docsUrl, setDocsUrl] = useState("");
   const [preferredExecutor, setPreferredExecutor] = useState<"" | "cursor" | "claude">("");
   const [agentRuntimeBackend, setAgentRuntimeBackend] = useState<
     "" | "docker" | "kubernetes" | "shell"
   >("");
-  const [agentWorkloadSource, setAgentWorkloadSource] = useState<
-    "git_repo" | "binary" | "pending"
-  >("git_repo");
   const [reposInput, setReposInput] = useState("");
   const [branchesInput, setBranchesInput] = useState("");
   const [actionFlags, setActionFlags] = useState<Record<(typeof AUTOMATION_ACTIONS)[number], boolean>>({
@@ -76,16 +71,9 @@ export function TenantConfigurationSection({
 
   useEffect(() => {
     if (data) {
-      setGitRepoUrl(data.gitRepoUrl);
-      setDefaultBranch(data.defaultBranch);
       setDocsUrl(data.docsUrl ?? "");
       setPreferredExecutor(data.preferredExecutor ?? "");
       setAgentRuntimeBackend(data.agentRuntimeBackend ?? "");
-      if (data.agentWorkloadSource === null) {
-        setAgentWorkloadSource("pending");
-      } else {
-        setAgentWorkloadSource(data.agentWorkloadSource === "binary" ? "binary" : "git_repo");
-      }
       const p = data.automationPolicy;
       setReposInput(p?.repos?.length ? p.repos.join(", ") : "");
       setBranchesInput(p?.branches?.length ? p.branches.join(", ") : "");
@@ -97,12 +85,9 @@ export function TenantConfigurationSection({
         push: selected.has("push")
       });
     } else {
-      setGitRepoUrl("");
-      setDefaultBranch("");
       setDocsUrl("");
       setPreferredExecutor("");
       setAgentRuntimeBackend("");
-      setAgentWorkloadSource("git_repo");
       setReposInput("");
       setBranchesInput("");
       setActionFlags({
@@ -131,12 +116,9 @@ export function TenantConfigurationSection({
     const policyEmpty = repoList.length === 0 && branchList.length === 0 && actionList.length === 0;
 
     const patch: TenantSettingsPatch = {
-      gitRepoUrl: gitRepoUrl.trim(),
-      defaultBranch: defaultBranch.trim(),
       docsUrl: docsUrl.trim() ? docsUrl.trim() : null,
       preferredExecutor: preferredExecutor === "" ? null : preferredExecutor,
-      agentRuntimeBackend: agentRuntimeBackend === "" ? null : agentRuntimeBackend,
-      agentWorkloadSource: agentWorkloadSource === "pending" ? null : agentWorkloadSource
+      agentRuntimeBackend: agentRuntimeBackend === "" ? null : agentRuntimeBackend
     };
 
     if (policyEmpty) {
@@ -174,32 +156,6 @@ export function TenantConfigurationSection({
         <label style={labelColStyle}>
           <span style={{ color: "var(--color-text-secondary)" }}>Tenant ID</span>
           <input value={tenantId} readOnly style={{ ...inputStyle, opacity: 0.85 }} aria-label="Tenant ID" />
-        </label>
-        <label style={labelColStyle}>
-          <span style={{ color: "var(--color-text-secondary)" }}>Git repository URL</span>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
-            <input
-              value={gitRepoUrl}
-              onChange={(e) => setGitRepoUrl(e.target.value)}
-              disabled={disabled}
-              placeholder="git@github.com:acme/platform.git"
-              style={{ ...inputStyle, flex: "1 1 200px", maxWidth: "100%", minWidth: 0 }}
-              aria-label="Git repository URL"
-              required
-            />
-          </div>
-        </label>
-        <label style={labelColStyle}>
-          <span style={{ color: "var(--color-text-secondary)" }}>Default branch</span>
-          <input
-            value={defaultBranch}
-            onChange={(e) => setDefaultBranch(e.target.value)}
-            disabled={disabled}
-            placeholder="main"
-            style={{ ...inputStyle, maxWidth: "100%" }}
-            aria-label="Default branch"
-            required
-          />
         </label>
         <label style={labelColStyle}>
           <span style={{ color: "var(--color-text-secondary)" }}>Documentation URL (optional)</span>
@@ -260,33 +216,6 @@ export function TenantConfigurationSection({
           <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
             Tells enrolled Go agents how to run workloads (Docker socket, kubectl, or shell). Applies on next WebSocket
             connection.
-          </p>
-        </label>
-        <label style={labelColStyle}>
-          <span style={{ color: "var(--color-text-secondary)" }}>Agent workload source</span>
-          <select
-            value={agentWorkloadSource}
-            onChange={(e) =>
-              setAgentWorkloadSource(e.target.value as "git_repo" | "binary" | "pending")
-            }
-            disabled={disabled}
-            aria-label="Agent workload source"
-            style={{
-              border: "1px solid var(--color-border)",
-              borderRadius: 6,
-              padding: "0.35rem 0.45rem",
-              background: "var(--color-surface)",
-              color: "var(--color-text-primary)",
-              maxWidth: 420
-            }}
-          >
-            <option value="git_repo">Git repository (clone / run from repo above)</option>
-            <option value="binary">Binary from Kaiad (artifacts pushed by the control plane)</option>
-            <option value="pending">Not configured yet — agent waits for Kaiad</option>
-          </select>
-          <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
-            Whether the agent runs your app from the configured Git repo or executes binaries supplied by Kaiad. If you
-            choose &quot;Not configured yet&quot;, enrolled agents defer workloads until you save a concrete choice.
           </p>
         </label>
 

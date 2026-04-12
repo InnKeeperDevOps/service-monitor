@@ -38,9 +38,7 @@ describe("contracts", () => {
 
   it("parses tenant settings without automation policy (backward compatible)", () => {
     const parsed = tenantSettingsSchema.parse({
-      tenantId: "t-1",
-      gitRepoUrl: "o/r",
-      defaultBranch: "main"
+      tenantId: "t-1"
     });
     expect(parsed.automationPolicy).toBeUndefined();
   });

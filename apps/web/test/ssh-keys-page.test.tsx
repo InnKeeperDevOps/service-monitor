@@ -91,8 +91,8 @@ describe("SshKeysPage", () => {
     await waitFor(() => {
       expect(createSshKey).toHaveBeenCalledWith({
         name: "My Key",
-        keyType: "uploaded",
-        privateKeyPem: "test-pem",
+        type: "uploaded",
+        privateKey: "test-pem",
         localPath: undefined
       });
     });
@@ -104,7 +104,7 @@ describe("SshKeysPage", () => {
         {
           id: "k1",
           name: "Test Key",
-          keyType: "uploaded",
+          type: "uploaded",
           createdAt: new Date().toISOString()
         }
       ]

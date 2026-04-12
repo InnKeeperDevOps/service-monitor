@@ -30,8 +30,8 @@ export function SshKeysPage() {
     try {
       await api.createSshKey({
         name: form.name,
-        keyType: form.keyType,
-        privateKeyPem: form.keyType === "uploaded" ? form.privateKey : undefined,
+        type: form.keyType,
+        privateKey: form.keyType === "uploaded" ? form.privateKey : undefined,
         localPath: form.keyType === "local_path" ? form.localPath : undefined
       });
       fetchKeys();
@@ -140,7 +140,7 @@ export function SshKeysPage() {
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}><Key size={14} /> {key.name}</span>
                 </td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>
-                  {key.keyType === "uploaded" ? "Uploaded" : "Local Path"}
+                  {key.type === "uploaded" ? "Uploaded" : "Local Path"}
                 </td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
                   {new Date(key.createdAt).toLocaleString()}
