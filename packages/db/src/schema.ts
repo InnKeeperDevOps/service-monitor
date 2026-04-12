@@ -86,13 +86,16 @@ create table if not exists monitored_services (
 create table if not exists workflow_graphs (
   id text primary key,
   tenant_id text not null references tenants(id) on delete cascade,
-  service_id text not null references monitored_services(id) on delete cascade,
+  name text not null,
   version integer not null,
   graph_json jsonb not null,
   is_active boolean not null default false
 );
 
 alter table monitored_services add column if not exists workflow_graph_id text references workflow_graphs(id) on delete set null;
+
+alter table workflow_graphs add column if not exists name text not null default 'Untitled Workflow';
+alter table workflow_graphs drop column if exists service_id cascade;
 
 create table if not exists service_runs (
   id text primary key,

@@ -420,7 +420,7 @@ describe("listWorkflowGraphs", () => {
       {
         id: "wf1",
         tenant_id: "t1",
-        service_id: "svc-1",
+        name: "wf",
         version: 2,
         graph_json: { nodes: [{ id: "n1", type: "check" }], edges: [{ from: "n1", to: "n2" }] },
         is_active: true,
@@ -431,7 +431,7 @@ describe("listWorkflowGraphs", () => {
       {
         id: "wf1",
         tenantId: "t1",
-        serviceId: "svc-1",
+        name: "wf",
         version: 2,
         nodes: [{ id: "n1", type: "check" }],
         edges: [{ from: "n1", to: "n2" }],
@@ -445,7 +445,7 @@ describe("listWorkflowGraphs", () => {
       {
         id: "wf1",
         tenant_id: "t1",
-        service_id: "svc-1",
+        name: "wf",
         version: 1,
         graph_json: JSON.stringify({ nodes: [], edges: [] }),
         is_active: false,
@@ -465,7 +465,7 @@ describe("createWorkflowGraph", () => {
         {
           id: "wf-new",
           tenant_id: "t1",
-          service_id: "svc-1",
+          name: "wf",
           version: 4,
           graph_json: { nodes: [{ id: "n1", type: "t" }], edges: [] },
           is_active: false,
@@ -473,7 +473,7 @@ describe("createWorkflowGraph", () => {
       ],
     );
     const result = await createWorkflowGraph(query, "t1", {
-      serviceId: "svc-1",
+      name: "wf",
       nodes: [{ id: "n1", type: "t" }],
       edges: [],
     });
@@ -490,7 +490,7 @@ describe("createWorkflowGraph", () => {
         {
           id: "wf-first",
           tenant_id: "t1",
-          service_id: "svc-1",
+          name: "wf",
           version: 1,
           graph_json: { nodes: [], edges: [] },
           is_active: false,
@@ -498,7 +498,7 @@ describe("createWorkflowGraph", () => {
       ],
     );
     const result = await createWorkflowGraph(query, "t1", {
-      serviceId: "svc-1",
+      name: "wf",
       nodes: [],
       edges: [],
     });

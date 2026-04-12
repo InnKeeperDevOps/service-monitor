@@ -59,7 +59,7 @@ export type DomainStore = {
 
   listWorkflowGraphs(tenantId: string): Promise<WorkflowGraph[]>;
   getWorkflowGraph(tenantId: string, workflowId: string): Promise<WorkflowGraph | undefined>;
-  createWorkflowGraph(tenantId: string, data: { serviceId: string; nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] }): Promise<WorkflowGraph>;
+  createWorkflowGraph(tenantId: string, data: { name: string; nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] }): Promise<WorkflowGraph>;
 };
 
 const incidents = new Map<string, Incident>();
@@ -215,13 +215,13 @@ export function createMemoryDomainStore(): DomainStore {
     },
     async createWorkflowGraph(tenantId, data) {
       const existing = [...workflows.values()].filter(
-        (w) => w.tenantId === tenantId && w.serviceId === data.serviceId
+        (w) => w.tenantId === tenantId && w.name === data.name
       );
       const nextVersion = existing.length > 0 ? Math.max(...existing.map((w) => w.version)) + 1 : 1;
       const wg: WorkflowGraph = {
         id: `wf-${uid()}`,
         tenantId,
-        serviceId: data.serviceId,
+        name: data.name,
         version: nextVersion,
         nodes: data.nodes,
         edges: data.edges,

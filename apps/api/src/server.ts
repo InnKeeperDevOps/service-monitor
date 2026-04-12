@@ -1580,8 +1580,8 @@ export function buildServer(opts: BuildServerOptions = {}) {
     }
     if (body.workflowGraphId) {
       const workflow = await domainStore.getWorkflowGraph(session.tenantId, body.workflowGraphId);
-      if (!workflow || workflow.serviceId !== service.id) {
-        return reply.status(400).send(apiErrorSchema.parse({ code: "BAD_REQUEST", message: "Workflow does not belong to this service", correlationId: (req as any).correlationId }));
+      if (!workflow) {
+        return reply.status(400).send(apiErrorSchema.parse({ code: "BAD_REQUEST", message: "Workflow not found", correlationId: (req as any).correlationId }));
       }
     }
     const updated = await domainStore.updateServiceWorkflow(session.tenantId, service.id, body.workflowGraphId ?? null);
@@ -1714,7 +1714,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
       env: {
         SM_WORKFLOW_ID: graph.id,
         SM_WORKFLOW_VERSION: String(graph.version),
-        SM_SERVICE_ID: graph.serviceId
+        SM_SERVICE_ID: body.serviceId
       }
     });
     try {
@@ -1854,10 +1854,13 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
   }
 
   const persisted = readConfig();
-  if (persisted?.setupComplete && persisted.databaseUrl?.trim()) {
+  const activeDbUrl = process.env.DATABASE_URL?.trim() || persisted?.databaseUrl?.trim();
+  const isSetup = persisted?.setupComplete || !!process.env.DATABASE_URL;
+
+  if (isSetup && activeDbUrl) {
     try {
-      await swapAuthStoreToPostgres(swappableStore, persisted.databaseUrl);
-      console.error("[api] Auth store: Postgres (persisted config)");
+      await swapAuthStoreToPostgres(swappableStore, activeDbUrl);
+      console.error("[api] Auth store: Postgres");
     } catch (err) {
       console.error("[api] Failed to attach Postgres auth store at startup:", err);
     }

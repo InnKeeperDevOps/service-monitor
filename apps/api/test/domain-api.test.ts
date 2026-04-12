@@ -249,7 +249,7 @@ describe("workflows API", () => {
       url: "/api/v1/workflows",
       headers: AUTH,
       payload: {
-        serviceId: svc.id,
+        name: "wf",
         nodes: [{ id: "n1", type: "event", kind: "onCrash" }, { id: "n2", type: "action", kind: "runShell" }],
         edges: [{ from: "n1", to: "n2" }]
       }
@@ -263,9 +263,8 @@ describe("workflows API", () => {
   });
 
   it("increments version for same service", async () => {
-    const svc = await domainStore.createService("t-1", { name: "app2", gitRepoUrl: "o/r2", branch: "main" });
     const payload = {
-      serviceId: svc.id,
+      name: "wf",
       nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
       edges: []
     };
@@ -284,6 +283,7 @@ describe("workflows API", () => {
       headers: AUTH,
       payload: {
         serviceId: svc.id,
+        name: "wf",
         nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
         edges: []
       }
@@ -311,6 +311,7 @@ describe("workflows API", () => {
       headers: AUTH,
       payload: {
         serviceId: svc.id,
+        name: "wf",
         nodes: [{ id: "n1", type: "event", kind: "onCrash" }, { id: "n2", type: "action", kind: "runShell" }],
         edges: [{ from: "n1", to: "n2" }]
       }
@@ -340,6 +341,7 @@ describe("workflows API", () => {
       headers: AUTH,
       payload: {
         serviceId: svc.id,
+        name: "wf",
         nodes: [
           { id: "n1", type: "event", kind: "onCrash" },
           { id: "n2", type: "action", kind: "runShell", data: { command: "echo ok" } }

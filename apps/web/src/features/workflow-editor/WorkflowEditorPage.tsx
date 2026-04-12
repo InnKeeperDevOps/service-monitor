@@ -182,6 +182,7 @@ export function WorkflowEditorPage() {
   const [workflows, setWorkflows] = useState<WorkflowGraph[]>([]);
   const [selectedServiceId, setSelectedServiceId] = useState<string>("");
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
+  const [selectedWorkflowName, setSelectedWorkflowName] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [testRunResult, setTestRunResult] = useState<{ nodeId: string; nodeType: string; success: boolean; output?: string }[] | null>(null);
@@ -256,7 +257,7 @@ export function WorkflowEditorPage() {
     setValidationErrors([]);
     try {
       const graph = await api.createWorkflow({
-        serviceId: selectedServiceId,
+        name: selectedWorkflowName || "Untitled Workflow",
         nodes: toWorkflowNodes(nodes),
         edges: toWorkflowEdges(edges),
       });
@@ -268,7 +269,7 @@ export function WorkflowEditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [nodes, edges, selectedServiceId]);
+  }, [nodes, edges, selectedWorkflowName]);
 
   const handleLoad = useCallback(async () => {
     if (!selectedServiceId) {
@@ -362,6 +363,7 @@ export function WorkflowEditorPage() {
     }
     void api.dryRunWorkflow({
       serviceId: selectedServiceId,
+      name: selectedWorkflowName || "Untitled Workflow",
       nodes: toWorkflowNodes(nodes),
       edges: toWorkflowEdges(edges)
     })
@@ -375,7 +377,7 @@ export function WorkflowEditorPage() {
       .catch((err) => {
         setStatusMessage({ type: "error", text: (err as Error).message });
       });
-  }, [nodes, edges, selectedServiceId]);
+  }, [nodes, edges, selectedServiceId, selectedWorkflowName]);
 
   const handleExecuteOnAgent = useCallback(async () => {
     if (!selectedServiceId) {
@@ -388,6 +390,7 @@ export function WorkflowEditorPage() {
     try {
       const execution = await api.executeWorkflow({
         serviceId: selectedServiceId,
+        name: selectedWorkflowName || "Untitled Workflow",
         nodes: toWorkflowNodes(nodes),
         edges: toWorkflowEdges(edges),
       });
@@ -400,7 +403,7 @@ export function WorkflowEditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [nodes, edges, selectedServiceId]);
+  }, [nodes, edges, selectedServiceId, selectedWorkflowName]);
 
   const handleSetActiveWorkflow = useCallback(async () => {
     if (!selectedServiceId) {
@@ -601,17 +604,30 @@ export function WorkflowEditorPage() {
             Saved
             <select
               value={selectedWorkflowId}
-              onChange={(e) => setSelectedWorkflowId(e.target.value)}
+              onChange={(e) => {
+                setSelectedWorkflowId(e.target.value);
+                const graph = serviceWorkflows.find((w) => w.id === e.target.value);
+                if (graph) setSelectedWorkflowName(graph.name);
+              }}
               disabled={serviceWorkflows.length === 0}
               style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", minWidth: 160 }}
             >
               <option value="">{serviceWorkflows.length === 0 ? "No workflows for service" : "Select workflow"}</option>
               {serviceWorkflows.map((graph) => (
                 <option key={graph.id} value={graph.id}>
-                  v{graph.version} - {graph.id.slice(0, 8)}{selectedService?.workflowGraphId === graph.id ? " (active)" : ""}
+                  {graph.name} (v{graph.version}) - {graph.id.slice(0, 8)}{selectedService?.workflowGraphId === graph.id ? " (active)" : ""}
                 </option>
               ))}
             </select>
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+            Name
+            <input
+              value={selectedWorkflowName}
+              onChange={(e) => setSelectedWorkflowName(e.target.value)}
+              placeholder="e.g. restart-app"
+              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", width: 120 }}
+            />
           </label>
           <Button size="sm" variant="secondary" onClick={handleValidate}>
             Validate

@@ -8,6 +8,7 @@ export function ServicesPage() {
   const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
   const { isAdmin } = useAuth();
   const canManage = isAdmin;
@@ -20,20 +21,46 @@ export function ServicesPage() {
   async function handleCreate(ev: React.FormEvent) {
     ev.preventDefault();
     try {
-      const svc = await api.createService({
-        name: form.name,
-        gitRepoUrl: form.gitRepoUrl,
-        sshKeyId: form.sshKeyId || undefined,
-        branch: form.branch,
-        dockerImage: form.dockerImage.trim() || undefined,
-        composePath: form.composePath.trim() || undefined
-      });
-      setServices((prev) => [...prev, svc]);
+      if (editingId) {
+        const svc = await api.updateService(editingId, {
+          name: form.name,
+          gitRepoUrl: form.gitRepoUrl,
+          sshKeyId: form.sshKeyId || null,
+          branch: form.branch,
+          dockerImage: form.dockerImage.trim() || undefined,
+          composePath: form.composePath.trim() || undefined
+        });
+        setServices((prev) => prev.map((s) => s.id === editingId ? svc : s));
+      } else {
+        const svc = await api.createService({
+          name: form.name,
+          gitRepoUrl: form.gitRepoUrl,
+          sshKeyId: form.sshKeyId || undefined,
+          branch: form.branch,
+          dockerImage: form.dockerImage.trim() || undefined,
+          composePath: form.composePath.trim() || undefined
+        });
+        setServices((prev) => [...prev, svc]);
+      }
       setShowForm(false);
+      setEditingId(null);
       setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
     } catch (e: unknown) {
       setError((e as Error).message);
     }
+  }
+
+  function handleEdit(svc: MonitoredService) {
+    setForm({
+      name: svc.name,
+      gitRepoUrl: svc.gitRepoUrl,
+      sshKeyId: svc.sshKeyId || "",
+      branch: svc.branch,
+      dockerImage: svc.dockerImage || "",
+      composePath: svc.composePath || ""
+    });
+    setEditingId(svc.id);
+    setShowForm(true);
   }
 
   return (
@@ -41,7 +68,7 @@ export function ServicesPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
         <h2 style={{ margin: 0 }}>Monitored Services</h2>
         {canManage && (
-          <button onClick={() => setShowForm(!showForm)} style={primaryBtn}>{showForm ? "Cancel" : "Add Service"}</button>
+          <button onClick={() => { setShowForm(!showForm); setEditingId(null); setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" }); }} style={primaryBtn}>{showForm ? "Cancel" : "Add Service"}</button>
         )}
       </div>
       {error && <div style={{ color: "var(--color-danger)", marginBottom: "0.5rem" }}>{error}</div>}
@@ -77,7 +104,7 @@ export function ServicesPage() {
             Compose Path <span style={{ color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>(optional)</span>
             <input value={form.composePath} onChange={(e) => setForm({ ...form, composePath: e.target.value })} placeholder="e.g. docker-compose.yml" style={inputStyle} />
           </label>
-          <button type="submit" style={primaryBtn}>Create</button>
+          <button type="submit" style={primaryBtn}>{editingId ? "Save Changes" : "Create"}</button>
         </form>
       )}
 
@@ -87,7 +114,7 @@ export function ServicesPage() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              {["Name", "Repository", "Branch", "Agent", "Workflow", "Detectors"].map((h) => (
+              {["Name", "Repository", "Branch", "Agent", "Workflow", "Detectors", "Actions"].map((h) => (
                 <th key={h} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid var(--color-border)", color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>
                   {h}
                 </th>
@@ -95,8 +122,8 @@ export function ServicesPage() {
             </tr>
           </thead>
           <tbody>
-            {services.map((svc) => (
-              <tr key={svc.id}>
+            {services.map((svc, idx) => (
+              <tr key={svc.id || idx}>
                 <td style={{ padding: "0.5rem" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}><Box size={14} /> {svc.name}</span>
                 </td>
@@ -110,6 +137,24 @@ export function ServicesPage() {
                 </td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
                   Default
+                </td>
+                <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>
+                  {canManage && (
+                    <button
+                      onClick={() => handleEdit(svc)}
+                      style={{
+                        background: "var(--color-surface)",
+                        border: "1px solid var(--color-border)",
+                        padding: "0.2rem 0.5rem",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        fontSize: "0.8rem",
+                        color: "var(--color-text-primary)"
+                      }}
+                    >
+                      Edit
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

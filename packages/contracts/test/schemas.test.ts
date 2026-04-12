@@ -515,7 +515,7 @@ describe("http.ts", () => {
         workflowGraphSchema.parse({
           id: "g-1",
           tenantId: "t-1",
-          serviceId: "svc-1",
+          name: "wf",
           version: 1,
           nodes: baseNodes,
           edges: baseEdges,
@@ -529,7 +529,7 @@ describe("http.ts", () => {
         workflowGraphSchema.parse({
           id: "g-1",
           tenantId: "t-1",
-          serviceId: "svc-1",
+          name: "wf",
           version: 0,
           nodes: baseNodes,
           edges: baseEdges,
@@ -578,14 +578,14 @@ describe("http.ts", () => {
     it("accepts create request", () => {
       expect(() =>
         createWorkflowGraphRequestSchema.parse({
-          serviceId: "svc-1",
+          name: "wf-name",
           nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
           edges: []
         })
       ).not.toThrow();
     });
 
-    it("rejects missing serviceId", () => {
+    it("rejects missing name", () => {
       expect(() =>
         createWorkflowGraphRequestSchema.parse({
           nodes: [],
@@ -603,7 +603,7 @@ describe("http.ts", () => {
             {
               id: "g-1",
               tenantId: "t-1",
-              serviceId: "svc-1",
+              name: "wf-name",
               version: 1,
               nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
               edges: [],
@@ -628,6 +628,7 @@ describe("http.ts", () => {
       expect(() =>
         executeWorkflowRequestSchema.parse({
           serviceId: "svc-1",
+          name: "wf-name",
           nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
           edges: []
         })

@@ -36,7 +36,7 @@ export function buildAuthState(user: AuthUser | null): AuthState {
   return {
     user,
     role,
-    isAdmin: role === "admin",
+    isAdmin: role === "admin" || role === "owner",
     isOperator: role === "operator",
     isViewer: role === "viewer",
   };

@@ -389,7 +389,7 @@ export async function updateServiceWorkflow(
 export interface WorkflowGraphRow {
   id: string;
   tenantId: string;
-  serviceId: string;
+  name: string;
   version: number;
   nodes: unknown[];
   edges: unknown[];
@@ -404,7 +404,7 @@ function mapWorkflowGraph(r: Record<string, unknown>): WorkflowGraphRow {
   return {
     id: r.id as string,
     tenantId: r.tenant_id as string,
-    serviceId: r.service_id as string,
+    name: r.name as string,
     version: Number(r.version),
     nodes: graph.nodes ?? [],
     edges: graph.edges ?? [],
@@ -441,23 +441,23 @@ export async function getWorkflowGraph(
 export async function createWorkflowGraph(
   query: QueryFn,
   tenantId: string,
-  data: { serviceId: string; nodes: unknown[]; edges: unknown[] },
+  data: { name: string; nodes: unknown[]; edges: unknown[] },
 ): Promise<WorkflowGraphRow> {
   const { rows: versionRows } = await query(
     `SELECT COALESCE(MAX(version), 0) AS max_version
      FROM workflow_graphs
-     WHERE tenant_id = $1 AND service_id = $2`,
-    [tenantId, data.serviceId],
+     WHERE tenant_id = $1 AND name = $2`,
+    [tenantId, data.name],
   );
   const nextVersion = Number(versionRows[0].max_version) + 1;
 
   const id = crypto.randomUUID();
   const graphJson = JSON.stringify({ nodes: data.nodes, edges: data.edges });
   const { rows } = await query(
-    `INSERT INTO workflow_graphs (id, tenant_id, service_id, version, graph_json, is_active)
+    `INSERT INTO workflow_graphs (id, tenant_id, name, version, graph_json, is_active)
      VALUES ($1, $2, $3, $4, $5, false)
      RETURNING *`,
-    [id, tenantId, data.serviceId, nextVersion, graphJson],
+    [id, tenantId, data.name, nextVersion, graphJson],
   );
   return mapWorkflowGraph(rows[0]);
 }

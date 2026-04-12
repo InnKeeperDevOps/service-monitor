@@ -160,7 +160,8 @@ export const workflowEventKindSchema = z.enum([
   "agentOnline",
   "agentOffline",
   "agentCrashed",
-  "agentRestarted"
+  "agentRestarted",
+  "onServiceConfigurationUpdate"
 ]);
 export const workflowControlKindSchema = z.enum(["branchIf", "join", "wait", "if", "loop"]);
 export const workflowActionKindSchema = z.enum([
@@ -272,6 +273,12 @@ const eventNodeSchemas = [
     type: z.literal("event"),
     kind: z.literal("agentRestarted"),
     data: eventDataSchema({}).optional()
+  }),
+  z.object({
+    ...workflowNodeBaseShape,
+    type: z.literal("event"),
+    kind: z.literal("onServiceConfigurationUpdate"),
+    data: eventDataSchema({}).optional()
   })
 ] as const;
 
@@ -303,7 +310,7 @@ export const workflowGraphEdgeSchema = z.object({
 export const workflowGraphSchema = z.object({
   id: z.string(),
   tenantId: z.string(),
-  serviceId: z.string(),
+  name: z.string(),
   version: z.number().int().positive(),
   nodes: z.array(workflowGraphNodeSchema),
   edges: z.array(workflowGraphEdgeSchema),
@@ -312,12 +319,17 @@ export const workflowGraphSchema = z.object({
 });
 
 export const createWorkflowGraphRequestSchema = z.object({
-  serviceId: z.string(),
+  name: z.string().min(1),
   nodes: z.array(workflowGraphNodeSchema),
   edges: z.array(workflowGraphEdgeSchema)
 });
 
-export const executeWorkflowRequestSchema = createWorkflowGraphRequestSchema;
+export const executeWorkflowRequestSchema = z.object({
+  serviceId: z.string(),
+  name: z.string().min(1),
+  nodes: z.array(workflowGraphNodeSchema),
+  edges: z.array(workflowGraphEdgeSchema)
+});
 
 export const listWorkflowGraphsResponseSchema = z.object({
   graphs: z.array(workflowGraphSchema)
@@ -371,6 +383,16 @@ export const createMonitoredServiceRequestSchema = z.object({
   composePath: z.string().min(1).optional()
 });
 
+export const updateMonitoredServiceRequestSchema = z.object({
+  name: z.string().min(1).optional(),
+  gitRepoUrl: z.string().min(1).optional(),
+  sshKeyId: z.string().nullable().optional(),
+  branch: z.string().min(1).optional(),
+  agentId: z.string().nullable().optional(),
+  dockerImage: z.string().min(1).optional(),
+  composePath: z.string().min(1).optional()
+});
+
 export const listMonitoredServicesResponseSchema = z.object({
   services: z.array(monitoredServiceSchema)
 });
@@ -410,6 +432,8 @@ export type ExecuteWorkflowRequest = z.infer<typeof executeWorkflowRequestSchema
 export type ExecuteWorkflowResponse = z.infer<typeof executeWorkflowResponseSchema>;
 export type WorkflowDryRunResponse = z.infer<typeof workflowDryRunResponseSchema>;
 export type MonitoredService = z.infer<typeof monitoredServiceSchema>;
+export type CreateMonitoredServiceRequest = z.infer<typeof createMonitoredServiceRequestSchema>;
+export type UpdateMonitoredServiceRequest = z.infer<typeof updateMonitoredServiceRequestSchema>;
 export type SetServiceWorkflowRequest = z.infer<typeof setServiceWorkflowRequestSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 

@@ -13,7 +13,8 @@ export const WORKFLOW_EVENT_KINDS = [
   "agentOnline",
   "agentOffline",
   "agentCrashed",
-  "agentRestarted"
+  "agentRestarted",
+  "onServiceConfigurationUpdate"
 ] as const;
 
 export const WORKFLOW_CONTROL_KINDS = ["branchIf", "join", "wait", "if", "loop"] as const;
@@ -70,7 +71,8 @@ export const WORKFLOW_EVENT_DATA_SPEC: Record<
   agentOnline: { optionalKeys: [], requiredKeys: [] },
   agentOffline: { optionalKeys: [], requiredKeys: [] },
   agentCrashed: { optionalKeys: [], requiredKeys: [] },
-  agentRestarted: { optionalKeys: [], requiredKeys: [] }
+  agentRestarted: { optionalKeys: [], requiredKeys: [] },
+  onServiceConfigurationUpdate: { optionalKeys: [], requiredKeys: [] }
 };
 
 export function isWorkflowEventKind(kind: WorkflowNodeKind): kind is (typeof WORKFLOW_EVENT_KINDS)[number] {
@@ -94,7 +96,8 @@ export const WORKFLOW_TRIGGER_TYPES = [
   "onCrash",
   "onShutdown",
   "onLogPattern",
-  "onSchedule"
+  "onSchedule",
+  "onServiceConfigurationUpdate"
 ] as const;
 export const WORKFLOW_TRIGGER_DATA_SPEC = WORKFLOW_EVENT_DATA_SPEC;
 export function isWorkflowTriggerType(kind: WorkflowNodeKind): boolean {

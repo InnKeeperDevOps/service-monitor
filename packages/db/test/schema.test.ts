@@ -55,9 +55,9 @@ describe("db schema", () => {
       expect(coreSchemaSql).toContain("last_heartbeat_at");
     });
 
-    it("defines workflow_graphs with tenant, service FK, version, graph_json jsonb, is_active", () => {
+    it("defines workflow_graphs with tenant, name, version, graph_json jsonb, is_active", () => {
       expect(coreSchemaSql).toContain("create table if not exists workflow_graphs");
-      expect(coreSchemaSql).toMatch(/references monitored_services\(id\)/);
+      expect(coreSchemaSql).toContain("name text not null");
       expect(coreSchemaSql).toContain("graph_json jsonb");
       expect(coreSchemaSql).toContain("is_active");
       expect(coreSchemaSql).toMatch(/version (integer|text) not null/);

@@ -101,6 +101,25 @@ Key platform capabilities:
 
 For ports, Compose files, and env var tables see [`README.md`](README.md).
 
+### Environments and URLs
+
+- **Kaiad Panel (Dev):** http://panel.dev.kaiad.dev/
+- **Kaiad Panel (Prod):** http://panel.kaiad.dev/
+
+### Development Credentials
+
+- **Email:** `test@example.com`
+- **Password:** `mypassword123`
+
+### Ports Configuration
+
+- **App (Dev):** 8092
+- **App (Prod):** 8091
+- **Postgres (Dev):** 5001
+- **Postgres (Prod):** 5002
+- **Redis (Dev):** 6001
+- **Redis (Prod):** 6002
+
 ### Architecture flows
 
 #### Overall system topology
