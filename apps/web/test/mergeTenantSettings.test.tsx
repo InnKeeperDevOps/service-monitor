@@ -32,23 +32,29 @@ describe("mergeTenantSettings", () => {
     expect(merged.automationPolicy).toEqual({ repos: [], branches: [], actions: [] });
   });
 
-  it("clears optional docsUrl when patch sets null/undefined", () => {
+  it("clears optional fields when patch sets null", () => {
     const previous: TenantSettings = {
       tenantId: sessionTenantId,
-      docsUrl: "https://docs.example.com"
+      docsUrl: "https://docs.example.com",
+      preferredExecutor: "claude",
+      agentRuntimeBackend: "shell",
+      automationPolicy: {
+        repos: ["acme/app"],
+        branches: ["main"],
+        actions: ["create_pr", "merge_pr"]
+      }
     };
 
-    const merged = mergeTenantSettings(previous, { docsUrl: undefined }); 
-    // In our new patch, undefined means clear or omit (but actually we pass the patch through Object keys).
-    // The exact snippet provided says: docsUrl: patch.docsUrl !== undefined ? patch.docsUrl : base.docsUrl
-    // Wait, if it says that, passing `undefined` keeps the base value.
-    expect(merged.docsUrl).toBe("https://docs.example.com");
-
-    const merged2 = mergeTenantSettings(previous, { docsUrl: "" } as any); 
-    // If we want to clear it, we pass empty string or null. The patch UI uses null for empty values.
-    // The patch type allows `null` but the base type expects `string | undefined`.
-    // Wait! The UI `TenantConfigurationSection` sends `null` for empty fields: `docsUrl: docsUrl.trim() ? docsUrl.trim() : null`
-    // The type of `TenantSettings['docsUrl']` is `string | undefined`.
-    // Let's test with `null`
+    const merged = mergeTenantSettings(previous, { 
+      docsUrl: null,
+      preferredExecutor: null,
+      agentRuntimeBackend: null,
+      automationPolicy: null
+    }); 
+    
+    expect(merged.docsUrl).toBeUndefined();
+    expect(merged.preferredExecutor).toBeUndefined();
+    expect(merged.agentRuntimeBackend).toBeUndefined();
+    expect(merged.automationPolicy).toBeUndefined();
   });
 });

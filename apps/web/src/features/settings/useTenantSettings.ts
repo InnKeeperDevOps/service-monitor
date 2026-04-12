@@ -43,7 +43,7 @@ export function useTenantSettings(tenantId: string | null) {
       setError(null);
       try {
         const base: TenantSettings = dataRef.current ?? { tenantId };
-        const merged = mergeTenantSettings(base, patch as Partial<TenantSettings>);
+        const merged = mergeTenantSettings(base, patch);
         const parsed = tenantSettingsSchema.safeParse(merged);
         if (!parsed.success) {
           const msg = parsed.error.issues.map((issue) => issue.message).join("; ");
