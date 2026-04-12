@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   mapErrorToIncident,
-  processGithubWebhookJob,
   processLogEventForIncident,
   queueCatalog,
   runRemediation,
@@ -126,7 +125,10 @@ describe("worker", () => {
       incidentId: "i-1",
       fingerprint: "f",
       executor: "cursor",
-      prompt: "fix this"
+      prompt: "fix this",
+      gitRepoUrl: "https://example.com/repo.git",
+      sshKeyType: "uploaded",
+      sshKeyValue: null
     });
     expect(output.success).toBe(true);
     expect(output.executor).toBe("cursor");
@@ -138,185 +140,3 @@ describe("worker", () => {
   });
 });
 
-describe("github webhook job processor", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("handles supported mutation actions in simulate mode", async () => {
-    vi.stubEnv("SM_GITHUB_SIMULATE", "1");
-    vi.stubEnv("SM_GITHUB_ALLOW_SIMULATION", "1");
-    const create = await processGithubWebhookJob({
-      kind: "github_mutation",
-      tenantId: "t-1",
-      installationId: 1,
-      action: "create_pr",
-      repo: "o/r",
-      branch: "main"
-    });
-    expect(create.ok).toBe(true);
-    if (!create.ok) throw new Error("unreachable");
-    expect(create.kind).toBe("mutation");
-    expect(create.simulated).toBe(true);
-    expect(create.repo).toBe("o/r");
-
-    const merge = await processGithubWebhookJob({
-      kind: "github_mutation",
-      tenantId: "t-1",
-      installationId: 1,
-      action: "merge_pr",
-      repo: "o/r",
-      branch: "main"
-    });
-    expect(merge.ok).toBe(true);
-
-    const push = await processGithubWebhookJob({
-      kind: "github_mutation",
-      tenantId: "t-1",
-      installationId: 1,
-      action: "push",
-      repo: "o/r",
-      branch: "feat/x"
-    });
-    expect(push.ok).toBe(true);
-    if (!push.ok) throw new Error("unreachable");
-    expect(push.branch).toBe("feat/x");
-
-    const dispatch = await processGithubWebhookJob({
-      kind: "github_mutation",
-      tenantId: "t-1",
-      installationId: 1,
-      action: "dispatch_workflow",
-      repo: "o/r",
-      branch: "main"
-    });
-    expect(dispatch.ok).toBe(true);
-    if (!dispatch.ok) throw new Error("unreachable");
-    expect(dispatch.kind).toBe("mutation");
-  });
-
-  it("ignores simulate mode for mutations unless SM_GITHUB_ALLOW_SIMULATION=1", async () => {
-    vi.stubEnv("SM_GITHUB_SIMULATE", "1");
-    const r = await processGithubWebhookJob({
-      kind: "github_mutation",
-      tenantId: "t-1",
-      installationId: 1,
-      action: "push",
-      repo: "o/r",
-      branch: "main"
-    });
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error("unreachable");
-    expect(r.code).toBe("CONFIG_ERROR");
-  });
-
-  it("disables simulate mode in production unless explicitly allowed", async () => {
-    vi.stubEnv("SM_GITHUB_SIMULATE", "1");
-    vi.stubEnv("NODE_ENV", "production");
-    const r = await processGithubWebhookJob({
-      kind: "github_mutation",
-      tenantId: "t-1",
-      installationId: 1,
-      action: "push",
-      repo: "o/r",
-      branch: "main"
-    });
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error("unreachable");
-    expect(r.code).toBe("CONFIG_ERROR");
-  });
-
-  it("returns config error for mutation when client is missing and simulate mode is off", async () => {
-    vi.stubEnv("SM_GITHUB_SIMULATE", "0");
-    const r = await processGithubWebhookJob({
-      kind: "github_mutation",
-      tenantId: "t-1",
-      installationId: 1,
-      action: "push",
-      repo: "o/r",
-      branch: "main"
-    });
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error("unreachable");
-    expect(r.code).toBe("CONFIG_ERROR");
-  });
-
-  it("returns ingestion success for ingestion placeholder jobs", async () => {
-    const r = await processGithubWebhookJob({
-      kind: "github_ingestion",
-      tenantId: "t-1",
-      eventType: "issues"
-    });
-    expect(r.ok).toBe(true);
-    if (!r.ok) throw new Error("unreachable");
-    expect(r.kind).toBe("ingestion");
-    expect(r.eventType).toBe("issues");
-  });
-
-  it("denies when policy blocks the action", async () => {
-    const r = await processGithubWebhookJob(
-      {
-        kind: "github_mutation",
-        tenantId: "t-1",
-        installationId: 1,
-        action: "push",
-        repo: "o/r",
-        branch: "main"
-      },
-      { getPolicy: async () => ({ repos: ["other/repo"], branches: ["main"], actions: ["push"] }) }
-    );
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error("unreachable");
-    expect(r.code).toBe("POLICY_DENY");
-  });
-
-  it("returns failure for invalid payload", async () => {
-    const r = await processGithubWebhookJob({ not: "valid" });
-    expect(r.ok).toBe(false);
-    if (r.ok) throw new Error("unreachable");
-    expect(r.code).toBe("INVALID_PAYLOAD");
-  });
-
-  it("executes merge_pr against GitHub client in non-simulate mode", async () => {
-    vi.stubEnv("SM_GITHUB_SIMULATE", "0");
-    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "pem");
-    const githubClient = {
-      mergePullRequest: vi.fn().mockResolvedValue({ merged: true })
-    } as any;
-    const r = await processGithubWebhookJob(
-      {
-        kind: "github_mutation",
-        tenantId: "t-1",
-        installationId: 1,
-        action: "merge_pr",
-        repo: "o/r",
-        branch: "main",
-        pullNumber: 77
-      },
-      { githubClient }
-    );
-    expect(r.ok).toBe(true);
-    expect(githubClient.mergePullRequest).toHaveBeenCalledWith(1, "o/r", 77);
-  });
-
-  it("executes push against GitHub client in non-simulate mode", async () => {
-    vi.stubEnv("SM_GITHUB_SIMULATE", "0");
-    vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "pem");
-    const githubClient = {
-      push: vi.fn().mockResolvedValue({ pushUrl: "https://example.test/repo.git" })
-    } as any;
-    const r = await processGithubWebhookJob(
-      {
-        kind: "github_mutation",
-        tenantId: "t-1",
-        installationId: 1,
-        action: "push",
-        repo: "o/r",
-        branch: "feature/x"
-      },
-      { githubClient }
-    );
-    expect(r.ok).toBe(true);
-    expect(githubClient.push).toHaveBeenCalledWith(1, "o/r", "feature/x");
-  });
-});

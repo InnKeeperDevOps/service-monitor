@@ -56,7 +56,7 @@ func (e *Executor) Configure(dc *docker.Client, backend RuntimeBackend, kaiadCon
 	e.backend = backend
 	e.kaiadConfigReady = kaiadConfigReady
 	if workloadSource == "" && kaiadConfigReady {
-		workloadSource = "github_repo"
+		workloadSource = "git_repo"
 	}
 	e.workloadSource = workloadSource
 }
@@ -70,7 +70,7 @@ func (e *Executor) kaiadAllowsWorkloads() bool {
 	return e.kaiadConfigReady
 }
 
-// WorkloadSource returns the last workload mode from Kaiad hello ("github_repo" or "binary"), or empty if not ready.
+// WorkloadSource returns the last workload mode from Kaiad hello ("git_repo" or "binary"), or empty if not ready.
 func (e *Executor) WorkloadSource() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -359,6 +359,38 @@ func (e *Executor) executePlanRunner(ctx context.Context, executorID string, bac
 	extraEnv := payloadStringMap(payload["env"])
 	extraEnv["SM_PERMISSIONS_PROFILE"] = permissionsProfile
 
+	sshKeyType := stringValue(payload["sshKeyType"])
+	sshKeyValue := stringValue(payload["sshKeyValue"])
+
+	if sshKeyType == "uploaded" && sshKeyValue != "" {
+		f, err := os.CreateTemp("", "kaiad_ssh_key_*")
+		if err != nil {
+			return CommandResult{Success: false, Output: fmt.Sprintf("failed to create temp ssh key file: %v", err)}
+		}
+		keyPath := f.Name()
+		defer os.Remove(keyPath)
+		if err := f.Chmod(0600); err != nil {
+			f.Close()
+			return CommandResult{Success: false, Output: fmt.Sprintf("failed to chmod ssh key file: %v", err)}
+		}
+		if _, err := f.WriteString(sshKeyValue); err != nil {
+			f.Close()
+			return CommandResult{Success: false, Output: fmt.Sprintf("failed to write ssh key file: %v", err)}
+		}
+		f.Close()
+		extraEnv["GIT_SSH_COMMAND"] = fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no", keyPath)
+		
+		// If using container isolation, we must mount the key into the container
+		if containerIsolationEnabled(executorID) && backend == RuntimeDocker {
+			payload["_internalSshKeyMount"] = keyPath
+		}
+	} else if sshKeyType == "local_path" && sshKeyValue != "" {
+		extraEnv["GIT_SSH_COMMAND"] = fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no", sshKeyValue)
+		if containerIsolationEnabled(executorID) && backend == RuntimeDocker {
+			payload["_internalSshKeyMount"] = sshKeyValue
+		}
+	}
+
 	var cmdBin string
 	var cmdArgs []string
 	isolation := "host"
@@ -386,6 +418,11 @@ func (e *Executor) executePlanRunner(ctx context.Context, executorID string, bac
 			"-v", workspacePath + ":/workspace",
 			"-w", "/workspace",
 		}, envArgs...)
+		
+		if keyMount, ok := payload["_internalSshKeyMount"].(string); ok && keyMount != "" {
+			cmdArgs = append(cmdArgs, "-v", fmt.Sprintf("%s:%s:ro", keyMount, keyMount))
+		}
+		
 		cmdArgs = append(cmdArgs, image, planBin)
 		cmdArgs = append(cmdArgs, planArgs(executorID, prompt, "/workspace")...)
 	} else {

@@ -32,7 +32,7 @@ func main() {
 	token := flag.String("token", "", "if set, require matching ?token= on the WebSocket URL")
 	runtimeBackend := flag.String("runtime", "docker", "hello runtime.backend (docker|kubernetes|shell)")
 	configReady := flag.Bool("config-ready", true, "hello configReady")
-	workload := flag.String("workload", "github_repo", "hello workload.source when config-ready (github_repo|binary); use empty with -config-ready=false for null")
+	workload := flag.String("workload", "git_repo", "hello workload.source when config-ready (github_repo|binary); use empty with -config-ready=false for null")
 	injectPath := flag.String("inject", "", "optional path to JSON file: sent as one text frame after the first heartbeat (e.g. run_step command)")
 	injectReceiveArchive := flag.String("inject-receive-archive", "", "if set, path to a .tar.gz on the agent host: inject receive_source_archive after first heartbeat (overrides -inject file when set)")
 	injectReceiveDest := flag.String("inject-receive-dest", "", "optional destDir for -inject-receive-archive")
@@ -44,7 +44,7 @@ func main() {
 	if *configReady {
 		h.WorkloadSource = *workload
 		if h.WorkloadSource == "" {
-			h.WorkloadSource = "github_repo"
+			h.WorkloadSource = "git_repo"
 		}
 	}
 

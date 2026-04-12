@@ -9,7 +9,7 @@ import (
 
 func newReadyExecutor() *Executor {
 	e := NewExecutor(nil)
-	e.Configure(nil, RuntimeDocker, true, "github_repo")
+	e.Configure(nil, RuntimeDocker, true, "git_repo")
 	return e
 }
 
@@ -127,7 +127,7 @@ func TestDockerOpWithoutClient(t *testing.T) {
 
 func TestDockerOpShellRuntime(t *testing.T) {
 	e := NewExecutor(nil)
-	e.Configure(nil, RuntimeShell, true, "github_repo")
+	e.Configure(nil, RuntimeShell, true, "git_repo")
 	result := e.Execute(context.Background(), "docker_op", map[string]interface{}{
 		"operation": "start",
 		"args":      map[string]interface{}{"container": "abc"},
@@ -142,7 +142,7 @@ func TestDockerOpShellRuntime(t *testing.T) {
 
 func TestDockerOpKubernetesRuntime(t *testing.T) {
 	e := NewExecutor(nil)
-	e.Configure(nil, RuntimeKubernetes, true, "github_repo")
+	e.Configure(nil, RuntimeKubernetes, true, "git_repo")
 	result := e.Execute(context.Background(), "docker_op", map[string]interface{}{
 		"operation": "build",
 		"args":      map[string]interface{}{"path": "."},

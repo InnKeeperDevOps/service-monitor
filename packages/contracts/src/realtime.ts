@@ -118,7 +118,10 @@ const runCursorPlanCommandSchema = z.object({
   prompt: z.string(),
   workspacePath: z.string().optional(),
   env: z.record(z.string()).optional(),
-  permissionsProfile: z.enum(["restricted", "repo", "full"]).optional()
+  permissionsProfile: z.enum(["restricted", "repo", "full"]).optional(),
+  gitRepoUrl: z.string(),
+  sshKeyType: z.enum(["uploaded", "local_path"]),
+  sshKeyValue: z.string().nullable()
 });
 
 const runClaudePlanCommandSchema = z.object({
@@ -127,7 +130,10 @@ const runClaudePlanCommandSchema = z.object({
   prompt: z.string(),
   workspacePath: z.string().optional(),
   env: z.record(z.string()).optional(),
-  permissionsProfile: z.enum(["restricted", "repo", "full"]).optional()
+  permissionsProfile: z.enum(["restricted", "repo", "full"]).optional(),
+  gitRepoUrl: z.string(),
+  sshKeyType: z.enum(["uploaded", "local_path"]),
+  sshKeyValue: z.string().nullable()
 });
 
 /** Run a source file or artifact with the host toolchain (agent must have the interpreter/compiler on PATH). */

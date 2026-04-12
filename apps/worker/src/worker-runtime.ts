@@ -1,13 +1,9 @@
 import crypto from "node:crypto";
 import { Queue, type Worker } from "bullmq";
-import { GitHubAppClient } from "@sm/github";
 import { QUEUE_NAMES, agentCommandDispatchResponseSchema, agentCommandJobSchema } from "@sm/contracts";
 import { createNamedWorker, createRedisConnectionFromEnv } from "@sm/queue";
 import {
-  processGithubWebhookJob,
   runRemediation,
-  type GithubJobProcessResult,
-  type GithubProcessorOptions,
   type RemediationRunResult
 } from "./index.js";
 import { BUILT_IN_DETECTORS } from "@sm/domain";
@@ -84,41 +80,6 @@ function createInMemoryIncidentStore(): IncidentStore {
   };
 }
 
-type AutomationPolicy = {
-  repos: string[];
-  branches: string[];
-  actions: ("create_pr" | "merge_pr" | "dispatch_workflow" | "push")[];
-};
-
-/**
- * Fetches automation policy from the control-plane API.
- * Fails closed by default when policy cannot be loaded; set
- * SM_GITHUB_ALLOW_UNGUARDED=1 for explicit dev-only degraded mode.
- */
-async function getPolicyFromApi(_tenantId: string): Promise<AutomationPolicy | undefined> {
-  const apiUrl = process.env.INTERNAL_API_URL;
-  const allowUnguarded = process.env.SM_GITHUB_ALLOW_UNGUARDED === "1";
-  if (!apiUrl) {
-    if (allowUnguarded) return undefined;
-    throw new Error("INTERNAL_API_URL is required for GitHub policy enforcement");
-  }
-  try {
-    const internalToken = resolveInternalApiToken(process.env);
-    const res = await fetch(`${apiUrl}/api/v1/settings`, {
-      headers: { Authorization: `Bearer ${internalToken}` }
-    });
-    if (!res.ok) {
-      if (allowUnguarded) return undefined;
-      throw new Error(`Failed to fetch policy from API: ${res.status}`);
-    }
-    const data = (await res.json()) as Record<string, unknown>;
-    return data.automationPolicy as AutomationPolicy | undefined;
-  } catch {
-    if (allowUnguarded) return undefined;
-    throw new Error("Failed to fetch policy from API");
-  }
-}
-
 export function wireBullmqWorkers(
   connection: RedisConnection,
   env: NodeJS.ProcessEnv = process.env
@@ -129,19 +90,8 @@ export function wireBullmqWorkers(
     incidentStore: createInMemoryIncidentStore()
   });
 
-  const githubOpts: GithubProcessorOptions = {};
-  const appId = Number(env.GITHUB_APP_ID);
-  const privateKey = env.GITHUB_APP_PRIVATE_KEY;
-  if (appId > 0 && privateKey) {
-    githubOpts.githubClient = new GitHubAppClient({ appId, privateKey });
-  }
-  githubOpts.getPolicy = getPolicyFromApi;
-
   const remediation = createNamedWorker<unknown, RemediationRunResult>("remediation", connection, async (job) =>
     runRemediation(job.data)
-  );
-  const github = createNamedWorker<unknown, GithubJobProcessResult>("github", connection, async (job) =>
-    processGithubWebhookJob(job.data, githubOpts)
   );
   const agentCommands = createNamedWorker<unknown, { accepted: true; commandId: string; queued: boolean; delivered: boolean }>(
     "agentCommands",
@@ -159,12 +109,15 @@ export function wireBullmqWorkers(
         incidentId: "inc-auto",
         fingerprint: result.incident.fingerprint,
         executor: "cursor",
-        prompt: `Auto-remediation for: ${result.incident.message}`
+        prompt: `Auto-remediation for: ${result.incident.message}`,
+        gitRepoUrl: "https://github.com/placeholder/repo.git", // Placeholder for auto-remediation tests
+        sshKeyType: "uploaded",
+        sshKeyValue: null
       });
     }
     return result;
   });
-  return [remediation, github, agentCommands, logIngestion];
+  return [remediation, agentCommands, logIngestion];
 }
 
 export function startQueueConsumersFromEnv(env: NodeJS.ProcessEnv = process.env): {

@@ -30,7 +30,7 @@ type AgentHello struct {
 	PreferredExecutor string `json:"preferredExecutor,omitempty"`
 	Workload          *struct {
 		Source        *string `json:"source"`
-		GithubRepo    string  `json:"githubRepo"`
+		GitRepo       string  `json:"gitRepoUrl"`
 		DefaultBranch string  `json:"defaultBranch"`
 	} `json:"workload,omitempty"`
 }
@@ -38,7 +38,7 @@ type AgentHello struct {
 // ResolveKaiadConfig maps the hello payload to executor settings. When skipWaitEnv is true (SM_SKIP_KAIAD_CONFIG_WAIT), workloads are always allowed.
 func (h AgentHello) ResolveKaiadConfig(skipWaitEnv bool) (kaiadReady bool, workloadSource string) {
 	if skipWaitEnv {
-		return true, "github_repo"
+		return true, "git_repo"
 	}
 	if h.ConfigReady == nil {
 		kaiadReady = true
@@ -51,7 +51,7 @@ func (h AgentHello) ResolveKaiadConfig(skipWaitEnv bool) (kaiadReady bool, workl
 	if h.Workload != nil && h.Workload.Source != nil && *h.Workload.Source != "" {
 		return true, *h.Workload.Source
 	}
-	return true, "github_repo"
+	return true, "git_repo"
 }
 
 type heartbeatMessage struct {

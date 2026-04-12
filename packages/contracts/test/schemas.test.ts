@@ -18,11 +18,7 @@ import {
   executeWorkflowResponseSchema,
   createWorkflowGraphRequestSchema,
   enrollmentTokenMetadataSchema,
-  githubMutationJobSchema,
   githubPolicyCheckRequestSchema,
-  githubWebhookIngestionPlaceholderJobSchema,
-  githubWebhookJobPayloadSchema,
-  githubWebhookMutationJobSchema,
   healthResponseSchema,
   incidentSchema,
   incidentStatusSchema,
@@ -964,7 +960,10 @@ describe("realtime.ts", () => {
           prompt: "Investigate crash and prepare patch",
           workspacePath: "/workspace/svc-1",
           env: { SM_INCIDENT_ID: "inc-1" },
-          permissionsProfile: "repo"
+          permissionsProfile: "repo",
+          gitRepoUrl: "https://example.com/repo.git",
+          sshKeyType: "uploaded",
+          sshKeyValue: "secret"
         })
       ).not.toThrow();
     });
@@ -977,7 +976,10 @@ describe("realtime.ts", () => {
           prompt: "Draft and apply fix for failing tests",
           workspacePath: "/workspace/svc-2",
           env: { SM_INCIDENT_ID: "inc-2" },
-          permissionsProfile: "restricted"
+          permissionsProfile: "restricted",
+          gitRepoUrl: "https://example.com/repo.git",
+          sshKeyType: "uploaded",
+          sshKeyValue: null
         })
       ).not.toThrow();
     });
@@ -1061,7 +1063,10 @@ describe("jobs.ts", () => {
           incidentId: "inc-1",
           fingerprint: "fp",
           executor: "cursor",
-          prompt: "fix it"
+          prompt: "fix it",
+          gitRepoUrl: "https://example.com/repo.git",
+          sshKeyType: "uploaded",
+          sshKeyValue: "secret"
         })
       ).not.toThrow();
     });
@@ -1073,116 +1078,10 @@ describe("jobs.ts", () => {
           tenantId: "t-1",
           incidentId: "inc-1",
           fingerprint: "fp",
-          executor: "claude"
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("githubMutationJobSchema", () => {
-    it("accepts mutation job", () => {
-      expect(() =>
-        githubMutationJobSchema.parse({
-          tenantId: "t-1",
-          installationId: 5,
-          action: "push",
-          repo: "o/r",
-          branch: "main"
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects missing repo", () => {
-      expect(() =>
-        githubMutationJobSchema.parse({
-          tenantId: "t-1",
-          installationId: 5,
-          action: "push",
-          branch: "main"
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("githubWebhookMutationJobSchema", () => {
-    it("accepts webhook mutation", () => {
-      expect(() =>
-        githubWebhookMutationJobSchema.parse({
-          kind: "github_mutation",
-          tenantId: "t-1",
-          installationId: 5,
-          action: "merge_pr",
-          repo: "o/r",
-          branch: "feat"
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects wrong kind", () => {
-      expect(() =>
-        githubWebhookMutationJobSchema.parse({
-          kind: "github_ingestion",
-          tenantId: "t-1",
-          installationId: 5,
-          action: "push",
-          repo: "o/r",
-          branch: "main"
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("githubWebhookIngestionPlaceholderJobSchema", () => {
-    it("accepts ingestion placeholder", () => {
-      expect(() =>
-        githubWebhookIngestionPlaceholderJobSchema.parse({
-          kind: "github_ingestion",
-          tenantId: "t-1",
-          eventType: "issues",
-          deliveryId: "d-1"
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects missing eventType", () => {
-      expect(() =>
-        githubWebhookIngestionPlaceholderJobSchema.parse({
-          kind: "github_ingestion",
-          tenantId: "t-1"
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("githubWebhookJobPayloadSchema", () => {
-    it("accepts mutation branch of union", () => {
-      expect(() =>
-        githubWebhookJobPayloadSchema.parse({
-          kind: "github_mutation",
-          tenantId: "t-1",
-          installationId: 1,
-          action: "create_pr",
-          repo: "o/r",
-          branch: "main"
-        })
-      ).not.toThrow();
-    });
-
-    it("accepts ingestion branch of union", () => {
-      expect(() =>
-        githubWebhookJobPayloadSchema.parse({
-          kind: "github_ingestion",
-          tenantId: "t-1",
-          eventType: "ping"
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects unknown kind", () => {
-      expect(() =>
-        githubWebhookJobPayloadSchema.parse({
-          kind: "unknown",
-          tenantId: "t-1"
+          executor: "claude",
+          gitRepoUrl: "https://example.com/repo.git",
+          sshKeyType: "uploaded",
+          sshKeyValue: "secret"
         })
       ).toThrow();
     });

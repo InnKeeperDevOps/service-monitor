@@ -16,7 +16,7 @@ func TestHelloPayload_marshalJSON_roundTrip(t *testing.T) {
 		RuntimeBackend: "docker",
 		ConfigReady:    true,
 		WorkloadSource: "binary",
-		GithubRepo:     "a/b",
+		GitRepo:     "a/b",
 		DefaultBranch:  "main",
 	}
 	b, err := h.marshalJSON()

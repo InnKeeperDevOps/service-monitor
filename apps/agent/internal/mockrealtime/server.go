@@ -17,7 +17,7 @@ type HelloPayload struct {
 	ConfigReady    bool
 	// WorkloadSource is the string form of workload.source (github_repo or binary). Ignored when ConfigReady is false (source is null in JSON).
 	WorkloadSource string
-	GithubRepo     string
+	GitRepo     string
 	DefaultBranch  string
 	// PreferredExecutor is the AI CLI for automated fix plans ("cursor" or "claude"). Omitted when empty.
 	PreferredExecutor string
@@ -28,7 +28,7 @@ func DefaultHello() HelloPayload {
 	return HelloPayload{
 		RuntimeBackend: "docker",
 		ConfigReady:    true,
-		WorkloadSource: "github_repo",
+		WorkloadSource: "git_repo",
 	}
 }
 
@@ -42,7 +42,7 @@ type helloWire struct {
 	PreferredExecutor string  `json:"preferredExecutor,omitempty"`
 	Workload          struct {
 		Source        *string `json:"source"`
-		GithubRepo    string  `json:"githubRepo"`
+		GitRepo       string  `json:"gitRepoUrl"`
 		DefaultBranch string  `json:"defaultBranch"`
 	} `json:"workload"`
 }
@@ -58,7 +58,7 @@ func (h HelloPayload) marshalJSON() ([]byte, error) {
 	hw.Runtime.Backend = backend
 	hw.ConfigReady = h.ConfigReady
 	hw.PreferredExecutor = h.PreferredExecutor
-	hw.Workload.GithubRepo = h.GithubRepo
+	hw.Workload.GitRepo = h.GitRepo
 	hw.Workload.DefaultBranch = h.DefaultBranch
 
 	if !h.ConfigReady {
@@ -66,7 +66,7 @@ func (h HelloPayload) marshalJSON() ([]byte, error) {
 	} else {
 		src := h.WorkloadSource
 		if src == "" {
-			src = "github_repo"
+			src = "git_repo"
 		}
 		hw.Workload.Source = &src
 	}
