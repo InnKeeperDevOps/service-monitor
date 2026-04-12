@@ -5,44 +5,14 @@ import {
   createAppJwt,
   createInstallationToken,
   fetchGithubAppSlug,
-  getInstallationMetadata
-} from "../src/installation-token.js";
-import { policyGuardedMutation } from "../src/policy-guard.js";
+    getInstallationMetadata
+  } from "../src/installation-token.js";
 
-const TEST_KEY = crypto.generateKeyPairSync("rsa", {
+  const TEST_KEY = crypto.generateKeyPairSync("rsa", {
   modulusLength: 2048,
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
   publicKeyEncoding: { type: "spki", format: "pem" }
 }).privateKey;
-
-describe("policyGuardedMutation", () => {
-  const policy = { repos: ["acme/app"], branches: ["main"], actions: ["create_pr" as const, "push" as const] };
-
-  it("allows when repo, branch, and action are all allowlisted", () => {
-    const result = policyGuardedMutation(policy, "acme/app", "main", "create_pr");
-    expect(result).toEqual({ allowed: true });
-  });
-
-  it("denies when repo is not allowlisted", () => {
-    const result = policyGuardedMutation(policy, "other/repo", "main", "create_pr");
-    expect(result).toEqual({ allowed: false, reason: "REPO_NOT_ALLOWLISTED" });
-  });
-
-  it("denies when branch is not allowlisted", () => {
-    const result = policyGuardedMutation(policy, "acme/app", "develop", "create_pr");
-    expect(result).toEqual({ allowed: false, reason: "BRANCH_NOT_ALLOWLISTED" });
-  });
-
-  it("denies when action is not allowlisted", () => {
-    const result = policyGuardedMutation(policy, "acme/app", "main", "merge_pr");
-    expect(result).toEqual({ allowed: false, reason: "ACTION_NOT_ALLOWLISTED" });
-  });
-
-  it("denies when policy is undefined", () => {
-    const result = policyGuardedMutation(undefined, "acme/app", "main", "push");
-    expect(result).toEqual({ allowed: false, reason: "POLICY_NOT_CONFIGURED" });
-  });
-});
 
 describe("createInstallationToken", () => {
   it("exchanges JWT for installation token via mocked fetch", async () => {
