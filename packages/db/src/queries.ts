@@ -5,6 +5,91 @@ export type QueryFn = (
   params: unknown[],
 ) => Promise<{ rows: Record<string, unknown>[] }>;
 
+export interface SshKeyRow {
+  id: string;
+  tenantId: string;
+  name: string;
+  type: string;
+  privateKeyEncrypted?: string | null;
+  localPath?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function mapSshKey(r: Record<string, unknown>): SshKeyRow {
+  return {
+    id: r.id as string,
+    tenantId: r.tenant_id as string,
+    name: r.name as string,
+    type: r.type as string,
+    privateKeyEncrypted: r.private_key_encrypted == null ? null : String(r.private_key_encrypted),
+    localPath: r.local_path == null ? null : String(r.local_path),
+    createdAt:
+      r.created_at instanceof Date
+        ? r.created_at.toISOString()
+        : String(r.created_at),
+    updatedAt:
+      r.updated_at instanceof Date
+        ? r.updated_at.toISOString()
+        : String(r.updated_at),
+  };
+}
+
+export async function listSshKeys(
+  query: QueryFn,
+  tenantId: string,
+): Promise<SshKeyRow[]> {
+  const { rows } = await query(
+    `SELECT * FROM ssh_keys WHERE tenant_id = $1 ORDER BY created_at DESC`,
+    [tenantId],
+  );
+  return rows.map(mapSshKey);
+}
+
+export async function getSshKey(
+  query: QueryFn,
+  tenantId: string,
+  id: string,
+): Promise<SshKeyRow | undefined> {
+  const { rows } = await query(
+    `SELECT * FROM ssh_keys WHERE tenant_id = $1 AND id = $2`,
+    [tenantId, id],
+  );
+  return rows.length > 0 ? mapSshKey(rows[0]) : undefined;
+}
+
+export async function createSshKey(
+  query: QueryFn,
+  tenantId: string,
+  data: {
+    name: string;
+    type: string;
+    privateKeyEncrypted?: string | null;
+    localPath?: string | null;
+  },
+): Promise<SshKeyRow> {
+  const id = crypto.randomUUID();
+  const { rows } = await query(
+    `INSERT INTO ssh_keys (id, tenant_id, name, type, private_key_encrypted, local_path)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [id, tenantId, data.name, data.type, data.privateKeyEncrypted ?? null, data.localPath ?? null],
+  );
+  return mapSshKey(rows[0]);
+}
+
+export async function deleteSshKey(
+  query: QueryFn,
+  tenantId: string,
+  id: string,
+): Promise<boolean> {
+  const { rows } = await query(
+    `DELETE FROM ssh_keys WHERE tenant_id = $1 AND id = $2 RETURNING id`,
+    [tenantId, id],
+  );
+  return rows.length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Incidents
 // ---------------------------------------------------------------------------
@@ -207,7 +292,8 @@ export interface ServiceRow {
   agentId: string | null;
   workflowGraphId: string | null;
   name: string;
-  repo: string;
+  gitRepoUrl: string;
+  sshKeyId: string | null;
   branch: string;
   dockerImage?: string | null;
   composePath?: string | null;
@@ -220,7 +306,8 @@ function mapService(r: Record<string, unknown>): ServiceRow {
     agentId: (r.agent_id as string) ?? null,
     workflowGraphId: (r.workflow_graph_id as string) ?? null,
     name: r.name as string,
-    repo: r.repo as string,
+    gitRepoUrl: r.git_repo_url as string,
+    sshKeyId: (r.ssh_key_id as string) ?? null,
     branch: r.branch as string,
     dockerImage: r.docker_image == null ? null : String(r.docker_image),
     composePath: r.compose_path == null ? null : String(r.compose_path),
@@ -258,7 +345,8 @@ export async function createService(
   tenantId: string,
   data: {
     name: string;
-    repo: string;
+    gitRepoUrl: string;
+    sshKeyId?: string | null;
     branch: string;
     agentId?: string | null;
     dockerImage?: string;
@@ -267,10 +355,10 @@ export async function createService(
 ): Promise<ServiceRow> {
   const id = crypto.randomUUID();
   const { rows } = await query(
-    `INSERT INTO monitored_services (id, tenant_id, agent_id, name, repo, branch, docker_image, compose_path)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO monitored_services (id, tenant_id, agent_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
-    [id, tenantId, data.agentId ?? null, data.name, data.repo, data.branch, data.dockerImage ?? null, data.composePath ?? null],
+    [id, tenantId, data.agentId ?? null, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null],
   );
   return mapService(rows[0]);
 }

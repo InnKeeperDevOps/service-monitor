@@ -35,12 +35,15 @@ create table if not exists oidc_providers (
   client_secret_enc text not null
 );
 
-create table if not exists github_app_installations (
+create table if not exists ssh_keys (
   id text primary key,
   tenant_id text not null references tenants(id) on delete cascade,
-  installation_id bigint not null,
-  account_login text not null,
-  private_key_enc text not null
+  name text not null,
+  type text not null check (type in ('uploaded', 'local_path')),
+  private_key_encrypted text,
+  local_path text,
+  created_at timestamp with time zone default now() not null,
+  updated_at timestamp with time zone default now() not null
 );
 
 create table if not exists agents (
@@ -73,7 +76,8 @@ create table if not exists monitored_services (
   tenant_id text not null references tenants(id) on delete cascade,
   agent_id text references agents(id) on delete set null,
   name text not null,
-  repo text not null,
+  git_repo_url text not null,
+  ssh_key_id text references ssh_keys(id) on delete set null,
   branch text not null,
   docker_image text,
   compose_path text

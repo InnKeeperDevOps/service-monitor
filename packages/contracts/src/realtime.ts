@@ -15,8 +15,9 @@ export const agentHelloMessageSchema = z.object({
   preferredExecutor: z.enum(["cursor", "claude"]).optional(),
   workload: z
     .object({
-      source: z.enum(["github_repo", "binary"]).nullable(),
-      githubRepo: z.string(),
+      source: z.enum(["git_repo", "binary"]).nullable(),
+      gitRepoUrl: z.string(),
+      sshKeyId: z.string().nullable().optional(),
       defaultBranch: z.string()
     })
     .optional()

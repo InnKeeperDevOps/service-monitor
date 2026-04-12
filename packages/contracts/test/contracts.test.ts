@@ -5,12 +5,12 @@ import {
   agentToPlatformMessageSchema,
   apiErrorSchema,
   createEnrollmentTokenResponseSchema,
-  githubInstallationsResponseSchema,
+  listSshKeysResponseSchema,
+  createSshKeyRequestSchema,
   healthResponseSchema,
   listEnrollmentTokensResponseSchema,
   remediationJobSchema,
-  tenantSettingsSchema,
-  upsertGithubInstallationRequestSchema
+  tenantSettingsSchema
 } from "../src/index.js";
 
 describe("contracts", () => {
@@ -23,24 +23,23 @@ describe("contracts", () => {
     expect(parsed.code).toBe("POLICY_DENY");
   });
 
-  it("parses GitHub installation contracts", () => {
-    const body = upsertGithubInstallationRequestSchema.parse({
-      installationId: 7,
-      accountLogin: "acme",
-      appId: 100,
-      tenantId: "t-1"
+  it("parses SSH Key contracts", () => {
+    const body = createSshKeyRequestSchema.parse({
+      name: "My Key",
+      type: "uploaded",
+      privateKey: "secret"
     });
-    expect(body.accountLogin).toBe("acme");
-    const list = githubInstallationsResponseSchema.parse({
-      installations: [{ installationId: 7, accountLogin: "acme", appId: 100 }]
+    expect(body.name).toBe("My Key");
+    const list = listSshKeysResponseSchema.parse({
+      keys: [{ id: "1", tenantId: "t-1", name: "My Key", type: "uploaded", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }]
     });
-    expect(list.installations).toHaveLength(1);
+    expect(list.keys).toHaveLength(1);
   });
 
   it("parses tenant settings without automation policy (backward compatible)", () => {
     const parsed = tenantSettingsSchema.parse({
       tenantId: "t-1",
-      githubRepo: "o/r",
+      gitRepoUrl: "o/r",
       defaultBranch: "main"
     });
     expect(parsed.automationPolicy).toBeUndefined();

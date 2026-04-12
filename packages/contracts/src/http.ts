@@ -49,11 +49,12 @@ export const automationPolicySchema = z.object({
 export const agentRuntimeBackendSchema = z.enum(["docker", "kubernetes", "shell"]);
 
 /** How the enrolled agent obtains/runs the workload: clone from GitHub vs binary supplied by Kaiad. */
-export const agentWorkloadSourceSchema = z.enum(["github_repo", "binary"]);
+export const agentWorkloadSourceSchema = z.enum(["git_repo", "binary"]);
 
 export const tenantSettingsSchema = z.object({
   tenantId: z.string(),
-  githubRepo: z.string(),
+  gitRepoUrl: z.string().optional(),
+  sshKeyId: z.string().nullable().optional(),
   defaultBranch: z.string(),
   docsUrl: z.string().url().optional(),
   automationPolicy: automationPolicySchema.optional(),
@@ -61,7 +62,7 @@ export const tenantSettingsSchema = z.object({
   /** Where the Go agent runs workloads: Docker socket, Kubernetes CLI, or shell-only. */
   agentRuntimeBackend: agentRuntimeBackendSchema.optional(),
   /**
-   * Omit (legacy) = treat as GitHub repo mode and ready.
+   * Omit (legacy) = treat as git repo mode and ready.
    * `null` = operator has not finished Kaiad configuration; agent waits for a non-null value.
    */
   agentWorkloadSource: z.union([agentWorkloadSourceSchema, z.null()]).optional()
@@ -75,28 +76,25 @@ export const githubPolicyCheckRequestSchema = z.object({
 
 export const upsertTenantSettingsRequestSchema = tenantSettingsSchema;
 
-export const githubInstallationSettingsSchema = z.object({
-  installationId: z.number().int().positive(),
-  accountLogin: z.string().min(1),
-  appId: z.number().int().positive()
+export const sshKeySchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  name: z.string().min(1),
+  type: z.enum(["uploaded", "local_path"]),
+  localPath: z.string().nullable().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
 });
 
-/** POST body may include tenantId for symmetry with settings; must match session or be omitted. */
-export const upsertGithubInstallationRequestSchema = githubInstallationSettingsSchema.extend({
-  tenantId: z.string().optional()
+export const createSshKeyRequestSchema = z.object({
+  name: z.string().min(1),
+  type: z.enum(["uploaded", "local_path"]),
+  privateKey: z.string().optional(),
+  localPath: z.string().optional()
 });
 
-export const githubInstallationsResponseSchema = z.object({
-  installations: z.array(githubInstallationSettingsSchema)
-});
-
-/** GET /api/v1/github/installation-repositories — repos visible to the tenant's linked installation */
-export const githubInstallationRepositoriesResponseSchema = z.object({
-  repos: z.array(z.string().min(1))
-});
-
-export const syncGithubInstallationRequestSchema = z.object({
-  installationId: z.number().int().positive()
+export const listSshKeysResponseSchema = z.object({
+  keys: z.array(sshKeySchema)
 });
 
 export const createEnrollmentTokenRequestSchema = z.object({
@@ -352,7 +350,8 @@ export const monitoredServiceSchema = z.object({
   agentId: z.string().nullable(),
   workflowGraphId: z.string().nullable().optional(),
   name: z.string(),
-  repo: z.string(),
+  gitRepoUrl: z.string(),
+  sshKeyId: z.string().nullable().optional(),
   branch: z.string(),
   dockerImage: z.string().nullable().optional(),
   composePath: z.string().nullable().optional()
@@ -364,7 +363,8 @@ export const setServiceWorkflowRequestSchema = z.object({
 
 export const createMonitoredServiceRequestSchema = z.object({
   name: z.string().min(1),
-  repo: z.string().min(1),
+  gitRepoUrl: z.string().min(1),
+  sshKeyId: z.string().nullable().optional(),
   branch: z.string().min(1),
   agentId: z.string().nullable().optional(),
   dockerImage: z.string().min(1).optional(),
@@ -398,10 +398,9 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type MembershipEntry = z.infer<typeof membershipEntrySchema>;
 export type MeResponse = z.infer<typeof meResponseSchema>;
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
-export type GithubInstallationSettings = z.infer<typeof githubInstallationSettingsSchema>;
-export type GithubInstallationsResponse = z.infer<typeof githubInstallationsResponseSchema>;
-export type GithubInstallationRepositoriesResponse = z.infer<typeof githubInstallationRepositoriesResponseSchema>;
-export type SyncGithubInstallationRequest = z.infer<typeof syncGithubInstallationRequestSchema>;
+export type SshKey = z.infer<typeof sshKeySchema>;
+export type CreateSshKeyRequest = z.infer<typeof createSshKeyRequestSchema>;
+export type ListSshKeysResponse = z.infer<typeof listSshKeysResponseSchema>;
 export type Incident = z.infer<typeof incidentSchema>;
 export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
 export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;

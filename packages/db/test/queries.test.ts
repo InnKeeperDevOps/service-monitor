@@ -11,6 +11,10 @@ import {
   markAgentOffline,
   listServices,
   createService,
+  listSshKeys,
+  getSshKey,
+  createSshKey,
+  deleteSshKey,
   listWorkflowGraphs,
   createWorkflowGraph,
   type QueryFn,
@@ -29,6 +33,107 @@ function sequentialQuery(...results: Record<string, unknown>[][]): QueryFn {
   }
   return fn;
 }
+
+describe("listSshKeys", () => {
+  it("returns mapped rows", async () => {
+    const query = mockQuery([
+      {
+        id: "k1",
+        tenant_id: "t1",
+        name: "My Key",
+        type: "uploaded",
+        private_key_encrypted: "enc",
+        local_path: null,
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:00:00.000Z",
+      },
+    ]);
+    const result = await listSshKeys(query, "t1");
+    expect(result).toEqual([
+      {
+        id: "k1",
+        tenantId: "t1",
+        name: "My Key",
+        type: "uploaded",
+        privateKeyEncrypted: "enc",
+        localPath: null,
+        createdAt: "2025-01-01T00:00:00.000Z",
+        updatedAt: "2025-01-01T00:00:00.000Z",
+      },
+    ]);
+  });
+});
+
+describe("getSshKey", () => {
+  it("returns mapped row when found", async () => {
+    const query = mockQuery([
+      {
+        id: "k1",
+        tenant_id: "t1",
+        name: "My Key",
+        type: "uploaded",
+        private_key_encrypted: "enc",
+        local_path: null,
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:00:00.000Z",
+      },
+    ]);
+    const result = await getSshKey(query, "t1", "k1");
+    expect(result?.id).toBe("k1");
+  });
+
+  it("returns undefined when missing", async () => {
+    const result = await getSshKey(mockQuery([]), "t1", "nope");
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("createSshKey", () => {
+  it("generates UUID and inserts", async () => {
+    const query = mockQuery([
+      {
+        id: "new-uuid",
+        tenant_id: "t1",
+        name: "My Key",
+        type: "local_path",
+        private_key_encrypted: null,
+        local_path: "/tmp/key",
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:00:00.000Z",
+      },
+    ]);
+    const result = await createSshKey(query, "t1", {
+      name: "My Key",
+      type: "local_path",
+      localPath: "/tmp/key",
+    });
+    expect(result.name).toBe("My Key");
+    expect(result.type).toBe("local_path");
+    expect(result.localPath).toBe("/tmp/key");
+    expect(result.privateKeyEncrypted).toBeNull();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO ssh_keys"),
+      expect.arrayContaining(["t1", "My Key", "local_path", null, "/tmp/key"]),
+    );
+  });
+});
+
+describe("deleteSshKey", () => {
+  it("returns true when found and deleted", async () => {
+    const query = mockQuery([{ id: "k1" }]);
+    const result = await deleteSshKey(query, "t1", "k1");
+    expect(result).toBe(true);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("DELETE FROM ssh_keys"),
+      ["t1", "k1"]
+    );
+  });
+
+  it("returns false when not found", async () => {
+    const result = await deleteSshKey(mockQuery([]), "t1", "nope");
+    expect(result).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Incidents
@@ -246,7 +351,8 @@ describe("listServices", () => {
         tenant_id: "t1",
         agent_id: "a1",
         name: "web",
-        repo: "r",
+        git_repo_url: "r",
+        ssh_key_id: "k1",
         branch: "main",
         docker_image: "acme/web:latest",
         compose_path: "compose.yml"
@@ -260,7 +366,8 @@ describe("listServices", () => {
         agentId: "a1",
         workflowGraphId: null,
         name: "web",
-        repo: "r",
+        gitRepoUrl: "r",
+        sshKeyId: "k1",
         branch: "main",
         dockerImage: "acme/web:latest",
         composePath: "compose.yml"
@@ -277,7 +384,8 @@ describe("createService", () => {
         tenant_id: "t1",
         agent_id: null,
         name: "api",
-        repo: "r",
+        git_repo_url: "r",
+        ssh_key_id: null,
         branch: "main",
         docker_image: "acme/api:1.0",
         compose_path: "deploy/compose.yml"
@@ -285,7 +393,8 @@ describe("createService", () => {
     ]);
     const result = await createService(query, "t1", {
       name: "api",
-      repo: "r",
+      gitRepoUrl: "r",
+      sshKeyId: null,
       branch: "main",
       dockerImage: "acme/api:1.0",
       composePath: "deploy/compose.yml"
@@ -296,7 +405,7 @@ describe("createService", () => {
     expect(result.composePath).toBe("deploy/compose.yml");
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO monitored_services"),
-      expect.arrayContaining(["t1", null, "api", "r", "main", "acme/api:1.0", "deploy/compose.yml"]),
+      expect.arrayContaining(["t1", null, "api", "r", null, "main", "acme/api:1.0", "deploy/compose.yml"]),
     );
   });
 });

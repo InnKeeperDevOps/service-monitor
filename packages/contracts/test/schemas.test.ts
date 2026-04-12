@@ -18,8 +18,6 @@ import {
   executeWorkflowResponseSchema,
   createWorkflowGraphRequestSchema,
   enrollmentTokenMetadataSchema,
-  githubInstallationSettingsSchema,
-  githubInstallationsResponseSchema,
   githubMutationJobSchema,
   githubPolicyCheckRequestSchema,
   githubWebhookIngestionPlaceholderJobSchema,
@@ -40,7 +38,6 @@ import {
   remediationJobSchema,
   tenantSettingsSchema,
   updateIncidentStatusRequestSchema,
-  upsertGithubInstallationRequestSchema,
   upsertTenantSettingsRequestSchema,
   workflowGraphEdgeSchema,
   workflowGraphNodeSchema,
@@ -175,7 +172,7 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          githubRepo: "o/r",
+          gitRepoUrl: "o/r",
           defaultBranch: "main"
         })
       ).not.toThrow();
@@ -185,7 +182,7 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          githubRepo: "o/r",
+          gitRepoUrl: "o/r",
           defaultBranch: "main",
           docsUrl: "not-a-url"
         })
@@ -196,7 +193,7 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          githubRepo: "o/r",
+          gitRepoUrl: "o/r",
           defaultBranch: "main",
           preferredExecutor: "claude"
         })
@@ -207,7 +204,7 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          githubRepo: "o/r",
+          gitRepoUrl: "o/r",
           defaultBranch: "main",
           preferredExecutor: "vscode"
         })
@@ -218,7 +215,7 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          githubRepo: "o/r",
+          gitRepoUrl: "o/r",
           defaultBranch: "main",
           agentRuntimeBackend: "shell"
         })
@@ -229,7 +226,7 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          githubRepo: "o/r",
+          gitRepoUrl: "o/r",
           defaultBranch: "main",
           agentRuntimeBackend: "podman"
         })
@@ -240,7 +237,7 @@ describe("http.ts", () => {
       expect(() =>
         tenantSettingsSchema.parse({
           tenantId: "t-1",
-          githubRepo: "o/r",
+          gitRepoUrl: "o/r",
           defaultBranch: "main",
           agentWorkloadSource: "binary"
         })
@@ -250,7 +247,7 @@ describe("http.ts", () => {
     it("accepts null agentWorkloadSource", () => {
       const v = tenantSettingsSchema.parse({
         tenantId: "t-1",
-        githubRepo: "o/r",
+        gitRepoUrl: "o/r",
         defaultBranch: "main",
         agentWorkloadSource: null
       });
@@ -283,7 +280,7 @@ describe("http.ts", () => {
     it("matches tenantSettingsSchema", () => {
       const v = upsertTenantSettingsRequestSchema.parse({
         tenantId: "t-1",
-        githubRepo: "o/r",
+        gitRepoUrl: "o/r",
         defaultBranch: "main"
       });
       expect(v.tenantId).toBe("t-1");
@@ -293,70 +290,7 @@ describe("http.ts", () => {
       expect(() =>
         upsertTenantSettingsRequestSchema.parse({
           tenantId: "t-1",
-          githubRepo: "o/r"
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("githubInstallationSettingsSchema", () => {
-    it("accepts valid installation", () => {
-      expect(() =>
-        githubInstallationSettingsSchema.parse({
-          installationId: 9,
-          accountLogin: "acme",
-          appId: 123
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects non-positive installationId", () => {
-      expect(() =>
-        githubInstallationSettingsSchema.parse({
-          installationId: 0,
-          accountLogin: "acme",
-          appId: 1
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("upsertGithubInstallationRequestSchema", () => {
-    it("accepts body with optional tenantId", () => {
-      expect(() =>
-        upsertGithubInstallationRequestSchema.parse({
-          installationId: 7,
-          accountLogin: "acme",
-          appId: 100,
-          tenantId: "t-1"
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects empty accountLogin", () => {
-      expect(() =>
-        upsertGithubInstallationRequestSchema.parse({
-          installationId: 1,
-          accountLogin: "",
-          appId: 1
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("githubInstallationsResponseSchema", () => {
-    it("accepts list wrapper", () => {
-      expect(() =>
-        githubInstallationsResponseSchema.parse({
-          installations: [{ installationId: 1, accountLogin: "x", appId: 2 }]
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects malformed installation entry", () => {
-      expect(() =>
-        githubInstallationsResponseSchema.parse({
-          installations: [{ installationId: "nope" }]
+          gitRepoUrl: "o/r"
         })
       ).toThrow();
     });
@@ -728,7 +662,7 @@ describe("http.ts", () => {
           tenantId: "t-1",
           agentId: null,
           name: "api",
-          repo: "o/r",
+          gitRepoUrl: "o/r",
           branch: "main"
         })
       ).not.toThrow();
@@ -740,7 +674,7 @@ describe("http.ts", () => {
           id: "svc-1",
           tenantId: "t-1",
           agentId: null,
-          repo: "o/r",
+          gitRepoUrl: "o/r",
           branch: "main"
         })
       ).toThrow();
@@ -752,7 +686,7 @@ describe("http.ts", () => {
       expect(() =>
         createMonitoredServiceRequestSchema.parse({
           name: "api",
-          repo: "o/r",
+          gitRepoUrl: "o/r",
           branch: "main"
         })
       ).not.toThrow();
@@ -762,7 +696,7 @@ describe("http.ts", () => {
       expect(() =>
         createMonitoredServiceRequestSchema.parse({
           name: "",
-          repo: "o/r",
+          gitRepoUrl: "o/r",
           branch: "main"
         })
       ).toThrow();
@@ -779,7 +713,7 @@ describe("http.ts", () => {
               tenantId: "t-1",
               agentId: null,
               name: "api",
-              repo: "o/r",
+              gitRepoUrl: "o/r",
               branch: "main"
             }
           ]
@@ -908,7 +842,7 @@ describe("realtime.ts", () => {
         service: "realtime",
         runtime: { backend: "docker" },
         configReady: false,
-        workload: { source: null, githubRepo: "a/b", defaultBranch: "main" }
+        workload: { source: null, gitRepoUrl: "a/b", defaultBranch: "main" }
       });
       expect(m.configReady).toBe(false);
       expect(m.workload?.source).toBeNull();

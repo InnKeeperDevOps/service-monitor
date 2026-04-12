@@ -22,13 +22,23 @@ describe("db schema", () => {
       expect(coreSchemaSql).toContain("allowed_capabilities text[]");
     });
 
-    it("defines monitored_services with tenant, nullable agent FK, name, repo, branch, docker_image, compose_path", () => {
+    it("defines ssh_keys with tenant, name, type, private_key_encrypted, local_path", () => {
+      expect(coreSchemaSql).toContain("create table if not exists ssh_keys");
+      expect(coreSchemaSql).toMatch(/tenant_id text not null references tenants\(id\)/);
+      expect(coreSchemaSql).toContain("name text not null");
+      expect(coreSchemaSql).toContain("type text not null");
+      expect(coreSchemaSql).toContain("private_key_encrypted text");
+      expect(coreSchemaSql).toContain("local_path text");
+    });
+
+    it("defines monitored_services with tenant, nullable agent FK, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path", () => {
       expect(coreSchemaSql).toContain("create table if not exists monitored_services");
       expect(coreSchemaSql).toMatch(
         /agent_id text references agents\(id\)[^\n]*on delete set null/,
       );
       expect(coreSchemaSql).toContain("name text not null");
-      expect(coreSchemaSql).toContain("repo text not null");
+      expect(coreSchemaSql).toContain("git_repo_url text not null");
+      expect(coreSchemaSql).toMatch(/ssh_key_id text references ssh_keys\(id\)/);
       expect(coreSchemaSql).toContain("branch text not null");
       expect(coreSchemaSql).toContain("docker_image text");
       expect(coreSchemaSql).toContain("compose_path text");
