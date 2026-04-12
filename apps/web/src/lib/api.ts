@@ -1,4 +1,4 @@
-import type { CreateTenantRequest, MeResponse, TenantSettings } from "@sm/contracts";
+import type { CreateTenantRequest, MeResponse, TenantSettings, SshKey, CreateSshKeyRequest } from "@sm/contracts";
 import type { AuthUser } from "./useAuth.js";
 
 /** Maps `/api/v1/me` JSON to `AuthUser` for React context. */
@@ -190,6 +190,17 @@ export const api = {
 
   deleteTenant: (tenantId: string) =>
     apiFetch<void>(`/api/v1/tenants/${encodeURIComponent(tenantId)}`, {
+      method: "DELETE"
+    }),
+
+  listSshKeys: () => apiFetch<{ keys: SshKey[] }>("/api/v1/ssh-keys"),
+  createSshKey: (body: CreateSshKeyRequest) =>
+    apiFetch<SshKey>("/api/v1/ssh-keys", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
+  deleteSshKey: (id: string) =>
+    apiFetch<void>(`/api/v1/ssh-keys/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
 

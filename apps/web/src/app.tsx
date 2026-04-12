@@ -6,6 +6,7 @@ import {
   Building2,
   Cpu,
   GitBranch,
+  Key,
   LayoutDashboard,
   LogOut,
   RefreshCw,
@@ -19,6 +20,7 @@ import { SettingsPage } from "./features/settings/SettingsPage.js";
 import { LoginPage } from "./features/auth/LoginPage.js";
 import { SetupWizardPage } from "./features/setup/SetupWizardPage.js";
 import { WorkflowEditorPage } from "./features/workflow-editor/WorkflowEditorPage.js";
+import { SshKeysPage } from "./features/ssh-keys/SshKeysPage.js";
 import { TenantsPage } from "./features/tenants/TenantsPage.js";
 import { TenantConfigurationPage } from "./features/tenants/TenantConfigurationPage.js";
 import { api, meResponseToAuthUser, type Incident } from "./lib/api.js";
@@ -33,6 +35,7 @@ type Route =
   | "incidents"
   | "agents"
   | "services"
+  | "sshKeys"
   | "workflows"
   | "settings"
   | "tenants"
@@ -43,6 +46,7 @@ const NAV_ITEMS: { route: Route; label: string; icon: typeof LayoutDashboard; ad
   { route: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { route: "incidents", label: "Incidents", icon: AlertTriangle },
   { route: "services", label: "Services", icon: Box },
+  { route: "sshKeys", label: "SSH Keys", icon: Key as any },
   { route: "agents", label: "Agents", icon: Cpu },
   { route: "workflows", label: "Workflows", icon: GitBranch },
   { route: "tenants", label: "Tenants", icon: Building2, adminOnly: true },
@@ -61,6 +65,7 @@ function readNavFromHash(): { route: Route; tenantConfigTenantId: string | null 
     "incidents",
     "agents",
     "services",
+    "sshKeys",
     "workflows",
     "settings",
     "tenants",
@@ -265,6 +270,7 @@ function AppMain() {
           {route === "incidents" && <IncidentsPage />}
           {route === "agents" && <AgentsPage />}
           {route === "services" && <ServicesPage />}
+          {route === "sshKeys" && <SshKeysPage />}
           {route === "workflows" && <WorkflowEditorPage />}
           {route === "tenants" && <TenantsPage onAuthUserUpdated={setUser} />}
           {route === "settings" && <SettingsPage />}
