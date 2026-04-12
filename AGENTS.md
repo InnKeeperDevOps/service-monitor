@@ -103,8 +103,8 @@ For ports, Compose files, and env var tables see [`README.md`](README.md).
 
 ### Environments and URLs
 
-- **Kaiad Panel (Dev):** http://panel.dev.kaiad.dev/
-- **Kaiad Panel (Prod):** http://panel.kaiad.dev/
+- **Kaiad Panel (Dev):** https://panel.dev.kaiad.dev/
+- **Kaiad Panel (Prod):** https://panel.kaiad.dev/
 
 ### Development Credentials
 

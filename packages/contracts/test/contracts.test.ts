@@ -36,13 +36,6 @@ describe("contracts", () => {
     expect(list.keys).toHaveLength(1);
   });
 
-  it("parses tenant settings without automation policy (backward compatible)", () => {
-    const parsed = tenantSettingsSchema.parse({
-      tenantId: "t-1"
-    });
-    expect(parsed.automationPolicy).toBeUndefined();
-  });
-
   it("validates health response schema", () => {
     expect(
       healthResponseSchema.parse({

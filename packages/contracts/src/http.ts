@@ -38,29 +38,14 @@ export const createTenantResponseSchema = meResponseSchema;
 
 export type CreateTenantRequest = z.infer<typeof createTenantRequestSchema>;
 
-export const automationActionSchema = z.enum(["create_pr", "merge_pr", "dispatch_workflow", "push"]);
-
-export const automationPolicySchema = z.object({
-  repos: z.array(z.string()),
-  branches: z.array(z.string()),
-  actions: z.array(automationActionSchema)
-});
-
 export const agentRuntimeBackendSchema = z.enum(["docker", "kubernetes", "shell"]);
 
 export const tenantSettingsSchema = z.object({
   tenantId: z.string(),
   docsUrl: z.string().url().optional(),
-  automationPolicy: automationPolicySchema.optional(),
   preferredExecutor: z.enum(["cursor", "claude"]).optional(),
   /** Where the Go agent runs workloads: Docker socket, Kubernetes CLI, or shell-only. */
   agentRuntimeBackend: agentRuntimeBackendSchema.optional()
-});
-
-export const githubPolicyCheckRequestSchema = z.object({
-  repo: z.string(),
-  branch: z.string(),
-  action: automationActionSchema
 });
 
 export const upsertTenantSettingsRequestSchema = tenantSettingsSchema;
@@ -417,11 +402,6 @@ export const listAgentsResponseSchema = z.object({
   agents: z.array(agentSchema)
 });
 
-export type AutomationAction = z.infer<typeof automationActionSchema>;
-export type AutomationPolicy = z.infer<typeof automationPolicySchema>;
-export type HealthResponse = z.infer<typeof healthResponseSchema>;
-export type MembershipEntry = z.infer<typeof membershipEntrySchema>;
-export type MeResponse = z.infer<typeof meResponseSchema>;
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 export type SshKey = z.infer<typeof sshKeySchema>;
 export type CreateSshKeyRequest = z.infer<typeof createSshKeyRequestSchema>;

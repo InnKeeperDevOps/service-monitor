@@ -9,8 +9,6 @@ import {
   agentHelloMessageSchema,
   agentToPlatformMessageSchema,
   apiErrorSchema,
-  automationActionSchema,
-  automationPolicySchema,
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
   createMonitoredServiceRequestSchema,
@@ -18,7 +16,6 @@ import {
   executeWorkflowResponseSchema,
   createWorkflowGraphRequestSchema,
   enrollmentTokenMetadataSchema,
-  githubPolicyCheckRequestSchema,
   healthResponseSchema,
   incidentSchema,
   incidentStatusSchema,
@@ -64,10 +61,10 @@ describe("errors.ts", () => {
     it("accepts a valid API error", () => {
       expect(() =>
         apiErrorSchema.parse({
-          code: "POLICY_DENY",
+          code: "INVALID_MESSAGE",
           message: "Denied",
           correlationId: "cid-1",
-          details: { repo: "o/r" }
+          details: { field: "x" }
         })
       ).not.toThrow();
     });
@@ -116,48 +113,6 @@ describe("http.ts", () => {
           role: "viewer",
           tenantId: "t-1",
           memberships: []
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("automationActionSchema", () => {
-    it("accepts create_pr", () => {
-      expect(() => automationActionSchema.parse("merge_pr")).not.toThrow();
-    });
-
-    it("rejects unknown action", () => {
-      expect(() => automationActionSchema.parse("delete_repo")).toThrow();
-    });
-  });
-
-  describe("automationPolicySchema", () => {
-    it("accepts valid policy", () => {
-      expect(() =>
-        automationPolicySchema.parse({
-          repos: ["o/r"],
-          branches: ["main"],
-          actions: ["create_pr", "merge_pr"]
-        })
-      ).not.toThrow();
-    });
-
-    it("allows empty repos array", () => {
-      expect(() =>
-        automationPolicySchema.parse({
-          repos: [],
-          branches: ["main"],
-          actions: ["push"]
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects invalid nested action", () => {
-      expect(() =>
-        automationPolicySchema.parse({
-          repos: ["o/r"],
-          branches: ["main"],
-          actions: ["bad"]
         })
       ).toThrow();
     });
@@ -213,27 +168,6 @@ describe("http.ts", () => {
         tenantSettingsSchema.parse({
           tenantId: "t-1",
           agentRuntimeBackend: "podman"
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("githubPolicyCheckRequestSchema", () => {
-    it("accepts valid request", () => {
-      expect(() =>
-        githubPolicyCheckRequestSchema.parse({
-          repo: "o/r",
-          branch: "main",
-          action: "dispatch_workflow"
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects missing branch", () => {
-      expect(() =>
-        githubPolicyCheckRequestSchema.parse({
-          repo: "o/r",
-          action: "push"
         })
       ).toThrow();
     });

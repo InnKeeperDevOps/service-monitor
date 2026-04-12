@@ -45,30 +45,17 @@ const BUGS_MD_PATH = path.resolve(__dirname, "..", "bugs.md");
 
 interface MockSettings {
   tenantId: string;
-  githubRepo: string;
-  defaultBranch: string;
   agentRuntimeBackend?: "docker" | "kubernetes" | "shell";
   preferredExecutor?: "cursor" | "claude";
-  /** null = not configured (configReady false) */
-  agentWorkloadSource?: "github_repo" | "binary" | null;
 }
 
 function buildHelloFromSettings(s: MockSettings): Record<string, unknown> {
   const backend: string = s.agentRuntimeBackend ?? "docker";
-  const rawSource = s.agentWorkloadSource;
-  const configReady = rawSource !== null && rawSource !== undefined ? true : rawSource === undefined ? true : false;
-  const workloadSource = rawSource === null ? null : rawSource ?? "github_repo";
 
   const hello: Record<string, unknown> = {
     type: "hello",
     service: "realtime",
-    runtime: { backend },
-    configReady,
-    workload: {
-      source: workloadSource,
-      githubRepo: s.githubRepo,
-      defaultBranch: s.defaultBranch
-    }
+    runtime: { backend }
   };
   if (s.preferredExecutor) {
     hello["preferredExecutor"] = s.preferredExecutor;
@@ -160,11 +147,8 @@ test.describe("E2E-AGT: Agent settings live propagation via UI → Kaiad → Age
       // Updated each time the POST mock fires; read each time a WebSocket connects.
       let serverSettings: MockSettings = {
         tenantId: "t-1",
-        githubRepo: "acme/app",
-        defaultBranch: "main",
         agentRuntimeBackend: undefined,
-        preferredExecutor: undefined,
-        agentWorkloadSource: "github_repo"
+        preferredExecutor: undefined
       };
 
       // ── WebSocket route — intercepts the agent connection ────────────────
@@ -455,11 +439,8 @@ test.describe("E2E-AGT: Agent settings live propagation via UI → Kaiad → Age
       // STEP 0: Initial setup — fill required fields and save baseline
       // ════════════════════════════════════════════════════════════════════
       await test.step("Setup: fill required fields and save initial settings", async () => {
-        await page.getByLabel("GitHub repository").fill("acme/app");
-        await page.getByLabel("Default branch").fill("main");
         await page.getByLabel("Agent runtime backend").selectOption("");
         await page.getByLabel("Preferred executor").selectOption("");
-        await page.getByLabel("Agent workload source").selectOption("github_repo");
         await page.getByRole("button", { name: /Save tenant settings/i }).click();
         await page.waitForTimeout(400);
       });
@@ -533,75 +514,6 @@ test.describe("E2E-AGT: Agent settings live propagation via UI → Kaiad → Age
         expectedDescription: "preferredExecutor cleared",
         uiAction: async () => { await page.getByLabel("Preferred executor").selectOption(""); },
         helloMatcher: (h) => h["preferredExecutor"] === undefined || h["preferredExecutor"] === null
-      });
-
-      // ════════════════════════════════════════════════════════════════════
-      // CYCLE 3 — Agent workload source (agentWorkloadSource)
-      // ════════════════════════════════════════════════════════════════════
-
-      await settingStep({
-        stepName: "Workload source: github_repo → binary",
-        bugId: "BUG-AGT-007",
-        affectedField: "agentWorkloadSource",
-        expectedDescription: "agentWorkloadSource = binary",
-        uiAction: async () => { await page.getByLabel("Agent workload source").selectOption("binary"); },
-        helloMatcher: (h) => {
-          const wl = h["workload"] as Record<string, unknown> | undefined;
-          return h["configReady"] === true && wl?.["source"] === "binary";
-        }
-      });
-
-      await settingStep({
-        stepName: "Workload source: binary → pending (not configured)",
-        bugId: "BUG-AGT-008",
-        affectedField: "agentWorkloadSource",
-        expectedDescription: "agentWorkloadSource = null (pending)",
-        uiAction: async () => { await page.getByLabel("Agent workload source").selectOption("pending"); },
-        helloMatcher: (h) => h["configReady"] === false
-      });
-
-      await settingStep({
-        stepName: "Workload source: pending → github_repo (restore)",
-        bugId: "BUG-AGT-009",
-        affectedField: "agentWorkloadSource",
-        expectedDescription: "agentWorkloadSource = github_repo",
-        uiAction: async () => { await page.getByLabel("Agent workload source").selectOption("github_repo"); },
-        helloMatcher: (h) => {
-          const wl = h["workload"] as Record<string, unknown> | undefined;
-          return h["configReady"] === true && wl?.["source"] === "github_repo";
-        }
-      });
-
-      // ════════════════════════════════════════════════════════════════════
-      // CYCLE 4 — GitHub repo + default branch (reflected in workload object)
-      // ════════════════════════════════════════════════════════════════════
-
-      await settingStep({
-        stepName: "GitHub repo: acme/app → acme/new-service",
-        bugId: "BUG-AGT-010",
-        affectedField: "githubRepo",
-        expectedDescription: "githubRepo = acme/new-service",
-        uiAction: async () => {
-          await page.getByLabel("GitHub repository").fill("acme/new-service");
-        },
-        helloMatcher: (h) => {
-          const wl = h["workload"] as Record<string, unknown> | undefined;
-          return wl?.["githubRepo"] === "acme/new-service";
-        }
-      });
-
-      await settingStep({
-        stepName: "Default branch: main → develop",
-        bugId: "BUG-AGT-011",
-        affectedField: "defaultBranch",
-        expectedDescription: "defaultBranch = develop",
-        uiAction: async () => {
-          await page.getByLabel("Default branch").fill("develop");
-        },
-        helloMatcher: (h) => {
-          const wl = h["workload"] as Record<string, unknown> | undefined;
-          return wl?.["defaultBranch"] === "develop";
-        }
       });
 
       // ── Write bugs.md (always, so last run's results are visible) ────────

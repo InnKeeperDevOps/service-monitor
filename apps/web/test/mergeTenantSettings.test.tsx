@@ -16,45 +16,40 @@ describe("mergeTenantSettings", () => {
     });
   });
 
-  it("merges automationPolicy kill-switch into existing settings", () => {
-    const previous: TenantSettings = {
-      tenantId: sessionTenantId,
-      automationPolicy: {
-        repos: ["acme/app"],
-        branches: ["main"],
-        actions: ["create_pr", "merge_pr"]
-      }
-    };
-    
-    const merged = mergeTenantSettings(previous, {
-      automationPolicy: { repos: [], branches: [], actions: [] }
-    });
-    expect(merged.automationPolicy).toEqual({ repos: [], branches: [], actions: [] });
-  });
-
   it("clears optional fields when patch sets null", () => {
     const previous: TenantSettings = {
       tenantId: sessionTenantId,
       docsUrl: "https://docs.example.com",
       preferredExecutor: "claude",
-      agentRuntimeBackend: "shell",
-      automationPolicy: {
-        repos: ["acme/app"],
-        branches: ["main"],
-        actions: ["create_pr", "merge_pr"]
-      }
+      agentRuntimeBackend: "shell"
     };
 
     const merged = mergeTenantSettings(previous, { 
       docsUrl: null,
       preferredExecutor: null,
-      agentRuntimeBackend: null,
-      automationPolicy: null
+      agentRuntimeBackend: null
     }); 
     
     expect(merged.docsUrl).toBeUndefined();
     expect(merged.preferredExecutor).toBeUndefined();
     expect(merged.agentRuntimeBackend).toBeUndefined();
-    expect(merged.automationPolicy).toBeUndefined();
+  });
+
+  it("keeps previous values when patch does not provide them", () => {
+    const previous: TenantSettings = {
+      tenantId: sessionTenantId,
+      docsUrl: "https://docs.example.com",
+      preferredExecutor: "cursor",
+      agentRuntimeBackend: "docker"
+    };
+
+    const merged = mergeTenantSettings(previous, {}); 
+    
+    expect(merged).toEqual({
+      tenantId: sessionTenantId,
+      docsUrl: "https://docs.example.com",
+      preferredExecutor: "cursor",
+      agentRuntimeBackend: "docker"
+    });
   });
 });

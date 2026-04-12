@@ -65,17 +65,28 @@ describe("TenantConfigurationPage", () => {
   it("submits merged tenant settings on save", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      docsUrl: "https://docs.acme.com"
+      docsUrl: "https://docs.acme.com",
+      preferredExecutor: "claude",
+      agentRuntimeBackend: "shell"
     });
     updateSettings.mockImplementation(async (payload) => payload);
 
     render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
 
     const docsInput = await screen.findByLabelText("Documentation URL");
+    const executorSelect = await screen.findByLabelText("Preferred executor");
+    const runtimeSelect = await screen.findByLabelText("Agent runtime backend");
+
     await waitFor(() => {
       expect(docsInput).toHaveValue("https://docs.acme.com");
+      expect(executorSelect).toHaveValue("claude");
+      expect(runtimeSelect).toHaveValue("shell");
     });
+    
     fireEvent.change(docsInput, { target: { value: "https://new.docs.acme.com" } });
+    fireEvent.change(executorSelect, { target: { value: "cursor" } });
+    fireEvent.change(runtimeSelect, { target: { value: "docker" } });
+
     await waitFor(() => {
       expect(docsInput).toHaveValue("https://new.docs.acme.com");
     });
@@ -85,36 +96,76 @@ describe("TenantConfigurationPage", () => {
       expect(updateSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           tenantId: "t1",
-          docsUrl: "https://new.docs.acme.com"
+          docsUrl: "https://new.docs.acme.com",
+          preferredExecutor: "cursor",
+          agentRuntimeBackend: "docker"
         })
       );
     });
   });
 
-  it("kill switch posts full tenant payload including empty automation policy", async () => {
+  it("handles form submission errors gracefully", async () => {
     getSettings.mockResolvedValue({
-      tenantId: "t1",
-      docsUrl: "https://docs.acme.com",
-      automationPolicy: {
-        repos: ["acme/app"],
-        branches: ["main"],
-        actions: ["create_pr"]
-      }
+      tenantId: "t1"
     });
-    updateSettings.mockImplementation(async (payload) => payload);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    updateSettings.mockRejectedValue(new Error("API failure"));
+
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+    
+    const docsInput = await screen.findByLabelText("Documentation URL");
+    await waitFor(() => {
+      expect(docsInput).toBeInTheDocument();
+    });
+    
+    fireEvent.click(screen.getByRole("button", { name: "Save tenant settings" }));
+    
+    // The component handles this via catching the error or through the hook.
+    // The error text is shown if the hook exposes `error`.
+    // We just want to ensure it doesn't crash here.
+    await waitFor(() => {
+      expect(updateSettings).toHaveBeenCalled();
+    });
+  });
+
+  it("displays read-only state for viewers", async () => {
+    mockUseAuth = {
+      ...adminAuthState,
+      user: { ...adminAuthState.user, role: "viewer" as const },
+      role: "viewer" as const,
+      isAdmin: false,
+      isOperator: false,
+      isViewer: true
+    };
+    getSettings.mockResolvedValue({ tenantId: "t1" });
 
     render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
 
-    await screen.findByLabelText("Documentation URL");
-    fireEvent.click(screen.getByRole("button", { name: "Kill Switch — Disable All Automation" }));
+    const message = await screen.findByText(/Only owners, admins, and operators can change tenant settings/i);
+    expect(message).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(updateSettings).toHaveBeenCalledWith({
-        tenantId: "t1",
-        docsUrl: "https://docs.acme.com",
-        automationPolicy: { repos: [], branches: [], actions: [] }
-      });
-    });
+    const docsInput = screen.getByLabelText("Documentation URL (optional)");
+    expect(docsInput).toBeDisabled();
+    
+    const saveButton = screen.getByRole("button", { name: "Save tenant settings" });
+    expect(saveButton).toBeDisabled();
+  });
+
+  it("displays switching intermediate state and handles tenant switch errors", async () => {
+    // User belongs to t2 but page is t2, then we test switching by providing different id
+    mockUseAuth = {
+      ...adminAuthState,
+      user: { 
+        ...adminAuthState.user, 
+        tenantId: "t2",
+        memberships: [{ tenantId: "t1", tenantName: "Acme", role: "admin" as const }, { tenantId: "t2", tenantName: "Beta", role: "admin" as const }]
+      }
+    };
+    switchActiveTenant.mockRejectedValue(new Error("Switch failed"));
+
+    render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
+
+    // Initially should show switching text or error
+    const errText = await screen.findByText("Switch failed");
+    expect(errText).toBeInTheDocument();
   });
 });
