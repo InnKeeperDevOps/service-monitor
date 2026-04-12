@@ -1,0 +1,25 @@
+---
+description: Rules for dev testing, environments, and ports
+globs: *
+alwaysApply: true
+---
+# Testing and Ports Configuration
+
+**Mandatory Testing Rule:** When making any code changes, before saying the work is complete, you **MUST** run tests. 
+
+## Environment Rules
+- **Testing:** When testing, **never** use prod. Always use the dev environment.
+- **Databases:** Use separate databases for dev and prod.
+- **Docker:** Use Docker for Postgres and Redis for both dev and prod environments, and use the `/data` directory.
+
+## Ports Configuration
+- **App (Dev):** 8092
+- **App (Prod):** 8091
+- **Postgres (Dev):** 5001
+- **Postgres (Prod):** 5002
+- **Redis (Dev):** 6001
+- **Redis (Prod):** 6002
+
+## URLs
+- **Kaiad Panel (Dev):** http://panel.dev.kaiad.dev/
+- **Kaiad Panel (Prod):** http://panel.kaiad.dev/

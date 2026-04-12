@@ -1,0 +1,18 @@
+---
+description: MANDATORY — verify all changes using the dev panel UI
+globs: *
+alwaysApply: true
+---
+
+# UI Verification Gate
+
+**This rule is binding.**
+
+Whenever you make any functional changes (especially UI, API, or workflow changes), you **must** verify those changes using the development UI at **http://panel.dev.kaiad.dev** (or https://panel.dev.kaiad.dev/ depending on local proxy settings) before declaring the work as complete.
+
+## How to Verify
+1. If the `cursor-ide-browser` tool is available and capable, use it to navigate to the dev panel, log in if necessary, and interact with the feature you just changed.
+2. Ensure there are no console errors and the UI behaves as expected.
+3. If the browser tool is not available or the test requires manual intervention, explicitly ask the user to verify the changes in their browser at `http://panel.dev.kaiad.dev` before proceeding.
+
+Do not say "I have completed the changes" without confirming they actually work in the live dev panel UI.

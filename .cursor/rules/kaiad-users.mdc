@@ -1,0 +1,15 @@
+---
+description: Run kaiad agent and panel as specific users
+globs: *
+alwaysApply: true
+---
+# User Switching for Kaiad
+
+When executing commands for the Kaiad agent or the Kaiad panel, you must switch to the appropriate user context first.
+
+- When running the **Kaiad agent**, use the command `sudo su claud` and run the agent under this user.
+- When running the **Kaiad panel**, use the command `sudo su kaiad` and run the panel under this user.
+- For **dev**, run the application under the `firestar` user.
+- Run **Postgres** and **Redis** as the `firestar` user. Use Docker for both dev and prod environments, and use the `/data` directory.
+
+Always switch to the appropriate user before running related commands.
