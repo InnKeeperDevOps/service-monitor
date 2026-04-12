@@ -14,7 +14,7 @@ function hashPassword(password) {
 }
 
 async function seed() {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL || "postgres://user_d1f8j3:pass_k4m9v2z7@127.0.0.1:5001/service_monitor" });
+  const pool = new Pool({ connectionString: "postgres://postgres:postgres@127.0.0.1:5001/service_monitor" });
   
   try {
     // Check if user exists
