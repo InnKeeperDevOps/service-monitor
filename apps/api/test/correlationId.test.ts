@@ -40,35 +40,6 @@ describe("correlationIdPlugin", () => {
     expect(r1.headers[CORRELATION_HEADER]).not.toBe(r2.headers[CORRELATION_HEADER]);
   });
 
-  it("correlation id propagates through webhook enqueue flow", async () => {
-    const enqueuedJobs: unknown[] = [];
-    const trackedApp = buildServer({
-      enqueueGithubJob: async (job) => { enqueuedJobs.push(job); }
-    });
-    await trackedApp.ready();
-
-    const traceId = "trace-integration-test-001";
-    const payload = JSON.stringify({ ref: "refs/heads/main", repository: { full_name: "acme/app" } });
-    const sig = crypto.createHmac("sha256", "test-secret").update(payload).digest("hex");
-
-    const response = await trackedApp.inject({
-      method: "POST",
-      url: "/webhooks/github",
-      payload,
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": `sha256=${sig}`,
-        "x-github-event": "push",
-        [CORRELATION_HEADER]: traceId
-      }
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.headers[CORRELATION_HEADER]).toBe(traceId);
-    expect(enqueuedJobs).toHaveLength(1);
-    await trackedApp.close();
-  });
-
   it("correlation id propagates through authenticated API flow", async () => {
     const traceId = "trace-auth-flow-002";
     const response = await app.inject({

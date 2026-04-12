@@ -92,7 +92,7 @@ describe("TenantConfigurationPage", () => {
   it("submits merged tenant settings on save", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      githubRepo: "acme/app",
+          gitRepoUrl: "acme/app",
       defaultBranch: "main"
     });
     updateSettings.mockImplementation(async (payload) => payload);
@@ -113,7 +113,7 @@ describe("TenantConfigurationPage", () => {
       expect(updateSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           tenantId: "t1",
-          githubRepo: "other/repo",
+          gitRepoUrl: "other/repo",
           defaultBranch: "main"
         })
       );
@@ -123,7 +123,7 @@ describe("TenantConfigurationPage", () => {
   it("kill switch posts full tenant payload including empty automation policy", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      githubRepo: "acme/app",
+          gitRepoUrl: "acme/app",
       defaultBranch: "main",
       automationPolicy: {
         repos: ["acme/app"],
@@ -142,7 +142,7 @@ describe("TenantConfigurationPage", () => {
     await waitFor(() => {
       expect(updateSettings).toHaveBeenCalledWith({
         tenantId: "t1",
-        githubRepo: "acme/app",
+        gitRepoUrl: "acme/app",
         defaultBranch: "main",
         automationPolicy: { repos: [], branches: [], actions: [] }
       });
@@ -152,7 +152,7 @@ describe("TenantConfigurationPage", () => {
   it("shows Install on GitHub link when server returns installUrl", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      githubRepo: "acme/app",
+          gitRepoUrl: "acme/app",
       defaultBranch: "main"
     });
     getGithubAppSettings.mockResolvedValue({
@@ -170,7 +170,7 @@ describe("TenantConfigurationPage", () => {
   it("syncs installation when Sync now is clicked", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      githubRepo: "acme/app",
+          gitRepoUrl: "acme/app",
       defaultBranch: "main"
     });
     render(<TenantConfigurationPage tenantIdFromRoute="t1" onAuthUserUpdated={() => {}} />);
@@ -185,7 +185,7 @@ describe("TenantConfigurationPage", () => {
   it("shows tenant configuration link to manage repo access on GitHub", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      githubRepo: "acme/app",
+          gitRepoUrl: "acme/app",
       defaultBranch: "main"
     });
     getGithubAppSettings.mockResolvedValue({
@@ -205,7 +205,7 @@ describe("TenantConfigurationPage", () => {
   it("shows tenant configuration fallback copy when install link is unavailable", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      githubRepo: "acme/app",
+          gitRepoUrl: "acme/app",
       defaultBranch: "main"
     });
     getGithubAppSettings.mockResolvedValue({
@@ -224,7 +224,7 @@ describe("TenantConfigurationPage", () => {
   it("shows tenant configuration fallback copy when GitHub App settings fetch fails", async () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
-      githubRepo: "acme/app",
+          gitRepoUrl: "acme/app",
       defaultBranch: "main"
     });
     getGithubAppSettings.mockRejectedValue(new Error("github settings unavailable"));

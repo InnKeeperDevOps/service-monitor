@@ -56,7 +56,7 @@ export function TenantConfigurationSection({
   savePatch,
   onClearError
 }: Props) {
-  const [githubRepo, setGithubRepo] = useState("");
+  const [gitRepoUrl, setGitRepoUrl] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("");
   const [docsUrl, setDocsUrl] = useState("");
   const [preferredExecutor, setPreferredExecutor] = useState<"" | "cursor" | "claude">("");
@@ -64,8 +64,8 @@ export function TenantConfigurationSection({
     "" | "docker" | "kubernetes" | "shell"
   >("");
   const [agentWorkloadSource, setAgentWorkloadSource] = useState<
-    "github_repo" | "binary" | "pending"
-  >("github_repo");
+    "git_repo" | "binary" | "pending"
+  >("git_repo");
   const [reposInput, setReposInput] = useState("");
   const [branchesInput, setBranchesInput] = useState("");
   const [actionFlags, setActionFlags] = useState<Record<(typeof AUTOMATION_ACTIONS)[number], boolean>>({
@@ -86,7 +86,7 @@ export function TenantConfigurationSection({
 
   useEffect(() => {
     if (data) {
-      setGithubRepo(data.githubRepo);
+      setGitRepoUrl(data.gitRepoUrl);
       setDefaultBranch(data.defaultBranch);
       setDocsUrl(data.docsUrl ?? "");
       setPreferredExecutor(data.preferredExecutor ?? "");
@@ -94,7 +94,7 @@ export function TenantConfigurationSection({
       if (data.agentWorkloadSource === null) {
         setAgentWorkloadSource("pending");
       } else {
-        setAgentWorkloadSource(data.agentWorkloadSource === "binary" ? "binary" : "github_repo");
+        setAgentWorkloadSource(data.agentWorkloadSource === "binary" ? "binary" : "git_repo");
       }
       const p = data.automationPolicy;
       setReposInput(p?.repos?.length ? p.repos.join(", ") : "");
@@ -107,12 +107,12 @@ export function TenantConfigurationSection({
         push: selected.has("push")
       });
     } else {
-      setGithubRepo("");
+      setGitRepoUrl("");
       setDefaultBranch("");
       setDocsUrl("");
       setPreferredExecutor("");
       setAgentRuntimeBackend("");
-      setAgentWorkloadSource("github_repo");
+      setAgentWorkloadSource("git_repo");
       setReposInput("");
       setBranchesInput("");
       setActionFlags({
@@ -160,7 +160,7 @@ export function TenantConfigurationSection({
     const policyEmpty = repoList.length === 0 && branchList.length === 0 && actionList.length === 0;
 
     const patch: TenantSettingsPatch = {
-      githubRepo: githubRepo.trim(),
+      gitRepoUrl: gitRepoUrl.trim(),
       defaultBranch: defaultBranch.trim(),
       docsUrl: docsUrl.trim() ? docsUrl.trim() : null,
       preferredExecutor: preferredExecutor === "" ? null : preferredExecutor,
@@ -227,8 +227,8 @@ export function TenantConfigurationSection({
           <span style={{ color: "var(--color-text-secondary)" }}>GitHub repository (owner/repo)</span>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
             <input
-              value={githubRepo}
-              onChange={(e) => setGithubRepo(e.target.value)}
+              value={gitRepoUrl}
+              onChange={(e) => setGitRepoUrl(e.target.value)}
               disabled={disabled}
               placeholder="acme/platform"
               style={{ ...inputStyle, flex: "1 1 200px", maxWidth: "100%", minWidth: 0 }}
@@ -402,7 +402,7 @@ export function TenantConfigurationSection({
           <select
             value={agentWorkloadSource}
             onChange={(e) =>
-              setAgentWorkloadSource(e.target.value as "github_repo" | "binary" | "pending")
+              setAgentWorkloadSource(e.target.value as "git_repo" | "binary" | "pending")
             }
             disabled={disabled}
             aria-label="Agent workload source"
@@ -415,7 +415,7 @@ export function TenantConfigurationSection({
               maxWidth: 420
             }}
           >
-            <option value="github_repo">GitHub repository (clone / run from repo above)</option>
+            <option value="git_repo">Git repository (clone / run from repo above)</option>
             <option value="binary">Binary from Kaiad (artifacts pushed by the control plane)</option>
             <option value="pending">Not configured yet — agent waits for Kaiad</option>
           </select>

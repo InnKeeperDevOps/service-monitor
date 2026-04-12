@@ -126,7 +126,7 @@ describe("services API", () => {
   });
 
   it("deletes a service", async () => {
-    const svc = await domainStore.createService("t-1", { name: "del-me", repo: "o/r", branch: "main" });
+    const svc = await domainStore.createService("t-1", { name: "del-me", gitRepoUrl: "o/r", branch: "main" });
     const res = await app.inject({ method: "DELETE", url: `/api/v1/services/${svc.id}`, headers: AUTH });
     expect(res.statusCode).toBe(204);
     const listRes = await app.inject({ method: "GET", url: "/api/v1/services", headers: AUTH });
@@ -146,7 +146,7 @@ describe("services API", () => {
       headers: AUTH,
       payload: {
         name: "my-app",
-        repo: "acme/app",
+        gitRepoUrl: "acme/app",
         branch: "main",
         dockerImage: "acme/app:latest",
         composePath: "deploy/compose.yml"
@@ -170,7 +170,7 @@ describe("services API", () => {
   });
 
   it("sets active workflow for a service", async () => {
-    const svc = await domainStore.createService("t-1", { name: "svc-active", repo: "o/r", branch: "main" });
+    const svc = await domainStore.createService("t-1", { name: "svc-active", gitRepoUrl: "o/r", branch: "main" });
     const graph = await domainStore.createWorkflowGraph("t-1", {
       serviceId: svc.id,
       nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
@@ -188,6 +188,53 @@ describe("services API", () => {
   });
 });
 
+describe("ssh-keys API", () => {
+  it("returns 401 for unauthenticated GET /api/v1/ssh-keys", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/ssh-keys" });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("creates and lists SSH keys", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/api/v1/ssh-keys",
+      headers: AUTH,
+      payload: {
+        name: "my-key",
+        type: "uploaded",
+        privateKey: "some-key-data"
+      }
+    });
+    expect(createRes.statusCode).toBe(201);
+    expect(createRes.json().name).toBe("my-key");
+    expect(createRes.json().type).toBe("uploaded");
+
+    const listRes = await app.inject({ method: "GET", url: "/api/v1/ssh-keys", headers: AUTH });
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.json().keys).toHaveLength(1);
+    expect(listRes.json().keys[0]).toEqual(
+      expect.objectContaining({
+        name: "my-key",
+        type: "uploaded"
+      })
+    );
+  });
+
+  it("deletes an SSH key", async () => {
+    const key = await domainStore.createSshKey("t-1", { name: "del-key", type: "uploaded" });
+    const res = await app.inject({ method: "DELETE", url: `/api/v1/ssh-keys/${key.id}`, headers: AUTH });
+    expect(res.statusCode).toBe(204);
+    const listRes = await app.inject({ method: "GET", url: "/api/v1/ssh-keys", headers: AUTH });
+    const keys = listRes.json().keys as { id: string }[];
+    expect(keys.find((k) => k.id === key.id)).toBeUndefined();
+  });
+
+  it("returns 404 when deleting non-existent key", async () => {
+    const res = await app.inject({ method: "DELETE", url: "/api/v1/ssh-keys/no-such-id", headers: AUTH });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
 describe("workflows API", () => {
   it("returns 401 for unauthenticated GET /api/v1/workflows", async () => {
     const res = await app.inject({ method: "GET", url: "/api/v1/workflows" });
@@ -195,7 +242,7 @@ describe("workflows API", () => {
   });
 
   it("creates and lists workflow graphs", async () => {
-    const svc = await domainStore.createService("t-1", { name: "app", repo: "o/r", branch: "main" });
+    const svc = await domainStore.createService("t-1", { name: "app", gitRepoUrl: "o/r", branch: "main" });
 
     const createRes = await app.inject({
       method: "POST",
@@ -216,7 +263,7 @@ describe("workflows API", () => {
   });
 
   it("increments version for same service", async () => {
-    const svc = await domainStore.createService("t-1", { name: "app2", repo: "o/r2", branch: "main" });
+    const svc = await domainStore.createService("t-1", { name: "app2", gitRepoUrl: "o/r2", branch: "main" });
     const payload = {
       serviceId: svc.id,
       nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
@@ -230,7 +277,7 @@ describe("workflows API", () => {
   });
 
   it("returns conflict when executing workflow for service without bound agent", async () => {
-    const svc = await domainStore.createService("t-1", { name: "no-agent", repo: "o/r", branch: "main" });
+    const svc = await domainStore.createService("t-1", { name: "no-agent", gitRepoUrl: "o/r", branch: "main" });
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/workflows/execute",
@@ -254,7 +301,7 @@ describe("workflows API", () => {
     await executeApp.ready();
     const svc = await domainStore.createService("t-1", {
       name: "with-agent",
-      repo: "o/r",
+      gitRepoUrl: "o/r",
       branch: "main",
       agentId: "agent-1"
     });
@@ -286,7 +333,7 @@ describe("workflows API", () => {
   });
 
   it("returns dry-run execution steps", async () => {
-    const svc = await domainStore.createService("t-1", { name: "dry-run", repo: "o/r", branch: "main" });
+    const svc = await domainStore.createService("t-1", { name: "dry-run", gitRepoUrl: "o/r", branch: "main" });
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/workflows/dry-run",
@@ -313,7 +360,7 @@ describe("workflows API", () => {
   });
 
   it("rejects invalid trigger parameters", async () => {
-    const svc = await domainStore.createService("t-1", { name: "invalid-trigger-data", repo: "o/r", branch: "main" });
+    const svc = await domainStore.createService("t-1", { name: "invalid-trigger-data", gitRepoUrl: "o/r", branch: "main" });
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/workflows",

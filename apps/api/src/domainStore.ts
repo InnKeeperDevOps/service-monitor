@@ -6,7 +6,8 @@ import type {
   MonitoredService,
   WorkflowGraph,
   WorkflowGraphNode,
-  WorkflowGraphEdge
+  WorkflowGraphEdge,
+  SshKey
 } from "@sm/contracts";
 
 export type DomainStore = {
@@ -23,13 +24,26 @@ export type DomainStore = {
   ): Promise<void>;
   markAgentOffline(tenantId: string, agentId: string): Promise<void>;
 
+  listSshKeys(tenantId: string): Promise<SshKey[]>;
+  createSshKey(
+    tenantId: string,
+    data: {
+      name: string;
+      type: "uploaded" | "local_path";
+      privateKey?: string;
+      localPath?: string;
+    }
+  ): Promise<SshKey>;
+  deleteSshKey(tenantId: string, id: string): Promise<boolean>;
+
   listServices(tenantId: string): Promise<MonitoredService[]>;
   getService(tenantId: string, id: string): Promise<MonitoredService | undefined>;
   createService(
     tenantId: string,
     data: {
       name: string;
-      repo: string;
+      gitRepoUrl: string;
+      sshKeyId?: string | null;
       branch: string;
       agentId?: string | null;
       dockerImage?: string;
@@ -52,6 +66,7 @@ const incidents = new Map<string, Incident>();
 const agents = new Map<string, Agent>();
 const services = new Map<string, MonitoredService>();
 const workflows = new Map<string, WorkflowGraph>();
+const sshKeys = new Map<string, SshKey>();
 
 function uid(): string {
   return crypto.randomUUID();
@@ -130,6 +145,30 @@ export function createMemoryDomainStore(): DomainStore {
       agents.set(agentId, { ...a, status: "offline" });
     },
 
+    async listSshKeys(tenantId) {
+      return [...sshKeys.values()].filter((k) => k.tenantId === tenantId);
+    },
+    async createSshKey(tenantId, data) {
+      const now = new Date().toISOString();
+      const key: SshKey = {
+        id: `key-${uid()}`,
+        tenantId,
+        name: data.name,
+        type: data.type as "uploaded" | "local_path",
+        localPath: data.localPath ?? null,
+        createdAt: now,
+        updatedAt: now
+      };
+      sshKeys.set(key.id, key);
+      return key;
+    },
+    async deleteSshKey(tenantId, id) {
+      const key = sshKeys.get(id);
+      if (!key || key.tenantId !== tenantId) return false;
+      sshKeys.delete(id);
+      return true;
+    },
+
     async listServices(tenantId) {
       return [...services.values()].filter((s) => s.tenantId === tenantId);
     },
@@ -144,7 +183,8 @@ export function createMemoryDomainStore(): DomainStore {
         agentId: data.agentId ?? null,
         workflowGraphId: null,
         name: data.name,
-        repo: data.repo,
+        gitRepoUrl: data.gitRepoUrl,
+        sshKeyId: data.sshKeyId ?? null,
         branch: data.branch,
         dockerImage: data.dockerImage ?? null,
         composePath: data.composePath ?? null
@@ -198,6 +238,7 @@ export function __resetDomainStoreForTests(): void {
   agents.clear();
   services.clear();
   workflows.clear();
+  sshKeys.clear();
 }
 
 /** Seeds the in-memory agents map (Vitest / domain API tests only). */

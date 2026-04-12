@@ -43,34 +43,4 @@ describe("security", () => {
       expect(body).not.toHaveProperty("fingerprint");
     });
   });
-
-  describe("T-SEC-002: invalid HMAC webhook rejected, no enqueue", () => {
-    const enqueue = vi.fn();
-    const app = buildServer({ enqueueGithubJob: enqueue });
-
-    beforeAll(async () => {
-      await app.ready();
-    });
-
-    afterAll(async () => {
-      await app.close();
-    });
-
-    it("returns 401 and does not enqueue when HMAC signature is invalid", async () => {
-      enqueue.mockClear();
-
-      const res = await app.inject({
-        method: "POST",
-        url: "/webhooks/github",
-        payload: JSON.stringify({ ref: "refs/heads/main" }),
-        headers: {
-          "content-type": "application/json",
-          "x-hub-signature-256": "sha256=0000000000000000000000000000000000000000000000000000000000000000"
-        }
-      });
-
-      expect(res.statusCode).toBe(401);
-      expect(enqueue).not.toHaveBeenCalled();
-    });
-  });
 });

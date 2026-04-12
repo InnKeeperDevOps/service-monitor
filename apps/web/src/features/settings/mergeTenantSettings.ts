@@ -2,12 +2,12 @@ import type { TenantSettings } from "@sm/contracts";
 
 /** Partial update: use `null` on optional fields to clear them. */
 export type TenantSettingsPatch = Partial<{
-  githubRepo: string;
+  gitRepoUrl: string;
   defaultBranch: string;
   docsUrl: string | null;
   preferredExecutor: "cursor" | "claude" | null;
   agentRuntimeBackend: "docker" | "kubernetes" | "shell" | null;
-  agentWorkloadSource: "github_repo" | "binary" | null;
+  agentWorkloadSource: "git_repo" | "binary" | null;
   automationPolicy: TenantSettings["automationPolicy"] | null;
 }>;
 
@@ -22,13 +22,13 @@ export function mergeTenantSettingsPayload(
 ): TenantSettings {
   const base: TenantSettings = previous ?? {
     tenantId: sessionTenantId,
-    githubRepo: "",
+    gitRepoUrl: "",
     defaultBranch: ""
   };
 
   const out: TenantSettings = {
     tenantId: sessionTenantId,
-    githubRepo: patch.githubRepo !== undefined ? patch.githubRepo : base.githubRepo,
+    gitRepoUrl: patch.gitRepoUrl !== undefined ? patch.gitRepoUrl : base.gitRepoUrl,
     defaultBranch: patch.defaultBranch !== undefined ? patch.defaultBranch : base.defaultBranch
   };
 

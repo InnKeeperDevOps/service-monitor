@@ -8,13 +8,13 @@ export function buildRealtimeAgentHello(settings: TenantSettings | undefined) {
   }
 
   let configReady = true;
-  let workloadSource: "github_repo" | "binary" | null = "github_repo";
+  let workloadSource: "git_repo" | "binary" | null = "git_repo";
 
   if (settings) {
     const raw = settings.agentWorkloadSource;
     if (raw === undefined) {
       configReady = true;
-      workloadSource = "github_repo";
+      workloadSource = "git_repo";
     } else if (raw === null) {
       configReady = false;
       workloadSource = null;
@@ -24,16 +24,22 @@ export function buildRealtimeAgentHello(settings: TenantSettings | undefined) {
     }
   }
 
-  return agentHelloMessageSchema.parse({
-    type: "hello",
-    service: "realtime",
-    runtime: { backend: runtimeBackend },
-    configReady,
-    ...(settings?.preferredExecutor ? { preferredExecutor: settings.preferredExecutor } : {}),
-    workload: {
-      source: workloadSource,
-      githubRepo: settings?.githubRepo ?? "",
-      defaultBranch: settings?.defaultBranch ?? ""
-    }
-  });
+  try {
+    return agentHelloMessageSchema.parse({
+      type: "hello",
+      service: "realtime",
+      runtime: { backend: runtimeBackend },
+      configReady,
+      ...(settings?.preferredExecutor ? { preferredExecutor: settings.preferredExecutor } : {}),
+      workload: {
+        source: workloadSource,
+        gitRepoUrl: settings?.gitRepoUrl ?? "",
+        sshKeyId: settings?.sshKeyId ?? null,
+        defaultBranch: settings?.defaultBranch ?? ""
+      }
+    });
+  } catch (e) {
+    console.error("Parse Error in buildRealtimeAgentHello:", e);
+    throw e;
+  }
 }

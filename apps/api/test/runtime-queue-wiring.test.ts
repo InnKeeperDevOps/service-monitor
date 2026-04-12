@@ -50,16 +50,10 @@ describe("createRuntimeQueueWiringFromEnv", () => {
     expect(wiring).not.toBeNull();
     expect(createRedisConnectionFromEnvMock).toHaveBeenCalledTimes(1);
     expect(createNamedQueueMock.mock.calls.map((call) => call[0])).toEqual([
-      "github",
       "logIngestion",
       "agentCommands"
     ]);
 
-    await wiring!.buildOptions.enqueueGithubJob?.({
-      kind: "github_ingestion",
-      tenantId: "t-1",
-      eventType: "push"
-    });
     await wiring!.buildOptions.enqueueLogIngestion?.({
       tenantId: "t-1",
       agentId: "a-1",
@@ -75,13 +69,12 @@ describe("createRuntimeQueueWiringFromEnv", () => {
     });
 
     expect(queueAddMock.mock.calls.map((call) => call[0])).toEqual([
-      "github-webhook",
       "log-ingestion",
       "agent-command"
     ]);
 
     await wiring!.close();
-    expect(queueCloseMock).toHaveBeenCalledTimes(3);
+    expect(queueCloseMock).toHaveBeenCalledTimes(2);
     expect(redisQuitMock).toHaveBeenCalledTimes(1);
   });
 });

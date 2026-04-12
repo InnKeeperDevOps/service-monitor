@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyGithubAppToEnv, bootstrapEnv, isSetupRequired } from "./bootstrapEnv.js";
+import { bootstrapEnv, isSetupRequired } from "./bootstrapEnv.js";
 import { setupRoutes, type SetupCompleteCallback } from "./setupRoutes.js";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
@@ -14,13 +14,12 @@ import {
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
   createMonitoredServiceRequestSchema,
+  createSshKeyRequestSchema,
+  listSshKeysResponseSchema,
   executeWorkflowRequestSchema,
   executeWorkflowResponseSchema,
   workflowDryRunResponseSchema,
   createWorkflowGraphRequestSchema,
-  githubInstallationsResponseSchema,
-  githubInstallationRepositoriesResponseSchema,
-  githubPolicyCheckRequestSchema,
   healthResponseSchema,
   listAgentsResponseSchema,
   listEnrollmentTokensResponseSchema,
@@ -33,14 +32,12 @@ import {
   oauthAuthorizeResponseSchema,
   oauthCallbackResponseSchema,
   updateIncidentStatusRequestSchema,
-  upsertGithubInstallationRequestSchema,
   setServiceWorkflowRequestSchema,
   upsertTenantSettingsRequestSchema,
   agentCommandDispatchResponseSchema,
   platformToAgentMessageSchema,
   type AgentToPlatformMessage,
   type AgentCommandJob,
-  type GithubWebhookJobPayload,
   type LogIngestionJob,
   type TenantSettings
 } from "@sm/contracts";
@@ -52,7 +49,6 @@ import {
   type WorkflowNodeKind,
   type WorkflowNodeType
 } from "@sm/domain";
-import { fetchGithubAppSlug, getInstallationMetadata, GitHubAppClient } from "@sm/github";
 import { correlationIdPlugin } from "./correlationId.js";
 import {
   loginWithDiagnostics,
@@ -93,8 +89,6 @@ import { createReadinessCheckersFromEnv, type ReadinessChecker } from "./readyCh
 import { RealtimeManager, type PendingCommandRedis } from "./realtimeManager.js";
 import {
   getTenantSettings,
-  listGithubInstallationsForTenant,
-  upsertGithubInstallationForTenant,
   upsertTenantSettings
 } from "./store.js";
 import { createNamedQueue, createRedisConnectionFromEnv } from "@sm/queue";
@@ -317,73 +311,7 @@ function emitLoginStepLog(
   }
 }
 
-export function buildGithubWebhookJobFromEvent(
-  eventType: string,
-  body: unknown,
-  deliveryId: string | undefined,
-  correlationId?: string
-): GithubWebhookJobPayload {
-  const tenantId = defaultWebhookTenantId();
-  const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const installationId = (record.installation as { id?: number } | undefined)?.id;
-  const repo = (record.repository as { full_name?: string } | undefined)?.full_name ?? "unknown/unknown";
-
-  if (eventType === "push") {
-    const ref = typeof record.ref === "string" ? record.ref : "";
-    const branch = ref.replace(/^refs\/heads\//, "") || "main";
-    return {
-      kind: "github_mutation",
-      tenantId,
-      installationId: typeof installationId === "number" ? installationId : 0,
-      action: "push",
-      repo,
-      branch,
-      correlationId
-    };
-  }
-
-  if (eventType === "pull_request") {
-    const pr = record.pull_request as { head?: { ref?: string }; merged?: boolean; number?: number } | undefined;
-    const branch = pr?.head?.ref ?? "main";
-    const action = typeof record.action === "string" ? record.action : "";
-    const merged = pr?.merged === true;
-    const mutationAction = action === "closed" && merged ? "merge_pr" : "create_pr";
-    return {
-      kind: "github_mutation",
-      tenantId,
-      installationId: typeof installationId === "number" ? installationId : 0,
-      action: mutationAction,
-      repo,
-      branch,
-      pullNumber: typeof pr?.number === "number" ? pr.number : undefined,
-      correlationId
-    };
-  }
-
-  if (eventType === "workflow_dispatch") {
-    const ref = typeof record.ref === "string" ? record.ref : "";
-    const branch = ref.replace(/^refs\/heads\//, "") || "main";
-    return {
-      kind: "github_mutation",
-      tenantId,
-      installationId: typeof installationId === "number" ? installationId : 0,
-      action: "dispatch_workflow",
-      repo,
-      branch,
-      correlationId
-    };
-  }
-
-  return {
-    kind: "github_ingestion",
-    tenantId,
-    eventType: eventType || "unknown",
-    deliveryId
-  };
-}
-
 export type BuildServerOptions = {
-  enqueueGithubJob?: (job: GithubWebhookJobPayload) => void | Promise<void>;
   enqueueLogIngestion?: (job: LogIngestionJob) => void | Promise<void>;
   enqueueAgentCommand?: (job: AgentCommandJob) => void | Promise<void>;
   /** When omitted, checkers are derived from POSTGRES_* / REDIS_* env (TCP probes). */
@@ -395,13 +323,12 @@ export type BuildServerOptions = {
 };
 
 export type RuntimeQueueWiring = {
-  buildOptions: Pick<BuildServerOptions, "enqueueGithubJob" | "enqueueLogIngestion" | "enqueueAgentCommand" | "redis">;
+  buildOptions: Pick<BuildServerOptions, "enqueueLogIngestion" | "enqueueAgentCommand" | "redis">;
   close: () => Promise<void>;
 };
 
 export type { ReadinessChecker } from "./readyChecks.js";
 
-const noopGithubEnqueue = (_job: GithubWebhookJobPayload) => Promise.resolve();
 const noopLogIngestion = (_job: LogIngestionJob) => Promise.resolve();
 const noopAgentCommandEnqueue = async (_job: AgentCommandJob) => {
   throw new Error("Agent command queue is not configured");
@@ -498,16 +425,12 @@ export function createRuntimeQueueWiringFromEnv(env: NodeJS.ProcessEnv = process
   }
 
   const redis = createRedisConnectionFromEnv(env);
-  const githubQueue = createNamedQueue<GithubWebhookJobPayload>("github", redis);
   const logQueue = createNamedQueue<LogIngestionJob>("logIngestion", redis);
   const agentCommandQueue = createNamedQueue<AgentCommandJob>("agentCommands", redis);
 
   return {
     buildOptions: {
       redis,
-      enqueueGithubJob: async (job) => {
-        await githubQueue.add("github-webhook", job);
-      },
       enqueueLogIngestion: async (job) => {
         await logQueue.add("log-ingestion", job);
       },
@@ -516,7 +439,7 @@ export function createRuntimeQueueWiringFromEnv(env: NodeJS.ProcessEnv = process
       }
     },
     close: async () => {
-      await Promise.allSettled([githubQueue.close(), logQueue.close(), agentCommandQueue.close()]);
+      await Promise.allSettled([logQueue.close(), agentCommandQueue.close()]);
       await redis.quit();
     }
   };
@@ -579,7 +502,6 @@ async function resolveGithubInstallInfo(cfg: KaiadConfig | null): Promise<{
 }
 
 export function buildServer(opts: BuildServerOptions = {}) {
-  const enqueueGithubJob = opts.enqueueGithubJob ?? noopGithubEnqueue;
   const enqueueLogIngestion = opts.enqueueLogIngestion ?? noopLogIngestion;
   const enqueueAgentCommand = opts.enqueueAgentCommand ?? noopAgentCommandEnqueue;
   const readinessCheckers = opts.readinessCheckers ?? createReadinessCheckersFromEnv();
@@ -1452,7 +1374,9 @@ export function buildServer(opts: BuildServerOptions = {}) {
     }
   });
 
-  app.get("/api/v1/github/installations", async (req, reply) => {
+  // --- SSH Keys ---
+
+  app.get("/api/v1/ssh-keys", async (req, reply) => {
     const session = await resolveSession(authStore, req.headers.authorization);
     if (!session) {
       return reply.status(401).send(
@@ -1463,11 +1387,11 @@ export function buildServer(opts: BuildServerOptions = {}) {
         })
       );
     }
-    const installations = await listGithubInstallationsForTenant(session.tenantId);
-    return githubInstallationsResponseSchema.parse({ installations });
+    const keys = await domainStore.listSshKeys(session.tenantId);
+    return listSshKeysResponseSchema.parse({ keys });
   });
 
-  app.post("/api/v1/github/installations", async (req, reply) => {
+  app.post("/api/v1/ssh-keys", async (req, reply) => {
     const session = await resolveSession(authStore, req.headers.authorization);
     if (!session) {
       return reply.status(401).send(
@@ -1478,21 +1402,17 @@ export function buildServer(opts: BuildServerOptions = {}) {
         })
       );
     }
-    const payload = upsertGithubInstallationRequestSchema.parse(req.body);
-    if (payload.tenantId !== undefined && payload.tenantId !== session.tenantId) {
-      return reply.status(403).send(
-        apiErrorSchema.parse({
-          code: "TENANT_SCOPE_DENY",
-          message: "Cross-tenant write denied",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const { tenantId: _ignored, ...installation } = payload;
-    return await upsertGithubInstallationForTenant(session.tenantId, installation);
+    const payload = createSshKeyRequestSchema.parse(req.body);
+    const key = await domainStore.createSshKey(session.tenantId, {
+      name: payload.name,
+      type: payload.type,
+      privateKey: payload.privateKey,
+      localPath: payload.localPath
+    });
+    return reply.status(201).send(key);
   });
 
-  app.post("/api/v1/github/installations/sync", async (req, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v1/ssh-keys/:id", async (req, reply) => {
     const session = await resolveSession(authStore, req.headers.authorization);
     if (!session) {
       return reply.status(401).send(
@@ -1503,119 +1423,17 @@ export function buildServer(opts: BuildServerOptions = {}) {
         })
       );
     }
-    const body = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
-    const installationId = Number(body.installationId);
-    if (!Number.isInteger(installationId) || installationId <= 0) {
-      return reply.status(400).send(
-        apiErrorSchema.parse({
-          code: "BAD_REQUEST",
-          message: "installationId must be a positive integer",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const appId = Number(process.env.GITHUB_APP_ID);
-    const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
-    if (!(appId > 0) || !privateKey?.trim()) {
-      return reply.status(503).send(
-        apiErrorSchema.parse({
-          code: "GITHUB_APP_NOT_CONFIGURED",
-          message: "GitHub App credentials are not configured",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    try {
-      const installation = await getInstallationMetadata({
-        appId,
-        privateKey,
-        installationId
-      });
-      return await upsertGithubInstallationForTenant(session.tenantId, installation);
-    } catch (err) {
-      return reply.status(502).send(
-        apiErrorSchema.parse({
-          code: "GITHUB_INSTALLATION_LOOKUP_FAILED",
-          message: err instanceof Error ? err.message : "Failed to fetch installation metadata",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-  });
-
-  app.get("/api/v1/github/installation-repositories", async (req, reply) => {
-    const session = await resolveSession(authStore, req.headers.authorization);
-    if (!session) {
-      return reply.status(401).send(
-        apiErrorSchema.parse({
-          code: "UNAUTHORIZED",
-          message: "Missing or invalid bearer token",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const installations = await listGithubInstallationsForTenant(session.tenantId);
-    if (installations.length === 0) {
+    const deleted = await domainStore.deleteSshKey(session.tenantId, req.params.id);
+    if (!deleted) {
       return reply.status(404).send(
         apiErrorSchema.parse({
           code: "NOT_FOUND",
-          message: "No GitHub App installation linked to this tenant. Sync an installation on the tenant page first.",
+          message: "SSH key not found",
           correlationId: (req as any).correlationId
         })
       );
     }
-    const appId = Number(process.env.GITHUB_APP_ID);
-    const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
-    if (!(appId > 0) || !privateKey?.trim()) {
-      return reply.status(503).send(
-        apiErrorSchema.parse({
-          code: "GITHUB_APP_NOT_CONFIGURED",
-          message: "GitHub App credentials are not configured",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const installation = installations[0]!;
-    try {
-      const gh = new GitHubAppClient({ appId, privateKey });
-      const repos = await gh.listInstallationRepositories(installation.installationId);
-      return githubInstallationRepositoriesResponseSchema.parse({ repos });
-    } catch (err) {
-      return reply.status(502).send(
-        apiErrorSchema.parse({
-          code: "GITHUB_INSTALLATION_REPOS_FAILED",
-          message: err instanceof Error ? err.message : "Failed to list installation repositories",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-  });
-
-  app.post("/api/v1/github/policy/check", async (req, reply) => {
-    const session = await resolveSession(authStore, req.headers.authorization);
-    if (!session) {
-      return reply.status(401).send(
-        apiErrorSchema.parse({
-          code: "UNAUTHORIZED",
-          message: "Missing or invalid bearer token",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const body = githubPolicyCheckRequestSchema.parse(req.body);
-    const settings = await getTenantSettings(session.tenantId);
-    const policy = settings?.automationPolicy ?? { repos: [], branches: [], actions: [] };
-    const result = enforcePolicy(policy, body);
-    if (!result.allowed) {
-      return reply.status(403).send(
-        apiErrorSchema.parse({
-          code: result.reason,
-          message: "GitHub automation action is not allowed by tenant policy",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    return { allowed: true as const };
+    return reply.status(204).send();
   });
 
   app.post("/api/v1/internal/agent-commands", async (req, reply) => {
@@ -1673,20 +1491,6 @@ export function buildServer(opts: BuildServerOptions = {}) {
         delivered: dispatchResult.delivered
       })
     );
-  });
-
-  app.post("/webhooks/github", async (req, reply) => {
-    const secret = process.env.GITHUB_WEBHOOK_SECRET ?? "test-secret";
-    const rawBody = typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {});
-    const signature = req.headers["x-hub-signature-256"]?.toString().replace("sha256=", "");
-    if (!signValid(secret, rawBody, signature)) {
-      return reply.status(401).send({ code: "WEBHOOK_SIGNATURE_INVALID", message: "Invalid webhook signature" });
-    }
-    const eventType = req.headers["x-github-event"]?.toString() ?? "unknown";
-    const deliveryId = req.headers["x-github-delivery"]?.toString();
-    const job = buildGithubWebhookJobFromEvent(eventType, req.body, deliveryId, (req as any).correlationId);
-    await enqueueGithubJob(job);
-    return { accepted: true as const };
   });
 
   // --- Incidents ---

@@ -2,21 +2,21 @@ import { describe, expect, it } from "vitest";
 import { buildRealtimeAgentHello } from "../src/agentHelloPayload.js";
 
 describe("buildRealtimeAgentHello", () => {
-  it("uses ready GitHub mode when settings omit agentWorkloadSource (legacy)", () => {
+  it("uses ready git mode when settings omit agentWorkloadSource (legacy)", () => {
     const h = buildRealtimeAgentHello({
       tenantId: "t-1",
-      githubRepo: "acme/app",
+      gitRepoUrl: "https://git.example.com/acme/app.git",
       defaultBranch: "main"
     });
     expect(h.configReady).toBe(true);
-    expect(h.workload?.source).toBe("github_repo");
-    expect(h.workload?.githubRepo).toBe("acme/app");
+    expect(h.workload?.source).toBe("git_repo");
+    expect(h.workload?.gitRepoUrl).toBe("https://git.example.com/acme/app.git");
   });
 
   it("marks not ready when agentWorkloadSource is null", () => {
     const h = buildRealtimeAgentHello({
       tenantId: "t-1",
-      githubRepo: "acme/app",
+      gitRepoUrl: "https://git.example.com/acme/app.git",
       defaultBranch: "main",
       agentWorkloadSource: null
     });
@@ -27,7 +27,7 @@ describe("buildRealtimeAgentHello", () => {
   it("passes through binary workload", () => {
     const h = buildRealtimeAgentHello({
       tenantId: "t-1",
-      githubRepo: "acme/app",
+      gitRepoUrl: "https://git.example.com/acme/app.git",
       defaultBranch: "main",
       agentWorkloadSource: "binary"
     });
@@ -38,6 +38,6 @@ describe("buildRealtimeAgentHello", () => {
   it("defaults when no tenant row", () => {
     const h = buildRealtimeAgentHello(undefined);
     expect(h.configReady).toBe(true);
-    expect(h.workload?.source).toBe("github_repo");
+    expect(h.workload?.source).toBe("git_repo");
   });
 });

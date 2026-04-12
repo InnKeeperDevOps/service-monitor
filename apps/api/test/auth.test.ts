@@ -426,12 +426,12 @@ describe("multi-tenant /me and active-tenant", () => {
     __resetTenantStoreForTests();
     await upsertTenantSettings({
       tenantId: "t-1",
-      githubRepo: "org/tenant-a",
+      gitRepoUrl: "org/tenant-a",
       defaultBranch: "main"
     });
     await upsertTenantSettings({
       tenantId: "t-2",
-      githubRepo: "org/tenant-b",
+      gitRepoUrl: "org/tenant-b",
       defaultBranch: "main"
     });
     store = createMemoryAuthStore();
@@ -502,7 +502,7 @@ describe("multi-tenant /me and active-tenant", () => {
       headers: { authorization: `Bearer ${token}` }
     });
     expect(settingsRes.statusCode).toBe(200);
-    expect(settingsRes.json().githubRepo).toBe("org/tenant-a");
+    expect(settingsRes.json().gitRepoUrl).toBe("org/tenant-a");
 
     await app.inject({
       method: "POST",
@@ -516,7 +516,7 @@ describe("multi-tenant /me and active-tenant", () => {
       headers: { authorization: `Bearer ${token}` }
     });
     expect(settingsRes.statusCode).toBe(200);
-    expect(settingsRes.json().githubRepo).toBe("org/tenant-b");
+    expect(settingsRes.json().gitRepoUrl).toBe("org/tenant-b");
   });
 
   it("POST /session/active-tenant returns 403 for non-member tenant", async () => {
@@ -545,7 +545,7 @@ describe("POST /api/v1/tenants and DELETE /api/v1/tenants/:tenantId", () => {
     __resetTenantStoreForTests();
     await upsertTenantSettings({
       tenantId: "t-1",
-      githubRepo: "org/a",
+      gitRepoUrl: "org/a",
       defaultBranch: "main"
     });
     store = createMemoryAuthStore();
