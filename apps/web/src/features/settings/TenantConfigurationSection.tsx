@@ -224,7 +224,7 @@ export function TenantConfigurationSection({
           <input value={tenantId} readOnly style={{ ...inputStyle, opacity: 0.85 }} aria-label="Tenant ID" />
         </label>
         <label style={labelColStyle}>
-          <span style={{ color: "var(--color-text-secondary)" }}>GitHub repository (owner/repo)</span>
+          <span style={{ color: "var(--color-text-secondary)" }}>Git repository URL</span>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
             <input
               value={gitRepoUrl}

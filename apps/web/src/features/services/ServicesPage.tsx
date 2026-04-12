@@ -1,18 +1,20 @@
 import { useEffect, useState } from "react";
 import { Box } from "lucide-react";
-import { api, type MonitoredService } from "../../lib/api.js";
+import { api, type MonitoredService, type SshKey } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
 
 export function ServicesPage() {
   const [services, setServices] = useState<MonitoredService[]>([]);
+  const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", repo: "", branch: "main", dockerImage: "", composePath: "" });
+  const [form, setForm] = useState({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
   const { isAdmin } = useAuth();
   const canManage = isAdmin;
 
   useEffect(() => {
     api.listServices().then((r) => setServices(r.services)).catch((e) => setError(e.message));
+    api.listSshKeys().then((r) => setSshKeys(r.keys)).catch(() => {});
   }, []);
 
   async function handleCreate(ev: React.FormEvent) {
@@ -20,14 +22,15 @@ export function ServicesPage() {
     try {
       const svc = await api.createService({
         name: form.name,
-        repo: form.repo,
+        gitRepoUrl: form.gitRepoUrl,
+        sshKeyId: form.sshKeyId || undefined,
         branch: form.branch,
         dockerImage: form.dockerImage.trim() || undefined,
         composePath: form.composePath.trim() || undefined
       });
       setServices((prev) => [...prev, svc]);
       setShowForm(false);
-      setForm({ name: "", repo: "", branch: "main", dockerImage: "", composePath: "" });
+      setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
     } catch (e: unknown) {
       setError((e as Error).message);
     }
@@ -50,8 +53,17 @@ export function ServicesPage() {
             <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required style={inputStyle} />
           </label>
           <label>
-            Repository (owner/repo)
-            <input value={form.repo} onChange={(e) => setForm({ ...form, repo: e.target.value })} required style={inputStyle} />
+            Git Repository URL
+            <input value={form.gitRepoUrl} onChange={(e) => setForm({ ...form, gitRepoUrl: e.target.value })} required style={inputStyle} placeholder="e.g. git@github.com:acme/app.git" />
+          </label>
+          <label>
+            SSH Key <span style={{ color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>(required if SSH URL)</span>
+            <select value={form.sshKeyId} onChange={(e) => setForm({ ...form, sshKeyId: e.target.value })} style={{ ...inputStyle, background: "var(--color-surface)" }}>
+              <option value="">— None (HTTPS public) —</option>
+              {sshKeys.map((k) => (
+                <option key={k.id} value={k.id}>{k.name}</option>
+              ))}
+            </select>
           </label>
           <label>
             Branch
@@ -88,7 +100,7 @@ export function ServicesPage() {
                 <td style={{ padding: "0.5rem" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}><Box size={14} /> {svc.name}</span>
                 </td>
-                <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>{svc.repo}</td>
+                <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>{svc.gitRepoUrl}</td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>{svc.branch}</td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
                   {svc.agentId ?? "\u2014"}

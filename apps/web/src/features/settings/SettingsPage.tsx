@@ -85,7 +85,6 @@ function buildAgentStartCommand(token: string): string {
 export function SettingsPage() {
   const { user } = useAuth();
   const canManageOAuth = user?.role === "owner" || user?.role === "admin";
-  const canManageGithub = user?.role === "owner" || user?.role === "admin";
 
   const [authProviders, setAuthProviders] = useState<AuthProviderEntry[]>([]);
   const [oauthId, setOauthId] = useState("");
@@ -99,15 +98,6 @@ export function SettingsPage() {
   const [oauthFormError, setOauthFormError] = useState<string | null>(null);
   const [oauthSuccess, setOauthSuccess] = useState<string | null>(null);
   const [isSubmittingOAuth, setIsSubmittingOAuth] = useState(false);
-
-  const [githubAppId, setGithubAppId] = useState("");
-  const [githubPrivateKeyPem, setGithubPrivateKeyPem] = useState("");
-  const [githubWebhookSecret, setGithubWebhookSecret] = useState("");
-  const [githubPrivateKeyConfigured, setGithubPrivateKeyConfigured] = useState(false);
-  const [githubWebhookSecretConfigured, setGithubWebhookSecretConfigured] = useState(false);
-  const [githubFormError, setGithubFormError] = useState<string | null>(null);
-  const [githubSuccess, setGithubSuccess] = useState<string | null>(null);
-  const [isSavingGithub, setIsSavingGithub] = useState(false);
 
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -125,48 +115,6 @@ export function SettingsPage() {
     api.listEnrollmentTokens().then((r) => setTokens(r.tokens)).catch(() => {});
     api.getAuthProviders().then((r) => setAuthProviders(r.providers)).catch(() => {});
   }, []);
-
-  useEffect(() => {
-    api
-      .getGithubAppSettings()
-      .then((s) => {
-        if (canManageGithub) {
-          setGithubAppId(s.appId ?? "");
-          setGithubPrivateKeyConfigured(s.privateKeyConfigured);
-          setGithubWebhookSecretConfigured(s.webhookSecretConfigured);
-        }
-      })
-      .catch(() => {});
-  }, [canManageGithub]);
-
-  async function handleSaveGithubApp() {
-    setGithubFormError(null);
-    setGithubSuccess(null);
-    const id = githubAppId.trim();
-    if (!id) {
-      setGithubFormError("App ID is required.");
-      return;
-    }
-    setIsSavingGithub(true);
-    try {
-      await api.updateGithubAppSettings({
-        githubAppId: id,
-        githubAppPrivateKeyPem: githubPrivateKeyPem,
-        githubWebhookSecret: githubWebhookSecret
-      });
-      setGithubPrivateKeyPem("");
-      setGithubWebhookSecret("");
-      setGithubSuccess("GitHub App settings saved. Restart workers if GitHub automation does not pick up changes immediately.");
-      const s = await api.getGithubAppSettings();
-      setGithubPrivateKeyConfigured(s.privateKeyConfigured);
-      setGithubWebhookSecretConfigured(s.webhookSecretConfigured);
-      setError(null);
-    } catch (e) {
-      setGithubFormError((e as Error).message);
-    } finally {
-      setIsSavingGithub(false);
-    }
-  }
 
   async function handleGenerateEnrollmentToken() {
     setTokenError(null);
@@ -735,111 +683,6 @@ export function SettingsPage() {
               ))}
             </tbody>
           </table>
-        )}
-      </div>
-
-
-      {/* GitHub App — server credentials; per-tenant install lives under Tenants → Configure */}
-      <div style={sectionStyle}>
-        <h3 style={h3Style}><GitBranch size={16} /> GitHub App</h3>
-        <p style={mutedText}>
-          One-time <strong>server</strong> configuration (App ID, PEM, webhook secret). Use <strong>Tenants → Configure</strong> for{" "}
-          <strong>Install on GitHub</strong>, manual installation sync, and the installation list — those are scoped to the active tenant.
-        </p>
-        <p style={{ ...mutedText, marginTop: "0.5rem", fontSize: "0.85rem" }}>
-          Webhook URL:{" "}
-          <code>
-            {typeof window !== "undefined" ? `${window.location.origin}/webhooks/github` : "/webhooks/github"}
-          </code>
-          . Setup URL (GitHub App settings):{" "}
-          <code>{typeof window !== "undefined" ? `${window.location.origin}/` : "https://your-host/"}</code> so GitHub can redirect with{" "}
-          <code>installation_id</code> after install; the app opens your tenant configuration page to finish sync.
-        </p>
-        {!canManageGithub && (
-          <p style={{ ...mutedText, marginTop: "0.75rem" }}>
-            Only owners and admins can change server credentials.
-          </p>
-        )}
-        {canManageGithub && (
-          <details style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--color-border)" }}>
-            <summary
-              style={{
-                cursor: "pointer",
-                fontSize: "0.9rem",
-                color: "var(--color-text-secondary)",
-                fontWeight: 600
-              }}
-            >
-              Advanced: GitHub App credentials (server / kaiad.config.json)
-            </summary>
-            <div style={{ marginTop: "0.75rem" }}>
-              {githubFormError && (
-                <p style={{ color: "var(--color-danger)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{githubFormError}</p>
-              )}
-              {githubSuccess && (
-                <p style={{ color: "var(--color-success)", fontSize: "0.85rem", margin: "0 0 0.5rem" }}>{githubSuccess}</p>
-              )}
-              <p style={{ ...mutedText, marginBottom: "0.65rem", fontSize: "0.8rem" }}>
-                App ID and private key are usually set once at install time. The server also discovers the public app slug from GitHub when these are valid.
-              </p>
-              <label style={labelColStyle}>
-                <span style={{ color: "var(--color-text-secondary)" }}>App ID</span>
-                <input
-                  aria-label="GitHub App ID"
-                  value={githubAppId}
-                  onChange={(e) => setGithubAppId(e.target.value)}
-                  placeholder="123456"
-                  autoComplete="off"
-                  style={inputStyle}
-                />
-              </label>
-              <div className="sm-input-wrapper" style={{ marginBottom: "0.65rem" }}>
-                <label className="sm-input-label" htmlFor="settings-github-pem" style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
-                  Private Key (PEM)
-                </label>
-                <textarea
-                  id="settings-github-pem"
-                  aria-label="GitHub App private key PEM"
-                  className="sm-input"
-                  rows={5}
-                  value={githubPrivateKeyPem}
-                  onChange={(e) => setGithubPrivateKeyPem(e.target.value)}
-                  placeholder={githubPrivateKeyConfigured ? "Leave blank to keep existing key" : "-----BEGIN RSA PRIVATE KEY-----"}
-                  style={{ resize: "vertical", fontFamily: "monospace", fontSize: "0.8rem", width: "100%", maxWidth: 420, boxSizing: "border-box" }}
-                />
-              </div>
-              <label style={labelColStyle}>
-                <span style={{ color: "var(--color-text-secondary)" }}>Webhook secret</span>
-                <input
-                  aria-label="GitHub webhook secret"
-                  type="password"
-                  value={githubWebhookSecret}
-                  onChange={(e) => setGithubWebhookSecret(e.target.value)}
-                  placeholder={githubWebhookSecretConfigured ? "Leave blank to keep existing secret" : "whsec_…"}
-                  autoComplete="new-password"
-                  style={inputStyle}
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => void handleSaveGithubApp()}
-                disabled={isSavingGithub}
-                style={{
-                  background: "var(--color-primary)",
-                  color: "var(--color-primary-foreground)",
-                  border: "none",
-                  borderRadius: 6,
-                  padding: "0.45rem 0.8rem",
-                  fontSize: "0.85rem",
-                  cursor: isSavingGithub ? "not-allowed" : "pointer",
-                  opacity: isSavingGithub ? 0.75 : 1,
-                  marginTop: "0.25rem"
-                }}
-              >
-                {isSavingGithub ? "Saving…" : "Save GitHub App"}
-              </button>
-            </div>
-          </details>
         )}
       </div>
     </section>

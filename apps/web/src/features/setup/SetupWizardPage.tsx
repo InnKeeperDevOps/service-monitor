@@ -4,13 +4,12 @@ import { Button } from "../../components/Button.js";
 import { Input } from "../../components/Input.js";
 import { Card } from "../../components/Card.js";
 
-type WizardStep = "welcome" | "infra" | "admin" | "github" | "oauth" | "tenant" | "k8s" | "review";
-const STEPS: WizardStep[] = ["welcome", "infra", "admin", "github", "oauth", "tenant", "k8s", "review"];
+type WizardStep = "welcome" | "infra" | "admin" | "oauth" | "tenant" | "k8s" | "review";
+const STEPS: WizardStep[] = ["welcome", "infra", "admin", "oauth", "tenant", "k8s", "review"];
 const STEP_LABELS: Record<WizardStep, string> = {
   welcome: "Welcome",
   infra: "Infrastructure",
   admin: "Admin Account",
-  github: "GitHub App",
   oauth: "OAuth",
   tenant: "Webhook Tenant",
   k8s: "Kubernetes",
@@ -78,9 +77,6 @@ export function SetupWizardPage() {
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [githubAppId, setGithubAppId] = useState("");
-  const [githubPrivateKey, setGithubPrivateKey] = useState("");
-  const [githubWebhookSecret, setGithubWebhookSecret] = useState("");
   const [enableOAuth, setEnableOAuth] = useState(false);
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleClientSecret, setGoogleClientSecret] = useState("");
@@ -152,9 +148,6 @@ export function SetupWizardPage() {
         publicBaseUrl,
         adminEmail,
         adminPassword,
-        githubAppId: githubAppId || undefined,
-        githubAppPrivateKeyPem: githubPrivateKey || undefined,
-        githubWebhookSecret: githubWebhookSecret || undefined,
         googleClientId: enableOAuth ? googleClientId : undefined,
         googleClientSecret: enableOAuth ? googleClientSecret : undefined,
         defaultWebhookTenantId: selectedTenantId || undefined,
@@ -273,40 +266,6 @@ export function SetupWizardPage() {
           </>
         );
 
-      case "github":
-        return (
-          <>
-            <SectionHeading>GitHub App</SectionHeading>
-            <SectionSub>Optional. Connect a GitHub App for repository integration.</SectionSub>
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <Input
-                label="App ID"
-                value={githubAppId}
-                onChange={(e) => setGithubAppId(e.target.value)}
-                placeholder="123456"
-              />
-              <div className="sm-input-wrapper">
-                <label className="sm-input-label" htmlFor="gh-pem">Private Key (PEM)</label>
-                <textarea
-                  id="gh-pem"
-                  className="sm-input"
-                  rows={5}
-                  value={githubPrivateKey}
-                  onChange={(e) => setGithubPrivateKey(e.target.value)}
-                  placeholder="-----BEGIN RSA PRIVATE KEY-----"
-                  style={{ resize: "vertical", fontFamily: "monospace", fontSize: "0.8rem" }}
-                />
-              </div>
-              <Input
-                label="Webhook Secret"
-                value={githubWebhookSecret}
-                onChange={(e) => setGithubWebhookSecret(e.target.value)}
-                placeholder="whsec_..."
-              />
-            </div>
-          </>
-        );
-
       case "oauth":
         return (
           <>
@@ -394,9 +353,6 @@ export function SetupWizardPage() {
               <ReviewRow label="Redis URL" value={redisUrl} />
               <ReviewRow label="Admin Email" value={adminEmail} />
               <ReviewRow label="Admin Password" value={adminPassword ? "••••••••" : undefined} />
-              <ReviewRow label="GitHub App ID" value={githubAppId} />
-              <ReviewRow label="GitHub Webhook Secret" value={githubWebhookSecret ? "••••" : undefined} />
-              <ReviewRow label="GitHub Private Key" value={githubPrivateKey ? "(set)" : undefined} />
               <ReviewRow label="Google OAuth" value={enableOAuth ? "Enabled" : "Disabled"} />
               {enableOAuth && <ReviewRow label="Google Client ID" value={googleClientId} />}
               <ReviewRow label="Webhook Tenant" value={selectedTenantId || "(none)"} />
@@ -425,7 +381,7 @@ export function SetupWizardPage() {
 
   const isFirst = step === 0;
   const isLast = step === STEPS.length - 1;
-  const isSkippable = currentStep === "github" || currentStep === "oauth" || currentStep === "tenant" || currentStep === "k8s";
+  const isSkippable = currentStep === "oauth" || currentStep === "tenant" || currentStep === "k8s";
 
   return (
     <div style={{

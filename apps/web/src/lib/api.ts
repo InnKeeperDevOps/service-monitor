@@ -103,7 +103,8 @@ export type MonitoredService = {
   id: string;
   tenantId: string;
   name: string;
-  repo: string;
+  gitRepoUrl: string;
+  sshKeyId?: string | null;
   branch: string;
   agentId: string | null;
   workflowGraphId?: string | null;
@@ -214,7 +215,8 @@ export const api = {
   listServices: () => apiFetch<{ services: MonitoredService[] }>("/api/v1/services"),
   createService: (data: {
     name: string;
-    repo: string;
+    gitRepoUrl: string;
+    sshKeyId?: string;
     branch: string;
     dockerImage?: string;
     composePath?: string;
