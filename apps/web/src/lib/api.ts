@@ -1,4 +1,5 @@
-import type { CreateTenantRequest, MeResponse, TenantSettings, SshKey, CreateSshKeyRequest } from "@sm/contracts";
+import type { CreateTenantRequest, MeResponse, TenantSettings, SshKey, CreateSshKeyRequest, MonitoredService as ContractMonitoredService } from "@sm/contracts";
+export type { SshKey, CreateSshKeyRequest, CreateTenantRequest, MeResponse, TenantSettings };
 import type { AuthUser } from "./useAuth.js";
 
 /** Maps `/api/v1/me` JSON to `AuthUser` for React context. */
@@ -124,6 +125,7 @@ export type WorkflowGraph = {
   id: string;
   tenantId: string;
   serviceId: string;
+  name: string;
   version: number;
   nodes: WorkflowGraphNode[];
   edges: { from: string; to: string }[];
@@ -226,19 +228,32 @@ export const api = {
       body: JSON.stringify(data)
     }),
 
-  createWorkflow: (data: { serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
+  updateService: (id: string, data: {
+    name?: string;
+    gitRepoUrl?: string;
+    sshKeyId?: string | null;
+    branch?: string;
+    dockerImage?: string;
+    composePath?: string;
+  }) =>
+    apiFetch<MonitoredService>(`/api/v1/services/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    }),
+
+  createWorkflow: (data: { name: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
     apiFetch<WorkflowGraph>("/api/v1/workflows", {
       method: "POST",
       body: JSON.stringify(data)
     }),
 
-  executeWorkflow: (data: { serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
+  executeWorkflow: (data: { name: string; serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
     apiFetch<WorkflowExecutionResponse>("/api/v1/workflows/execute", {
       method: "POST",
       body: JSON.stringify(data)
     }),
 
-  dryRunWorkflow: (data: { serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
+  dryRunWorkflow: (data: { name: string; serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
     apiFetch<WorkflowDryRunResponse>("/api/v1/workflows/dry-run", {
       method: "POST",
       body: JSON.stringify(data)

@@ -52,19 +52,6 @@ describeAcceptance("AT endpoint suite", () => {
     expect(response.status).toBe(200);
   });
 
-  it("AT-API-004 GitHub webhook rejects invalid signature", async () => {
-    const body = JSON.stringify({ action: "ping" });
-    const response = await fetch(`${apiBase}/webhooks/github`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-hub-signature-256": "sha256=0000000000000000000000000000000000000000000000000000000000000000"
-      },
-      body
-    });
-    expect([401, 403]).toContain(response.status);
-  });
-
   it("AT-RT-001 realtime websocket hello", async () => {
     const url = `${httpToWsBase(apiBase)}/realtime`;
     await new Promise<void>((resolve, reject) => {

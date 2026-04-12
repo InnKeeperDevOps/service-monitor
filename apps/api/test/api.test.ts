@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiErrorSchema } from "@sm/contracts";
-import * as github from "@sm/github";
 import * as configPersistence from "../src/configPersistence.js";
 import { __resetEnrollmentStoreForTests } from "../src/enrollmentStore.js";
 import {

@@ -402,6 +402,9 @@ export const listAgentsResponseSchema = z.object({
   agents: z.array(agentSchema)
 });
 
+export type HealthResponse = z.infer<typeof healthResponseSchema>;
+export type MembershipEntry = z.infer<typeof membershipEntrySchema>;
+export type MeResponse = z.infer<typeof meResponseSchema>;
 export type TenantSettings = z.infer<typeof tenantSettingsSchema>;
 export type SshKey = z.infer<typeof sshKeySchema>;
 export type CreateSshKeyRequest = z.infer<typeof createSshKeyRequestSchema>;

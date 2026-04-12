@@ -172,7 +172,7 @@ describe("services API", () => {
   it("sets active workflow for a service", async () => {
     const svc = await domainStore.createService("t-1", { name: "svc-active", gitRepoUrl: "o/r", branch: "main" });
     const graph = await domainStore.createWorkflowGraph("t-1", {
-      serviceId: svc.id,
+      name: "Test workflow",
       nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
       edges: []
     });
