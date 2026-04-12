@@ -35,18 +35,16 @@ type Executor struct {
 	mu               sync.RWMutex
 	docker           *docker.Client
 	backend          RuntimeBackend
-	kaiadConfigReady bool
-	workloadSource   string
 }
 
 const defaultPlanTimeout = 5 * time.Minute
 
 func NewExecutor(dc *docker.Client) *Executor {
-	return &Executor{docker: dc, backend: RuntimeDocker, kaiadConfigReady: false}
+	return &Executor{docker: dc, backend: RuntimeDocker}
 }
 
 // Configure updates Docker handle, runtime mode, and Kaiad tenant policy after the realtime hello.
-func (e *Executor) Configure(dc *docker.Client, backend RuntimeBackend, kaiadConfigReady bool, workloadSource string) {
+func (e *Executor) Configure(dc *docker.Client, backend RuntimeBackend) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.docker = dc
@@ -54,27 +52,6 @@ func (e *Executor) Configure(dc *docker.Client, backend RuntimeBackend, kaiadCon
 		backend = RuntimeDocker
 	}
 	e.backend = backend
-	e.kaiadConfigReady = kaiadConfigReady
-	if workloadSource == "" && kaiadConfigReady {
-		workloadSource = "git_repo"
-	}
-	e.workloadSource = workloadSource
-}
-
-func (e *Executor) kaiadAllowsWorkloads() bool {
-	if os.Getenv("SM_SKIP_KAIAD_CONFIG_WAIT") == "1" {
-		return true
-	}
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.kaiadConfigReady
-}
-
-// WorkloadSource returns the last workload mode from Kaiad hello ("git_repo" or "binary"), or empty if not ready.
-func (e *Executor) WorkloadSource() string {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.workloadSource
 }
 
 func (e *Executor) runtime() (RuntimeBackend, *docker.Client) {
@@ -94,12 +71,6 @@ func RunShell(command string) (string, error) {
 }
 
 func (e *Executor) Execute(ctx context.Context, cmdType string, payload map[string]interface{}) CommandResult {
-	if cmdType != "cancel_run" && !e.kaiadAllowsWorkloads() {
-		return CommandResult{
-			Success: false,
-			Output:  `kaiad: agent configuration not ready; set Workload source in Kaiad Tenant Configuration (Settings), then reconnect the agent`,
-		}
-	}
 	backend, dc := e.runtime()
 	switch cmdType {
 	case "run_step":

@@ -14,10 +14,6 @@ func TestHelloPayload_marshalJSON_roundTrip(t *testing.T) {
 	t.Parallel()
 	h := HelloPayload{
 		RuntimeBackend: "docker",
-		ConfigReady:    true,
-		WorkloadSource: "binary",
-		GitRepo:     "a/b",
-		DefaultBranch:  "main",
 	}
 	b, err := h.marshalJSON()
 	if err != nil {
@@ -34,7 +30,7 @@ func TestHelloPayload_marshalJSON_roundTrip(t *testing.T) {
 
 func TestHelloPayload_configNotReady_nullSource(t *testing.T) {
 	t.Parallel()
-	h := HelloPayload{ConfigReady: false}
+	h := HelloPayload{}
 	b, err := h.marshalJSON()
 	if err != nil {
 		t.Fatal(err)
@@ -42,13 +38,6 @@ func TestHelloPayload_configNotReady_nullSource(t *testing.T) {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		t.Fatal(err)
-	}
-	wl, _ := raw["workload"].(map[string]interface{})
-	if wl == nil {
-		t.Fatal("expected workload")
-	}
-	if wl["source"] != nil {
-		t.Fatalf("expected null workload.source, got %v", wl["source"])
 	}
 }
 

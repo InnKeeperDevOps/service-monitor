@@ -70,8 +70,7 @@ func TestMockRealtime_AgentStack_protocolDebugAndCommandAck(t *testing.T) {
 		transport.WithReconnectBackoff(5*time.Millisecond, 50*time.Millisecond),
 		transport.WithCommandHandler(exec),
 		transport.OnHello(func(h transport.AgentHello) {
-			ready, wsrc := h.ResolveKaiadConfig(true)
-			exec.Configure(dc, executor.RuntimeDocker, ready, wsrc)
+			exec.Configure(dc, executor.RuntimeDocker)
 		}),
 	)
 
@@ -195,8 +194,7 @@ func TestMockRealtime_AgentStack_receiveSourceArchive(t *testing.T) {
 		transport.WithReconnectBackoff(5*time.Millisecond, 50*time.Millisecond),
 		transport.WithCommandHandler(exec),
 		transport.OnHello(func(h transport.AgentHello) {
-			ready, wsrc := h.ResolveKaiadConfig(true)
-			exec.Configure(dc, executor.RuntimeDocker, ready, wsrc)
+			exec.Configure(dc, executor.RuntimeDocker)
 		}),
 	)
 

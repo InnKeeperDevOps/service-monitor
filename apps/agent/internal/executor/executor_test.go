@@ -9,7 +9,7 @@ import (
 
 func newReadyExecutor() *Executor {
 	e := NewExecutor(nil)
-	e.Configure(nil, RuntimeDocker, true, "git_repo")
+	e.Configure(nil, RuntimeDocker)
 	return e
 }
 
@@ -60,17 +60,6 @@ func TestExecuteCancelRun(t *testing.T) {
 	result := e.Execute(context.Background(), "cancel_run", nil)
 	if !result.Success {
 		t.Fatalf("expected success for cancel_run, got: %s", result.Output)
-	}
-}
-
-func TestExecuteBlockedUntilKaiadConfig(t *testing.T) {
-	e := NewExecutor(nil)
-	result := e.Execute(context.Background(), "run_step", map[string]interface{}{"shell": "echo x"})
-	if result.Success {
-		t.Fatal("expected workload commands to wait for Kaiad hello")
-	}
-	if !strings.Contains(strings.ToLower(result.Output), "kaiad") {
-		t.Fatalf("expected kaiad wait message, got: %s", result.Output)
 	}
 }
 
@@ -127,7 +116,7 @@ func TestDockerOpWithoutClient(t *testing.T) {
 
 func TestDockerOpShellRuntime(t *testing.T) {
 	e := NewExecutor(nil)
-	e.Configure(nil, RuntimeShell, true, "git_repo")
+	e.Configure(nil, RuntimeShell)
 	result := e.Execute(context.Background(), "docker_op", map[string]interface{}{
 		"operation": "start",
 		"args":      map[string]interface{}{"container": "abc"},
@@ -142,7 +131,7 @@ func TestDockerOpShellRuntime(t *testing.T) {
 
 func TestDockerOpKubernetesRuntime(t *testing.T) {
 	e := NewExecutor(nil)
-	e.Configure(nil, RuntimeKubernetes, true, "git_repo")
+	e.Configure(nil, RuntimeKubernetes)
 	result := e.Execute(context.Background(), "docker_op", map[string]interface{}{
 		"operation": "build",
 		"args":      map[string]interface{}{"path": "."},

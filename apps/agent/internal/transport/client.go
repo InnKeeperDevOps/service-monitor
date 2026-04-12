@@ -25,33 +25,8 @@ type AgentHello struct {
 	Runtime struct {
 		Backend string `json:"backend"`
 	} `json:"runtime"`
-	ConfigReady *bool `json:"configReady,omitempty"`
 	// PreferredExecutor is the AI CLI the agent should use for automated fix plans ("cursor" or "claude").
 	PreferredExecutor string `json:"preferredExecutor,omitempty"`
-	Workload          *struct {
-		Source        *string `json:"source"`
-		GitRepo       string  `json:"gitRepoUrl"`
-		DefaultBranch string  `json:"defaultBranch"`
-	} `json:"workload,omitempty"`
-}
-
-// ResolveKaiadConfig maps the hello payload to executor settings. When skipWaitEnv is true (SM_SKIP_KAIAD_CONFIG_WAIT), workloads are always allowed.
-func (h AgentHello) ResolveKaiadConfig(skipWaitEnv bool) (kaiadReady bool, workloadSource string) {
-	if skipWaitEnv {
-		return true, "git_repo"
-	}
-	if h.ConfigReady == nil {
-		kaiadReady = true
-	} else {
-		kaiadReady = *h.ConfigReady
-	}
-	if !kaiadReady {
-		return false, ""
-	}
-	if h.Workload != nil && h.Workload.Source != nil && *h.Workload.Source != "" {
-		return true, *h.Workload.Source
-	}
-	return true, "git_repo"
 }
 
 type heartbeatMessage struct {

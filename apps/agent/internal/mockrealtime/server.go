@@ -14,11 +14,6 @@ import (
 // HelloPayload mirrors the first-frame hello from apps/api buildRealtimeAgentHello (see packages/contracts agentHelloMessageSchema).
 type HelloPayload struct {
 	RuntimeBackend string // docker, kubernetes, shell — default "docker"
-	ConfigReady    bool
-	// WorkloadSource is the string form of workload.source (github_repo or binary). Ignored when ConfigReady is false (source is null in JSON).
-	WorkloadSource string
-	GitRepo     string
-	DefaultBranch  string
 	// PreferredExecutor is the AI CLI for automated fix plans ("cursor" or "claude"). Omitted when empty.
 	PreferredExecutor string
 }
@@ -27,8 +22,6 @@ type HelloPayload struct {
 func DefaultHello() HelloPayload {
 	return HelloPayload{
 		RuntimeBackend: "docker",
-		ConfigReady:    true,
-		WorkloadSource: "git_repo",
 	}
 }
 
@@ -38,13 +31,7 @@ type helloWire struct {
 	Runtime           struct {
 		Backend string `json:"backend"`
 	} `json:"runtime"`
-	ConfigReady       bool    `json:"configReady"`
-	PreferredExecutor string  `json:"preferredExecutor,omitempty"`
-	Workload          struct {
-		Source        *string `json:"source"`
-		GitRepo       string  `json:"gitRepoUrl"`
-		DefaultBranch string  `json:"defaultBranch"`
-	} `json:"workload"`
+	PreferredExecutor string `json:"preferredExecutor,omitempty"`
 }
 
 func (h HelloPayload) marshalJSON() ([]byte, error) {
@@ -56,20 +43,7 @@ func (h HelloPayload) marshalJSON() ([]byte, error) {
 	hw.Type = "hello"
 	hw.Service = "realtime"
 	hw.Runtime.Backend = backend
-	hw.ConfigReady = h.ConfigReady
 	hw.PreferredExecutor = h.PreferredExecutor
-	hw.Workload.GitRepo = h.GitRepo
-	hw.Workload.DefaultBranch = h.DefaultBranch
-
-	if !h.ConfigReady {
-		hw.Workload.Source = nil
-	} else {
-		src := h.WorkloadSource
-		if src == "" {
-			src = "git_repo"
-		}
-		hw.Workload.Source = &src
-	}
 
 	return json.Marshal(hw)
 }

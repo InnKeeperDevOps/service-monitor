@@ -27,7 +27,7 @@ flowchart LR
 |------|----------------|
 | [`cmd/agent/main.go`](cmd/agent/main.go) | Process entry: env, credentials, Docker client, transport client, hello callback, log streaming bootstrap |
 | [`internal/transport`](internal/transport) | WebSocket client: dial, session loop, heartbeats, inbound message dispatch, `command_ack`, exponential backoff reconnect |
-| [`internal/executor`](internal/executor) | Implements `transport.CommandHandler`: command routing, shell/Docker/plan execution, Kaiad config gating |
+| [`internal/executor`](internal/executor) | Implements `transport.CommandHandler`: command routing, shell/Docker/plan execution |
 | [`internal/docker`](internal/docker) | Minimal Docker Engine HTTP API over the unix socket; container list/start/stop; log stream attachment |
 | [`internal/credentials`](internal/credentials) | Optional on-disk enrollment persistence (`SM_AGENT_PERSIST_CREDENTIALS`) |
 
@@ -71,11 +71,6 @@ Unknown or malformed messages are ignored or dropped safely; duplicate `commandI
 The executor is the **single implementation** of `transport.CommandHandler`. It holds:
 
 - Selected **runtime backend** from the last `hello`: `docker`, `kubernetes`, or `shell`.
-- **Kaiad config readiness** and **workload source** string, derived from `AgentHello.ResolveKaiadConfig` (see below).
-
-### Kaiad configuration gating
-
-Unless `SM_SKIP_KAIAD_CONFIG_WAIT=1`, most commands are rejected until the tenant is considered ready (`kaiadConfigReady` from hello / workload resolution). This prevents running workloads before operators configure the agent in Kaiad Settings. `cancel_run` is exempt from this gate.
 
 ### Command types (summary)
 
@@ -100,91 +95,10 @@ Log streaming of **existing** containers is started once after `hello` when the 
 
 After connect, Kaiad sends `type: "hello"` with tenant agent settings. The Go struct `AgentHello` aligns with `agentHelloMessageSchema` in contracts.
 
-Main uses `ResolveKaiadConfig` to compute:
-
-- Whether workloads are allowed yet (`configReady` / skip-env).
-- A workload source label: `github_repo` or `binary` (from `workload.source`), defaulting to `github_repo` when the field is absent.
-
 It then calls `executor.Configure` with:
 
 - `nil` docker client for shell-only mode, or the real client for docker mode.
 - The resolved `RuntimeBackend` enum.
-
-If configuration is not ready, main schedules a **20s timer** to call `CloseActiveForReconnect` so the agent periodically picks up Settings changes.
-
-## Binary workload mode (`workload.source: binary`)
-
-Tenant **Agent workload source** can be set to **binary** in Kaiad Settings (see [`TenantConfigurationSection`](../../apps/web/src/features/settings/TenantConfigurationSection.tsx)). That choice is persisted as `agentWorkloadSource` and included in every `hello` via [`buildAgentHelloPayload`](../../apps/api/src/agentHelloPayload.ts). The agent stores the resolved string on the executor ([`Executor.Configure`](internal/executor/executor.go); see also [`WorkloadSource`](internal/executor/executor.go)).
-
-**What the WebSocket carries:** control messages (hello, heartbeats, `run_step`, `docker_op`, plan runners, etc.) are **JSON text frames**. They do **not** embed large application binaries. The product copy for binary mode refers to **artifacts provided or staged by the control plane** relative to the agent host—delivery is expected to be **out of band** from the realtime channel (for example a mounted volume, image layer, object-store pull, or other deployment-specific path). The agent then **executes** whatever the control plane sends next (`run_step` shell, `docker_op`, `run_*_plan`, …) against paths on disk.
-
-**Implementation note:** today the same command handlers run regardless of `github_repo` vs `binary`; the mode is available via `Executor.WorkloadSource()` for future branching. There is no separate “download binary over `/realtime`” RPC in the Go agent yet.
-
-### Diagram: policy vs execution path
-
-```mermaid
-flowchart TB
-  subgraph kaiad["Kaiad control plane"]
-    UI["Settings: agentWorkloadSource = binary"]
-    API["API: tenant settings"]
-    WH["buildAgentHelloPayload"]
-    RT["/realtime WebSocket"]
-    W["Worker / jobs / storage\n(artifact build & placement)"]
-    UI --> API
-    API --> WH
-    WH --> RT
-    W -.->|"artifact to host\n(out of band)"| HOST
-  end
-  subgraph agent["Agent host"]
-    HOST["Filesystem path\n(e.g. workspace / volume)"]
-    AG["Go agent"]
-    EX["executor: run_step / docker_op / plans"]
-    AG --> EX
-    EX --> HOST
-  end
-  RT <-->|"hello + JSON commands"| AG
-```
-
-### Diagram: sequence from tenant setting to execution
-
-```mermaid
-sequenceDiagram
-  participant Op as Operator
-  participant Web as Kaiad Web
-  participant API as Kaiad API
-  participant Agent as Go agent
-  participant FS as Agent filesystem
-
-  Op->>Web: Set workload source = binary
-  Web->>API: PATCH tenant settings
-  Note over API: agentWorkloadSource persisted
-  Agent->>API: WebSocket connect + enroll
-  API-->>Agent: hello (workload.source = binary)
-  Note over Agent: executor.Configure(..., workloadSource = binary)
-  Note over Agent,FS: Artifact reaches host out of band\n(volume, sync, image, etc.)
-  API-->>Agent: run_step (shell targets staged binary path)
-  Agent->>FS: read / execute
-  Agent-->>API: command_ack
-```
-
-### Diagram: command handling (same surface for both workload modes)
-
-```mermaid
-flowchart LR
-  CMD["JSON command on /realtime\n(run_step, docker_op, ...)"]
-  TR["transport.Client\nhandleIncoming"]
-  EX["executor.Execute"]
-  MODE{"kaiadAllowsWorkloads?\n(+ command gate)"}
-  RS["run_step → shell"]
-  DO["docker_op → Docker API / CLI"]
-  PL["run_*_plan → cursor/claude\n(+ optional container)"]
-  CMD --> TR --> EX --> MODE
-  MODE --> RS
-  MODE --> DO
-  MODE --> PL
-```
-
-Binary mode primarily changes **operator expectations and hello metadata** so Kaiad and the agent agree that workloads are **artifact-based** rather than **Git-clone-based**; **execution** still flows through the shared command surface above.
 
 ## Credentials (`internal/credentials`)
 

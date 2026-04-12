@@ -97,8 +97,6 @@ func main() {
 
 	var logStreamOnce sync.Once
 	var client *transport.Client
-	var configWaitMu sync.Mutex
-	var configWaitTimer *time.Timer
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -106,40 +104,20 @@ func main() {
 	opts := []transport.ClientOption{
 		transport.WithCommandHandler(exec),
 		transport.OnHello(func(h transport.AgentHello) {
-			skipWait := os.Getenv("SM_SKIP_KAIAD_CONFIG_WAIT") == "1"
-			ready, wsrc := h.ResolveKaiadConfig(skipWait)
-
-			configWaitMu.Lock()
-			if configWaitTimer != nil {
-				configWaitTimer.Stop()
-				configWaitTimer = nil
-			}
-			configWaitMu.Unlock()
-
 			b := strings.ToLower(strings.TrimSpace(h.Runtime.Backend))
 			if b == "" {
 				b = "docker"
 			}
 			switch b {
 			case "shell":
-				exec.Configure(nil, executor.RuntimeShell, ready, wsrc)
+				exec.Configure(nil, executor.RuntimeShell)
 			case "kubernetes":
-				exec.Configure(nil, executor.RuntimeKubernetes, ready, wsrc)
+				exec.Configure(nil, executor.RuntimeKubernetes)
 			default:
-				exec.Configure(dc, executor.RuntimeDocker, ready, wsrc)
+				exec.Configure(dc, executor.RuntimeDocker)
 			}
-			log.Printf("kaiad hello: agent runtime backend=%s workload=%s configReady=%v", b, wsrc, ready)
-			if !ready {
-				log.Printf("kaiad: waiting for tenant agent configuration — set Workload source in Kaiad Settings; will reconnect periodically to pick up changes")
-				configWaitMu.Lock()
-				configWaitTimer = time.AfterFunc(20*time.Second, func() {
-					if client != nil {
-						log.Printf("kaiad: reconnecting to refresh agent configuration")
-						client.CloseActiveForReconnect()
-					}
-				})
-				configWaitMu.Unlock()
-			}
+			log.Printf("kaiad hello: agent runtime backend=%s", b)
+
 			logStreamOnce.Do(func() {
 				if b != "docker" {
 					return
