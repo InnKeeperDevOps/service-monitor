@@ -776,14 +776,30 @@ export function WorkflowEditorPage() {
           <Button size="sm" variant="secondary" onClick={() => void refreshWorkflows()} loading={loadingWorkflows}>
             Refresh list
           </Button>
+          <Button size="sm" onClick={() => {
+            setNodes([
+              { id: "start", type: "eventNode", position: { x: 0, y: 0 }, data: { nodeType: "event", nodeKind: "agentStarted", label: "agentStarted" } },
+              { id: "pull", type: "actionNode", position: { x: 0, y: 100 }, data: { nodeType: "action", nodeKind: "clone", label: "clone" } },
+              { id: "build", type: "actionNode", position: { x: 0, y: 200 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "mvn clean package -DskipTests" } },
+              { id: "run", type: "actionNode", position: { x: 0, y: 300 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "java -jar target/*.jar" } }
+            ] as any);
+            setEdges([
+              { id: "e-1", source: "start", target: "pull" },
+              { id: "e-2", source: "pull", target: "build" },
+              { id: "e-3", source: "build", target: "run" }
+            ]);
+            setSelectedWorkflowName("pull-build-run");
+          }} style={{ background: "purple", color: "white" }}>
+            Auto-fill Test Workflow
+          </Button>
+          <Button size="sm" variant="secondary" onClick={handleToggleMode}>
+            {editorMode === "visual" ? "Switch to YAML" : "Switch to Visual"}
+          </Button>
           <Button size="sm" onClick={handleSave} loading={saving}>
             Save Workflow
           </Button>
           <Button size="sm" variant="secondary" onClick={handleSetActiveWorkflow}>
             Set active
-          </Button>
-          <Button size="sm" variant="secondary" onClick={handleToggleMode}>
-            {editorMode === "visual" ? "Switch to YAML" : "Switch to Visual"}
           </Button>
           <Button size="sm" variant="secondary" onClick={handleTestRun} style={{ background: "var(--color-info)", color: "var(--color-primary-foreground)", borderColor: "var(--color-info)" }}>
             Validate / Dry run
