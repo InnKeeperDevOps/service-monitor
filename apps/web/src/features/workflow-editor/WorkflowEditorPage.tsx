@@ -638,6 +638,22 @@ export function WorkflowEditorPage() {
           <Button size="sm" variant="secondary" onClick={() => void refreshWorkflows()} loading={loadingWorkflows}>
             Refresh list
           </Button>
+          <Button size="sm" onClick={() => {
+            setNodes([
+              { id: "start", type: "eventNode", position: { x: 0, y: 0 }, data: { nodeType: "event", nodeKind: "agentStarted", label: "agentStarted" } },
+              { id: "pull", type: "actionNode", position: { x: 0, y: 100 }, data: { nodeType: "action", nodeKind: "clone", label: "clone" } },
+              { id: "build", type: "actionNode", position: { x: 0, y: 200 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "mvn clean package -DskipTests" } },
+              { id: "run", type: "actionNode", position: { x: 0, y: 300 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "java -jar target/*.jar" } }
+            ] as any);
+            setEdges([
+              { id: "e-1", source: "start", target: "pull" },
+              { id: "e-2", source: "pull", target: "build" },
+              { id: "e-3", source: "build", target: "run" }
+            ]);
+            setSelectedWorkflowName("pull-build-run");
+          }} style={{ background: "purple", color: "white" }}>
+            Auto-fill Test Workflow
+          </Button>
           <Button size="sm" onClick={handleSave} loading={saving}>
             Save Workflow
           </Button>
@@ -737,6 +753,8 @@ type WorkflowCategoryNodeProps = NodeProps<WorkflowEditorNode>;
 function WorkflowEventNode({ data }: WorkflowCategoryNodeProps) {
   return (
     <div
+      role="button"
+      aria-label={`Event node ${getNodeLabel(data)}`}
       style={{
         minWidth: 132,
         minHeight: 46,
@@ -763,6 +781,8 @@ function WorkflowEventNode({ data }: WorkflowCategoryNodeProps) {
 function WorkflowActionNode({ data }: WorkflowCategoryNodeProps) {
   return (
     <div
+      role="button"
+      aria-label={`Action node ${getNodeLabel(data)}`}
       style={{
         minWidth: 144,
         minHeight: 56,
@@ -907,10 +927,10 @@ function NodeConfigPanel({
             onChange={(e) => onUpdate(node.id, "schedule", e.target.value)}
           />
         )}
-        {node.data.nodeKind === "runShell" && (
+        {["runShell", "runGradlew", "runPip", "runNpm", "runMaven", "runGo"].includes(String(node.data.nodeKind)) && (
           <Input
-            label="Command"
-            placeholder="npm test"
+            label={node.data.nodeKind === "runShell" ? "Command" : "Arguments"}
+            placeholder={node.data.nodeKind === "runShell" ? "npm test" : "e.g. install, build, test"}
             value={String(node.data.command ?? "")}
             onChange={(e) => onUpdate(node.id, "command", e.target.value)}
           />

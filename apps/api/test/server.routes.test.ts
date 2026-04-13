@@ -181,7 +181,7 @@ describe("Server routes", () => {
         method: "POST",
         url: "/api/v1/settings",
         headers: { authorization: "Bearer dev-token" },
-        payload: { tenantId: "t-1", agentRuntimeBackend: "shell" }
+        payload: { tenantId: "t-1", docsUrl: "https://docs.example.com" }
       });
       expect([200, 403, 500]).toContain(res.statusCode);
     });

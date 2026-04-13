@@ -42,3 +42,16 @@ export const logIngestionJobSchema = z.object({
 });
 
 export type LogIngestionJob = z.infer<typeof logIngestionJobSchema>;
+
+export const workflowExecutionJobSchema = z.object({
+  workflowExecutionId: z.string(),
+  tenantId: z.string(),
+  serviceId: z.string(),
+  workflowGraphId: z.string(),
+  workflowVersion: z.number(),
+  triggerPayload: z.record(z.unknown()).nullable(),
+  nodes: z.array(z.any()),
+  edges: z.array(z.object({ from: z.string(), to: z.string() }))
+});
+
+export type WorkflowExecutionJob = z.infer<typeof workflowExecutionJobSchema>;

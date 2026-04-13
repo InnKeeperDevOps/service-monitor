@@ -22,7 +22,7 @@ type CommandResult struct {
 	Output  string
 }
 
-// RuntimeBackend is how Kaiad expects this agent to run workloads (tenant setting agentRuntimeBackend).
+// RuntimeBackend is how Kaiad expects this agent to run workloads (service setting agentRuntimeBackend).
 type RuntimeBackend string
 
 const (

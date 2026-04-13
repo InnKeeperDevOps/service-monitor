@@ -4,7 +4,8 @@ export const QUEUE_NAMES = {
   remediation: "remediation",
   github: "github",
   agentCommands: "agent-commands",
-  logIngestion: "log-ingestion"
+  logIngestion: "log-ingestion",
+  workflowExecution: "workflow-execution"
 } as const;
 
 export const CORRELATION_HEADER = "x-correlation-id";

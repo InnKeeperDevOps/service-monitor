@@ -139,6 +139,9 @@ importers:
       '@sm/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@sm/workflow-engine':
+        specifier: workspace:*
+        version: link:../../packages/workflow-engine
       bullmq:
         specifier: ^5.47.2
         version: 5.73.0

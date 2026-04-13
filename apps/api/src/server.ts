@@ -39,6 +39,7 @@ import {
   type AgentToPlatformMessage,
   type AgentCommandJob,
   type LogIngestionJob,
+  type WorkflowExecutionJob,
   type TenantSettings
 } from "@sm/contracts";
 import {
@@ -156,9 +157,9 @@ function createDryRunHandlers(): Record<WorkflowNodeKind, DryRunHandler> {
           output: `Dry run branch "${truthy ? "true" : "false"}" selected`
         };
       }
-      if (node.kind === "runShell") {
-        const command = String(node.data?.command ?? "echo hello").trim();
-        return { success: true, output: `Dry run would execute: ${command}` };
+      if (["runShell", "runGradlew", "runPip", "runNpm", "runMaven", "runGo"].includes(node.kind)) {
+        const command = String(node.data?.command ?? "").trim();
+        return { success: true, output: `Dry run would execute: ${node.kind} ${command}` };
       }
       if (node.kind === "httpRequest") {
         const method = String(node.data?.method ?? "GET").toUpperCase();
@@ -314,6 +315,7 @@ function emitLoginStepLog(
 export type BuildServerOptions = {
   enqueueLogIngestion?: (job: LogIngestionJob) => void | Promise<void>;
   enqueueAgentCommand?: (job: AgentCommandJob) => void | Promise<void>;
+  enqueueWorkflowExecution?: (job: WorkflowExecutionJob) => void | Promise<void>;
   /** When omitted, checkers are derived from POSTGRES_* / REDIS_* env (TCP probes). */
   readinessCheckers?: ReadinessChecker[];
   domainStore?: DomainStore;
@@ -323,7 +325,7 @@ export type BuildServerOptions = {
 };
 
 export type RuntimeQueueWiring = {
-  buildOptions: Pick<BuildServerOptions, "enqueueLogIngestion" | "enqueueAgentCommand" | "redis">;
+  buildOptions: Pick<BuildServerOptions, "enqueueLogIngestion" | "enqueueAgentCommand" | "enqueueWorkflowExecution" | "redis">;
   close: () => Promise<void>;
 };
 
@@ -332,6 +334,9 @@ export type { ReadinessChecker } from "./readyChecks.js";
 const noopLogIngestion = (_job: LogIngestionJob) => Promise.resolve();
 const noopAgentCommandEnqueue = async (_job: AgentCommandJob) => {
   throw new Error("Agent command queue is not configured");
+};
+const noopWorkflowExecutionEnqueue = async (_job: WorkflowExecutionJob) => {
+  throw new Error("Workflow execution queue is not configured");
 };
 
 async function pgImportAvailable(): Promise<boolean> {
@@ -500,6 +505,7 @@ async function resolveGithubInstallInfo(cfg: KaiadConfig | null): Promise<{
 export function buildServer(opts: BuildServerOptions = {}) {
   const enqueueLogIngestion = opts.enqueueLogIngestion ?? noopLogIngestion;
   const enqueueAgentCommand = opts.enqueueAgentCommand ?? noopAgentCommandEnqueue;
+  const enqueueWorkflowExecution = opts.enqueueWorkflowExecution ?? noopWorkflowExecutionEnqueue;
   const readinessCheckers = opts.readinessCheckers ?? createReadinessCheckersFromEnv();
   const domainStore = resolveDomainStore(opts);
   const authStore = opts.authStore ?? createMemoryAuthStore();
@@ -1700,31 +1706,18 @@ export function buildServer(opts: BuildServerOptions = {}) {
       );
     }
     const graph = await domainStore.createWorkflowGraph(session.tenantId, body);
-    if (!service.agentId) {
-      return reply.status(409).send(
-        apiErrorSchema.parse({
-          code: "AGENT_REQUIRED",
-          message: "Selected service is not bound to an agent",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
     const commandId = `cmd-${crypto.randomUUID()}`;
-    const payload = platformToAgentMessageSchema.parse({
-      type: "run_step",
-      commandId,
-      shell: `sm-workflow-exec --workflow-id ${graph.id} --version ${graph.version}`,
-      env: {
-        SM_WORKFLOW_ID: graph.id,
-        SM_WORKFLOW_VERSION: String(graph.version),
-        SM_SERVICE_ID: body.serviceId
-      }
-    });
+    const workflowExecutionId = `wf-exec-${crypto.randomUUID()}`;
     try {
-      await enqueueAgentCommand({
-        agentId: service.agentId,
-        commandId,
-        payload
+      await enqueueWorkflowExecution({
+        workflowExecutionId,
+        tenantId: session.tenantId,
+        serviceId: body.serviceId,
+        workflowGraphId: graph.id,
+        workflowVersion: graph.version,
+        triggerPayload: null,
+        nodes: body.nodes,
+        edges: body.edges
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to enqueue workflow execution command";
@@ -1741,7 +1734,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
         accepted: true as const,
         workflowId: graph.id,
         workflowVersion: graph.version,
-        agentId: service.agentId,
+        agentId: service.agentId ?? "server",
         commandId,
         dispatchState: "queued_for_dispatch" as const
       })

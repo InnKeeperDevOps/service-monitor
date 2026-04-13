@@ -328,7 +328,8 @@ sequenceDiagram
 3. **If** a skill under **`.cursor/skills/`** matches the task, **read and follow** it first.
 4. **If** you **`git push`** or updated **`origin`**: You are **not** done until you **monitor GitHub Actions** for that commit (see **`post-push-github-actions-monitor.mdc`**) and report workflow outcomes.
 5. **If** you change **`apps/`** or **`packages/`** (or configs that affect build): Run **build + tests** for the impacted scope before claiming done (see **`verification-before-stopping-code-changes.mdc`**).
-6. **If** you cannot run a required step: Say so **explicitly**; do not imply green CI or full compliance.
+6. **If** you make functional changes (especially UI, API, or workflow): Verify them using the dev panel at **http://panel.dev.kaiad.dev** before claiming the work is complete (see **`ui-verification-gate.mdc`**).
+7. **If** you cannot run a required step: Say so **explicitly**; do not imply green CI or full compliance.
 
 ## Multi-root workspaces
 

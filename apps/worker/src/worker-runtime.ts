@@ -6,6 +6,7 @@ import {
   runRemediation,
   type RemediationRunResult
 } from "./index.js";
+import { runWorkflow } from "./workflow-execution.js";
 import { BUILT_IN_DETECTORS } from "@sm/domain";
 import { createLogIngestionProcessor, type IncidentStore, type LogIngestionResult } from "./log-ingestion.js";
 
@@ -100,6 +101,12 @@ export function wireBullmqWorkers(
   );
   const remediationQueue = new Queue(QUEUE_NAMES.remediation, { connection });
 
+  const workflowExecution = createNamedWorker<unknown, { success: boolean; log: string }>(
+    "workflowExecution",
+    connection,
+    async (job) => runWorkflow(job.data)
+  );
+
   const logIngestion = createNamedWorker<unknown, LogIngestionResult>("logIngestion", connection, async (job) => {
     const result = await processLogIngestion(job.data);
     if (result.kind === "incident_created") {
@@ -117,7 +124,7 @@ export function wireBullmqWorkers(
     }
     return result;
   });
-  return [remediation, agentCommands, logIngestion];
+  return [remediation, agentCommands, logIngestion, workflowExecution];
 }
 
 export function startQueueConsumersFromEnv(env: NodeJS.ProcessEnv = process.env): {

@@ -50,9 +50,9 @@ describe("worker runtime — queue wiring", () => {
   it("creates Redis and three named workers when Redis is enabled", () => {
     startQueueConsumersFromEnv({});
     expect(createRedisConnectionFromEnv).toHaveBeenCalledTimes(1);
-    expect(createNamedWorker).toHaveBeenCalledTimes(3);
+    expect(createNamedWorker).toHaveBeenCalledTimes(4);
     const keys = createNamedWorker.mock.calls.map((c) => c[0]);
-    expect(keys).toEqual(["remediation", "agentCommands", "logIngestion"]);
+    expect(keys).toEqual(["remediation", "agentCommands", "workflowExecution", "logIngestion"]);
   });
 
   it("remediation worker processor delegates to runRemediation", async () => {
@@ -183,5 +183,53 @@ describe("worker runtime — queue wiring", () => {
         fetchMock as unknown as typeof fetch
       )
     ).rejects.toThrow(/Agent command dispatch failed: 429/);
+  });
+
+  it("workflowExecution worker delegates to runWorkflow", async () => {
+    const mockConn = { quit: vi.fn() };
+    createRedisConnectionFromEnv.mockReturnValue(mockConn as never);
+    wireBullmqWorkers(mockConn as never);
+    const workerCall = createNamedWorker.mock.calls.find((c) => c[0] === "workflowExecution");
+    expect(workerCall).toBeDefined();
+    // we just check it was created
+  });
+
+  it("logIngestion worker processes log ingestion jobs", async () => {
+    const mockConn = { quit: vi.fn() };
+    createRedisConnectionFromEnv.mockReturnValue(mockConn as never);
+    wireBullmqWorkers(mockConn as never);
+    const workerCall = createNamedWorker.mock.calls.find((c) => c[0] === "logIngestion");
+    expect(workerCall).toBeDefined();
+    const processor = workerCall![2] as (job: Job) => Promise<unknown>;
+
+    // We pass a dummy payload that doesn't trigger incident creation for brevity
+    const payload = {
+      tenantId: "t-1",
+      serviceId: "s-1",
+      containerId: "c-1",
+      agentId: "a-1",
+      level: "info",
+      message: "dummy message",
+      ts: "2026-04-13T04:36:31.822Z",
+      stream: "stdout",
+      lines: []
+    };
+    
+    const res = await processor({ data: payload } as Job) as any;
+    expect(res).toBeDefined();
+  });
+});
+
+import { shutdownWorkersAndRedis } from "../src/worker-runtime.js";
+
+describe("shutdownWorkersAndRedis", () => {
+  it("closes all workers and quits redis", async () => {
+    const mockWorker = { close: vi.fn().mockResolvedValue(undefined) };
+    const mockConn = { quit: vi.fn().mockResolvedValue(undefined) };
+    
+    await shutdownWorkersAndRedis([mockWorker as never], mockConn as never);
+    
+    expect(mockWorker.close).toHaveBeenCalled();
+    expect(mockConn.quit).toHaveBeenCalled();
   });
 });

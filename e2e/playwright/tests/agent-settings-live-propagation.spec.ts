@@ -45,17 +45,14 @@ const BUGS_MD_PATH = path.resolve(__dirname, "..", "bugs.md");
 
 interface MockSettings {
   tenantId: string;
-  agentRuntimeBackend?: "docker" | "kubernetes" | "shell";
   preferredExecutor?: "cursor" | "claude";
 }
 
 function buildHelloFromSettings(s: MockSettings): Record<string, unknown> {
-  const backend: string = s.agentRuntimeBackend ?? "docker";
-
   const hello: Record<string, unknown> = {
     type: "hello",
     service: "realtime",
-    runtime: { backend }
+    runtime: { backend: "docker" }
   };
   if (s.preferredExecutor) {
     hello["preferredExecutor"] = s.preferredExecutor;
@@ -147,7 +144,6 @@ test.describe("E2E-AGT: Agent settings live propagation via UI → Kaiad → Age
       // Updated each time the POST mock fires; read each time a WebSocket connects.
       let serverSettings: MockSettings = {
         tenantId: "t-1",
-        agentRuntimeBackend: undefined,
         preferredExecutor: undefined
       };
 
@@ -206,7 +202,10 @@ test.describe("E2E-AGT: Agent settings live propagation via UI → Kaiad → Age
         }
         if (method === "POST") {
           const body = JSON.parse(route.request().postData() ?? "{}") as Partial<MockSettings>;
-          serverSettings = { ...serverSettings, ...body };
+          serverSettings = { 
+            tenantId: body.tenantId ?? serverSettings.tenantId,
+            preferredExecutor: body.preferredExecutor
+          };
           return route.fulfill({
             status: 200,
             contentType: "application/json",
@@ -298,7 +297,7 @@ test.describe("E2E-AGT: Agent settings live propagation via UI → Kaiad → Age
       await expect(page.getByRole("heading", { name: /Tenant Configuration/i })).toBeVisible({
         timeout: 10_000
       });
-      await expect(page.getByLabel("Agent runtime backend")).toBeVisible();
+      await expect(page.getByLabel("Preferred executor")).toBeVisible();
 
       // Wait for the injected agent to receive its initial hello
       await expect
@@ -439,54 +438,13 @@ test.describe("E2E-AGT: Agent settings live propagation via UI → Kaiad → Age
       // STEP 0: Initial setup — fill required fields and save baseline
       // ════════════════════════════════════════════════════════════════════
       await test.step("Setup: fill required fields and save initial settings", async () => {
-        await page.getByLabel("Agent runtime backend").selectOption("");
         await page.getByLabel("Preferred executor").selectOption("");
         await page.getByRole("button", { name: /Save tenant settings/i }).click();
         await page.waitForTimeout(400);
       });
 
       // ════════════════════════════════════════════════════════════════════
-      // CYCLE 1 — Agent runtime (agentRuntimeBackend)
-      // ════════════════════════════════════════════════════════════════════
-
-      await settingStep({
-        stepName: "Agent runtime: default → kubernetes",
-        bugId: "BUG-AGT-001",
-        affectedField: "agentRuntimeBackend",
-        expectedDescription: "agentRuntimeBackend = kubernetes",
-        uiAction: async () => { await page.getByLabel("Agent runtime backend").selectOption("kubernetes"); },
-        helloMatcher: (h) => {
-          const rt = h["runtime"] as Record<string, unknown> | undefined;
-          return rt?.["backend"] === "kubernetes";
-        }
-      });
-
-      await settingStep({
-        stepName: "Agent runtime: kubernetes → shell",
-        bugId: "BUG-AGT-002",
-        affectedField: "agentRuntimeBackend",
-        expectedDescription: "agentRuntimeBackend = shell",
-        uiAction: async () => { await page.getByLabel("Agent runtime backend").selectOption("shell"); },
-        helloMatcher: (h) => {
-          const rt = h["runtime"] as Record<string, unknown> | undefined;
-          return rt?.["backend"] === "shell";
-        }
-      });
-
-      await settingStep({
-        stepName: "Agent runtime: shell → docker (explicit)",
-        bugId: "BUG-AGT-003",
-        affectedField: "agentRuntimeBackend",
-        expectedDescription: "agentRuntimeBackend = docker",
-        uiAction: async () => { await page.getByLabel("Agent runtime backend").selectOption("docker"); },
-        helloMatcher: (h) => {
-          const rt = h["runtime"] as Record<string, unknown> | undefined;
-          return rt?.["backend"] === "docker";
-        }
-      });
-
-      // ════════════════════════════════════════════════════════════════════
-      // CYCLE 2 — Preferred executor (preferredExecutor)
+      // CYCLE 1 — Preferred executor (preferredExecutor)
       // ════════════════════════════════════════════════════════════════════
 
       await settingStep({

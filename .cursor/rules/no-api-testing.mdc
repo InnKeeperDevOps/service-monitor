@@ -1,0 +1,12 @@
+---
+description: Never test using the API directly, always use the dev panel Web UI
+alwaysApply: true
+---
+
+# No API Testing
+
+When testing or verifying features or executing tasks, **never test using the API directly** (e.g., via `curl`, HTTP requests, or API endpoint calls).
+
+You **must** only use the dev panel Web UI (`http://panel.dev.kaiad.dev` or `https://panel.dev.kaiad.dev/`) via the `cursor-ide-browser` tool or manual verification to test and verify changes or to execute application workflows.
+
+Testing via the API bypasses the frontend and does not properly verify that the entire stack (including the UI layer) is working correctly.

@@ -139,8 +139,13 @@ export const workflowEventKindSchema = z.enum([
 ]);
 export const workflowControlKindSchema = z.enum(["branchIf", "join", "wait", "if", "loop"]);
 export const workflowActionKindSchema = z.enum([
-  "runShell",
-  "dockerBuild",
+    "runShell",
+    "runGradlew",
+    "runPip",
+    "runNpm",
+    "runMaven",
+    "runGo",
+    "dockerBuild",
   "dockerRun",
   "composeUp",
   "composeDown",

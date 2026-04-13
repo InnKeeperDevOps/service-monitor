@@ -21,6 +21,11 @@ export const WORKFLOW_CONTROL_KINDS = ["branchIf", "join", "wait", "if", "loop"]
 
 export const WORKFLOW_ACTION_KINDS = [
   "runShell",
+  "runGradlew",
+  "runPip",
+  "runNpm",
+  "runMaven",
+  "runGo",
   "dockerBuild",
   "dockerRun",
   "composeUp",

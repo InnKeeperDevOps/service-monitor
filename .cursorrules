@@ -4,4 +4,6 @@ Read **AGENTS.md** at the repository root. Treat **`.cursor/rules/*.mdc`** as bi
 
 After **`git push`**, monitor GitHub Actions for that commit before treating the task as finished.
 
+If you make functional UI changes, always test them using the dev panel at **http://panel.dev.kaiad.dev**.
+
 Do not skip verification, CI monitoring, or project rules because the task looks small.

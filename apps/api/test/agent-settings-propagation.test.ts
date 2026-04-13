@@ -3,9 +3,7 @@
  *
  * These tests start the Kaiad API server in-process and connect a WebSocket
  * client (acting as the agent). They verify that:
- *   1. Changing `agentRuntimeBackend` (Agent runtime) is reflected in the
- *      `runtime.backend` field of the next hello frame the agent receives.
- *   2. Changing `preferredExecutor` (Preferred executor) is reflected in the
+ *   1. Changing `preferredExecutor` (Preferred executor) is reflected in the
  *      `preferredExecutor` field of the next hello frame the agent receives.
  *
  * The update mechanism: Kaiad embeds tenant settings in the `hello` frame it
@@ -89,20 +87,6 @@ function waitForClose(ws: WebSocket): Promise<void> {
   if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
   return new Promise((resolve) => ws.once("close", resolve));
 }
-
-// ---------------------------------------------------------------------------
-// AT-AGT-001: Agent runtime (agentRuntimeBackend)
-// ---------------------------------------------------------------------------
-
-describe("AT-AGT-001: Agent runtime — agentRuntimeBackend reflected in hello", () => {
-  it("defaults to docker when no tenant settings exist", async () => {
-    const { ws, hello } = await connectAndCaptureHello();
-    expect(hello.type).toBe("hello");
-    expect(hello.runtime?.backend).toBe("docker");
-    ws.close();
-    await waitForClose(ws);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // AT-AGT-002: Preferred executor (preferredExecutor)

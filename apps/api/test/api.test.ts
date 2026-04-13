@@ -232,7 +232,7 @@ describe("api", () => {
       method: "POST",
       url: "/api/v1/settings",
       headers: { authorization: "Bearer dev-token" },
-      payload: { tenantId: "t-2", agentRuntimeBackend: "shell" }
+      payload: { tenantId: "t-2", docsUrl: "https://docs.example.com" }
     });
     expect(response.statusCode).toBe(403);
   });

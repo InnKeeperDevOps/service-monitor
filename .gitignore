@@ -18,3 +18,5 @@ blob-report/
 .worktrees/
 
 env/*/data/
+
+other-projects/

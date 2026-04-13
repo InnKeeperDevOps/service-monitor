@@ -20,19 +20,16 @@ describe("mergeTenantSettings", () => {
     const previous: TenantSettings = {
       tenantId: sessionTenantId,
       docsUrl: "https://docs.example.com",
-      preferredExecutor: "claude",
-      agentRuntimeBackend: "shell"
+      preferredExecutor: "claude"
     };
 
     const merged = mergeTenantSettings(previous, { 
       docsUrl: null,
-      preferredExecutor: null,
-      agentRuntimeBackend: null
+      preferredExecutor: null
     }); 
     
     expect(merged.docsUrl).toBeUndefined();
     expect(merged.preferredExecutor).toBeUndefined();
-    expect(merged.agentRuntimeBackend).toBeUndefined();
   });
 
   it("keeps previous values when patch does not provide them", () => {

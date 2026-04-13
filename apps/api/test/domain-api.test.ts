@@ -275,28 +275,11 @@ describe("workflows API", () => {
     expect(v2.json().version).toBe(2);
   });
 
-  it("returns conflict when executing workflow for service without bound agent", async () => {
-    const svc = await domainStore.createService("t-1", { name: "no-agent", gitRepoUrl: "o/r", branch: "main" });
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/workflows/execute",
-      headers: AUTH,
-      payload: {
-        serviceId: svc.id,
-        name: "wf",
-        nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
-        edges: []
-      }
-    });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().code).toBe("AGENT_REQUIRED");
-  });
-
   it("queues workflow execution command when queue hook is configured", async () => {
-    const enqueueAgentCommand = vi.fn().mockResolvedValue(undefined);
+    const enqueueWorkflowExecution = vi.fn().mockResolvedValue(undefined);
     const executeApp = buildServer({
       domainStore,
-      enqueueAgentCommand
+      enqueueWorkflowExecution
     });
     await executeApp.ready();
     const svc = await domainStore.createService("t-1", {
@@ -323,11 +306,10 @@ describe("workflows API", () => {
         dispatchState: "queued_for_dispatch"
       })
     );
-    expect(enqueueAgentCommand).toHaveBeenCalledTimes(1);
-    expect(enqueueAgentCommand.mock.calls[0]?.[0]).toEqual(
+    expect(enqueueWorkflowExecution).toHaveBeenCalledTimes(1);
+    expect(enqueueWorkflowExecution.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
-        agentId: "agent-1",
-        payload: expect.objectContaining({ type: "run_step" })
+        serviceId: svc.id
       })
     );
     await executeApp.close();
