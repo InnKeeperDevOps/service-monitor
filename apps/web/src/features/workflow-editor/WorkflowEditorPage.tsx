@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, type DragEvent } from "react";
+import * as yaml from "yaml";
+import { WorkflowYamlEditor } from "./WorkflowYamlEditor.js";
+import { workflowGraphSchema } from "@sm/contracts";
 import {
   allowedEventDataKeys,
   WORKFLOW_ACTION_KINDS,
@@ -173,6 +176,8 @@ function toWorkflowEdges(edges: Edge[]) {
 }
 
 export function WorkflowEditorPage() {
+  const [editorMode, setEditorMode] = useState<"visual" | "yaml">("visual");
+  const [yamlContent, setYamlContent] = useState<string>("");
   const [nodes, setNodes] = useState<WorkflowEditorNode[]>(INITIAL_NODES);
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [saving, setSaving] = useState(false);
@@ -190,6 +195,66 @@ export function WorkflowEditorPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [reactFlow, setReactFlow] = useState<ReactFlowInstance<WorkflowEditorNode, Edge> | null>(null);
+
+  const handleToggleMode = () => {
+    if (editorMode === "visual") {
+      // Sync Visual -> YAML
+      const graphObj = {
+        name: selectedWorkflowName || "Untitled Workflow",
+        nodes: toWorkflowNodes(nodes),
+        edges: toWorkflowEdges(edges),
+      };
+      setYamlContent(yaml.stringify(graphObj));
+      setEditorMode("yaml");
+    } else {
+      // Sync YAML -> Visual
+      try {
+        const parsed = yaml.parse(yamlContent);
+        // Basic validation using Zod (optional, could just check shape)
+        const result = workflowGraphSchema.pick({ nodes: true, edges: true }).safeParse(parsed);
+        
+        if (!result.success) {
+          setStatusMessage({ type: "error", text: "Invalid YAML structure. Please fix errors before switching." });
+          return;
+        }
+
+        // Map back to React Flow nodes
+        setNodes(
+          result.data.nodes.map((n: any, i: number) => {
+            const nodeType = n.type;
+            const nodeKind = n.kind || "runShell";
+            const data = n.data ?? {};
+            const displayName = typeof data.displayName === "string" ? data.displayName : "";
+            return {
+              id: n.id,
+              type: resolveVisualType(nodeType),
+              position: n.position ?? { x: i * 220, y: 120 },
+              data: {
+                ...data,
+                nodeType,
+                nodeKind,
+                displayName,
+                label: displayName.trim() || nodeKind
+              }
+            };
+          })
+        );
+        
+        setEdges(
+          result.data.edges.map((e: any, i: number) => ({
+            id: `e${i}`,
+            source: e.from,
+            target: e.to,
+          }))
+        );
+
+        setStatusMessage(null);
+        setEditorMode("visual");
+      } catch (err) {
+        setStatusMessage({ type: "error", text: `YAML Parse Error: ${(err as Error).message}` });
+      }
+    }
+  };
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) ?? null : null;
   const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) ?? null : null;
@@ -256,10 +321,21 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setValidationErrors([]);
     try {
+      let payloadNodes, payloadEdges;
+
+      if (editorMode === "yaml") {
+        const parsed = yaml.parse(yamlContent);
+        payloadNodes = parsed.nodes || [];
+        payloadEdges = parsed.edges || [];
+      } else {
+        payloadNodes = toWorkflowNodes(nodes);
+        payloadEdges = toWorkflowEdges(edges);
+      }
+
       const graph = await api.createWorkflow({
         name: selectedWorkflowName || "Untitled Workflow",
-        nodes: toWorkflowNodes(nodes),
-        edges: toWorkflowEdges(edges),
+        nodes: payloadNodes,
+        edges: payloadEdges,
       });
       setWorkflows((prev) => [graph, ...prev.filter((existing) => existing.id !== graph.id)]);
       setSelectedWorkflowId(graph.id);
@@ -269,7 +345,7 @@ export function WorkflowEditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [nodes, edges, selectedWorkflowName]);
+  }, [nodes, edges, selectedWorkflowName, editorMode, yamlContent]);
 
   const handleLoad = useCallback(async () => {
     if (!selectedServiceId) {
@@ -333,9 +409,34 @@ export function WorkflowEditorPage() {
 
   const handleValidate = useCallback(() => {
     setStatusMessage(null);
+    let payloadNodes: any[];
+    let payloadEdges: any[];
+
+    if (editorMode === "yaml") {
+      try {
+        const parsed = yaml.parse(yamlContent);
+        payloadNodes = parsed.nodes || [];
+        payloadEdges = parsed.edges || [];
+      } catch (err) {
+        setStatusMessage({ type: "error", text: `YAML Parse Error: ${(err as Error).message}` });
+        return;
+      }
+    } else {
+      payloadNodes = toWorkflowNodes(nodes);
+      payloadEdges = toWorkflowEdges(edges);
+    }
+
+    const domainNodes = payloadNodes.map(n => ({
+      id: n.id,
+      type: n.type,
+      kind: n.kind,
+      position: n.position || { x: 0, y: 0 },
+      data: n.data || {}
+    }));
+
     const errors = validateWorkflowGraph(
-      toDomainNodes(nodes),
-      toWorkflowEdges(edges),
+      domainNodes,
+      payloadEdges,
     );
     if (errors.length === 0) {
       setValidationErrors([]);
@@ -343,7 +444,7 @@ export function WorkflowEditorPage() {
     } else {
       setValidationErrors(errors.map((e) => e.message));
     }
-  }, [nodes, edges]);
+  }, [nodes, edges, editorMode, yamlContent]);
 
   const handleTestRun = useCallback(() => {
     if (!selectedServiceId) {
@@ -353,9 +454,35 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setTestRunResult(null);
     setValidationErrors([]);
+
+    let payloadNodes: any[];
+    let payloadEdges: any[];
+
+    if (editorMode === "yaml") {
+      try {
+        const parsed = yaml.parse(yamlContent);
+        payloadNodes = parsed.nodes || [];
+        payloadEdges = parsed.edges || [];
+      } catch (err) {
+        setStatusMessage({ type: "error", text: `YAML Parse Error: ${(err as Error).message}` });
+        return;
+      }
+    } else {
+      payloadNodes = toWorkflowNodes(nodes);
+      payloadEdges = toWorkflowEdges(edges);
+    }
+
+    const domainNodes = payloadNodes.map(n => ({
+      id: n.id,
+      type: n.type,
+      kind: n.kind,
+      position: n.position || { x: 0, y: 0 },
+      data: n.data || {}
+    }));
+
     const errors = validateWorkflowGraph(
-      toDomainNodes(nodes),
-      toWorkflowEdges(edges),
+      domainNodes,
+      payloadEdges,
     );
     if (errors.length > 0) {
       setValidationErrors(errors.map((e) => e.message));
@@ -364,8 +491,8 @@ export function WorkflowEditorPage() {
     void api.dryRunWorkflow({
       serviceId: selectedServiceId,
       name: selectedWorkflowName || "Untitled Workflow",
-      nodes: toWorkflowNodes(nodes),
-      edges: toWorkflowEdges(edges)
+      nodes: payloadNodes,
+      edges: payloadEdges
     })
       .then((result) => {
         setTestRunResult(result.steps);
@@ -377,7 +504,7 @@ export function WorkflowEditorPage() {
       .catch((err) => {
         setStatusMessage({ type: "error", text: (err as Error).message });
       });
-  }, [nodes, edges, selectedServiceId, selectedWorkflowName]);
+  }, [nodes, edges, selectedServiceId, selectedWorkflowName, editorMode, yamlContent]);
 
   const handleExecuteOnAgent = useCallback(async () => {
     if (!selectedServiceId) {
@@ -388,11 +515,22 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setValidationErrors([]);
     try {
+      let payloadNodes, payloadEdges;
+
+      if (editorMode === "yaml") {
+        const parsed = yaml.parse(yamlContent);
+        payloadNodes = parsed.nodes || [];
+        payloadEdges = parsed.edges || [];
+      } else {
+        payloadNodes = toWorkflowNodes(nodes);
+        payloadEdges = toWorkflowEdges(edges);
+      }
+
       const execution = await api.executeWorkflow({
         serviceId: selectedServiceId,
         name: selectedWorkflowName || "Untitled Workflow",
-        nodes: toWorkflowNodes(nodes),
-        edges: toWorkflowEdges(edges),
+        nodes: payloadNodes,
+        edges: payloadEdges,
       });
       setStatusMessage({
         type: "success",
@@ -403,7 +541,7 @@ export function WorkflowEditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [nodes, edges, selectedServiceId, selectedWorkflowName]);
+  }, [nodes, edges, selectedServiceId, selectedWorkflowName, editorMode, yamlContent]);
 
   const handleSetActiveWorkflow = useCallback(async () => {
     if (!selectedServiceId) {
@@ -644,6 +782,9 @@ export function WorkflowEditorPage() {
           <Button size="sm" variant="secondary" onClick={handleSetActiveWorkflow}>
             Set active
           </Button>
+          <Button size="sm" variant="secondary" onClick={handleToggleMode}>
+            {editorMode === "visual" ? "Switch to YAML" : "Switch to Visual"}
+          </Button>
           <Button size="sm" variant="secondary" onClick={handleTestRun} style={{ background: "var(--color-info)", color: "var(--color-primary-foreground)", borderColor: "var(--color-info)" }}>
             Validate / Dry run
           </Button>
@@ -681,52 +822,62 @@ export function WorkflowEditorPage() {
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px" }}>
-          <div style={{ height: 360 }} onDragOver={handleDragOver} onDrop={handleDrop}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={WORKFLOW_NODE_RENDERERS}
-              onInit={setReactFlow}
-              onNodesChange={handleNodesChange}
-              onEdgesChange={handleEdgesChange}
-              onNodesDelete={handleNodesDelete}
-              onEdgesDelete={handleEdgesDelete}
-              onConnect={handleConnect}
-              onNodeClick={handleNodeClick}
-              onEdgeClick={handleEdgeClick}
-              onPaneClick={handlePaneClick}
-              deleteKeyCode={["Backspace", "Delete"]}
-              fitView
-              fitViewOptions={{ maxZoom: 1.2 }}
-              snapToGrid
-              snapGrid={[20, 20]}
-            >
-              <Background />
-              <MiniMap />
-              <Controls />
-            </ReactFlow>
-          </div>
+        {editorMode === "visual" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px" }}>
+            <div style={{ height: 360 }} onDragOver={handleDragOver} onDrop={handleDrop}>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={WORKFLOW_NODE_RENDERERS}
+                onInit={setReactFlow}
+                onNodesChange={handleNodesChange}
+                onEdgesChange={handleEdgesChange}
+                onNodesDelete={handleNodesDelete}
+                onEdgesDelete={handleEdgesDelete}
+                onConnect={handleConnect}
+                onNodeClick={handleNodeClick}
+                onEdgeClick={handleEdgeClick}
+                onPaneClick={handlePaneClick}
+                deleteKeyCode={["Backspace", "Delete"]}
+                fitView
+                fitViewOptions={{ maxZoom: 1.2 }}
+                snapToGrid
+                snapGrid={[20, 20]}
+              >
+                <Background />
+                <MiniMap />
+                <Controls />
+              </ReactFlow>
+            </div>
 
-          <aside
-            aria-label="Side panel"
-            style={{ borderLeft: "1px solid var(--color-border)", padding: "0.75rem", fontSize: "0.8rem", overflow: "auto", maxHeight: 360 }}
-          >
-            {selectedNode ? (
-              <NodeConfigPanel
-                node={selectedNode}
-                onUpdate={updateNodeData}
-                onDeleteNode={handleDeleteSelectedNode}
-                onDisconnectNode={handleDisconnectSelectedNode}
-                onClose={() => setSelectedNodeId(null)}
-              />
-            ) : selectedEdge ? (
-              <EdgeConfigPanel edge={selectedEdge} onDeleteEdge={handleDeleteSelectedEdge} onClose={() => setSelectedEdgeId(null)} />
-            ) : (
-              <PalettePanel filter={paletteFilter} onFilterChange={setPaletteFilter} />
-            )}
-          </aside>
-        </div>
+            <aside
+              aria-label="Side panel"
+              style={{ borderLeft: "1px solid var(--color-border)", padding: "0.75rem", fontSize: "0.8rem", overflow: "auto", maxHeight: 360 }}
+            >
+              {selectedNode ? (
+                <NodeConfigPanel
+                  node={selectedNode}
+                  onUpdate={updateNodeData}
+                  onDeleteNode={handleDeleteSelectedNode}
+                  onDisconnectNode={handleDisconnectSelectedNode}
+                  onClose={() => setSelectedNodeId(null)}
+                />
+              ) : selectedEdge ? (
+                <EdgeConfigPanel edge={selectedEdge} onDeleteEdge={handleDeleteSelectedEdge} onClose={() => setSelectedEdgeId(null)} />
+              ) : (
+                <PalettePanel filter={paletteFilter} onFilterChange={setPaletteFilter} />
+              )}
+            </aside>
+          </div>
+        ) : (
+          <div style={{ height: 360, borderTop: "1px solid var(--color-border)" }}>
+            <WorkflowYamlEditor 
+              value={yamlContent} 
+              onChange={(val) => setYamlContent(val ?? "")} 
+              height="360px"
+            />
+          </div>
+        )}
       </div>
     </section>
   );
