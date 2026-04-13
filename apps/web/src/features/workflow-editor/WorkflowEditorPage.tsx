@@ -345,7 +345,7 @@ export function WorkflowEditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [nodes, edges, selectedWorkflowName, editorMode, yamlContent]);
+  }, [nodes, edges, selectedWorkflowName, editorMode, yamlContent, selectedServiceId]);
 
   const handleLoad = useCallback(async () => {
     if (!selectedServiceId) {
@@ -399,6 +399,7 @@ export function WorkflowEditorPage() {
         }))
       );
       setSelectedWorkflowId(graph.id);
+      setEditorMode("visual");
       setStatusMessage({ type: "success", text: `Loaded workflow v${graph.version} (${graph.nodes.length} nodes)` });
     } catch (err) {
       setStatusMessage({ type: "error", text: (err as Error).message });
