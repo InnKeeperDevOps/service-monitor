@@ -111,6 +111,7 @@ export type MonitoredService = {
   workflowGraphId?: string | null;
   dockerImage?: string | null;
   composePath?: string | null;
+  agentRuntimeBackend?: string | null;
 };
 
 export type WorkflowGraphNode = {
