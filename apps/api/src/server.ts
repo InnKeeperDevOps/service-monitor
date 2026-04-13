@@ -1565,7 +1565,10 @@ export function buildServer(opts: BuildServerOptions = {}) {
         ?? (typeof raw.dockerImage === "string" && raw.dockerImage.trim().length > 0 ? raw.dockerImage : undefined),
       composePath:
         body.composePath
-        ?? (typeof raw.composePath === "string" && raw.composePath.trim().length > 0 ? raw.composePath : undefined)
+        ?? (typeof raw.composePath === "string" && raw.composePath.trim().length > 0 ? raw.composePath : undefined),
+      agentRuntimeBackend:
+        body.agentRuntimeBackend
+        ?? (typeof raw.agentRuntimeBackend === "string" && raw.agentRuntimeBackend.trim().length > 0 ? raw.agentRuntimeBackend : undefined)
     });
     return reply.status(201).send(svc);
   });

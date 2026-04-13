@@ -54,4 +54,44 @@ describe("oauth SSRF protections", () => {
     await expect(discoverOIDC("http://localhost:8080", fetchMock)).rejects.toThrow(/private or blocked host/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("buildOAuthProviderFromOIDC maps properties correctly", async () => {
+    const { buildOAuthProviderFromOIDC } = await import("../src/oauth.js");
+    const provider = buildOAuthProviderFromOIDC(
+      { id: "p1", clientId: "cid", clientSecret: "sec", issuerUrl: "url", scopes: ["s1"] },
+      { authorization_endpoint: "https://auth", token_endpoint: "https://tok", userinfo_endpoint: "https://ui" }
+    );
+    expect(provider).toEqual({
+      id: "p1",
+      provider: "oidc",
+      clientId: "cid",
+      clientSecret: "sec",
+      authorizeUrl: "https://auth",
+      tokenUrl: "https://tok",
+      userInfoUrl: "https://ui",
+      scopes: ["s1"],
+    });
+  });
+
+  describe("seedGoogleProviderFromEnv", () => {
+    it("does nothing if GOOGLE_CLIENT_ID is missing", async () => {
+      const { seedGoogleProviderFromEnv, listProviders } = await import("../src/oauth.js");
+      vi.stubEnv("GOOGLE_CLIENT_ID", "");
+      seedGoogleProviderFromEnv();
+      expect(listProviders()).toEqual([]);
+    });
+
+    it("adds google provider if GOOGLE_CLIENT_ID is set", async () => {
+      const { seedGoogleProviderFromEnv, getOAuthProvider } = await import("../src/oauth.js");
+      vi.stubEnv("GOOGLE_CLIENT_ID", "google-client-id");
+      vi.stubEnv("GOOGLE_CLIENT_SECRET", "google-client-secret");
+      seedGoogleProviderFromEnv();
+      const p = getOAuthProvider("google");
+      expect(p).toMatchObject({
+        id: "google",
+        clientId: "google-client-id",
+        clientSecret: "google-client-secret"
+      });
+    });
+  });
 });

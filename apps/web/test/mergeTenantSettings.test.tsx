@@ -39,17 +39,15 @@ describe("mergeTenantSettings", () => {
     const previous: TenantSettings = {
       tenantId: sessionTenantId,
       docsUrl: "https://docs.example.com",
-      preferredExecutor: "cursor",
-      agentRuntimeBackend: "docker"
+      preferredExecutor: "cursor"
     };
 
-    const merged = mergeTenantSettings(previous, {}); 
-    
+    const merged = mergeTenantSettings(previous, {});
+
     expect(merged).toEqual({
       tenantId: sessionTenantId,
       docsUrl: "https://docs.example.com",
-      preferredExecutor: "cursor",
-      agentRuntimeBackend: "docker"
+      preferredExecutor: "cursor"
     });
   });
 });

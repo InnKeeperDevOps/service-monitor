@@ -48,19 +48,14 @@ export function TenantConfigurationSection({
 }: Props) {
   const [docsUrl, setDocsUrl] = useState("");
   const [preferredExecutor, setPreferredExecutor] = useState<"" | "cursor" | "claude">("");
-  const [agentRuntimeBackend, setAgentRuntimeBackend] = useState<
-    "" | "docker" | "kubernetes" | "shell"
-  >("");
 
   useEffect(() => {
     if (data) {
       setDocsUrl(data.docsUrl ?? "");
       setPreferredExecutor(data.preferredExecutor ?? "");
-      setAgentRuntimeBackend(data.agentRuntimeBackend ?? "");
     } else {
       setDocsUrl("");
       setPreferredExecutor("");
-      setAgentRuntimeBackend("");
     }
   }, [data]);
 
@@ -77,8 +72,7 @@ export function TenantConfigurationSection({
   async function submitTenantPatch() {
     const patch: TenantSettingsPatch = {
       docsUrl: docsUrl.trim() ? docsUrl.trim() : null,
-      preferredExecutor: preferredExecutor === "" ? null : preferredExecutor,
-      agentRuntimeBackend: agentRuntimeBackend === "" ? null : agentRuntimeBackend
+      preferredExecutor: preferredExecutor === "" ? null : preferredExecutor
     };
 
     await savePatch(patch);
@@ -137,34 +131,6 @@ export function TenantConfigurationSection({
             <option value="cursor">Cursor</option>
             <option value="claude">Claude</option>
           </select>
-        </label>
-        <label style={labelColStyle}>
-          <span style={{ color: "var(--color-text-secondary)" }}>Agent runtime (optional)</span>
-          <select
-            value={agentRuntimeBackend}
-            onChange={(e) =>
-              setAgentRuntimeBackend(e.target.value as "" | "docker" | "kubernetes" | "shell")
-            }
-            disabled={disabled}
-            aria-label="Agent runtime backend"
-            style={{
-              border: "1px solid var(--color-border)",
-              borderRadius: 6,
-              padding: "0.35rem 0.45rem",
-              background: "var(--color-surface)",
-              color: "var(--color-text-primary)",
-              maxWidth: 420
-            }}
-          >
-            <option value="">Default (Docker)</option>
-            <option value="docker">Docker</option>
-            <option value="kubernetes">Kubernetes</option>
-            <option value="shell">Shell only</option>
-          </select>
-          <p style={{ ...mutedText, margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
-            Tells enrolled Go agents how to run workloads (Docker socket, kubectl, or shell). Applies on next WebSocket
-            connection.
-          </p>
         </label>
 
         <div style={{ marginTop: "0.5rem", marginBottom: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>

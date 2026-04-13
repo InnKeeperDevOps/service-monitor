@@ -144,6 +144,23 @@ func TestDockerOpKubernetesRuntime(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeBackendOverride(t *testing.T) {
+	e := NewExecutor(nil)
+	e.Configure(nil, RuntimeDocker)
+	// payload overrides it to shell
+	result := e.Execute(context.Background(), "docker_op", map[string]interface{}{
+		"operation":           "start",
+		"args":                map[string]interface{}{"container": "abc"},
+		"agentRuntimeBackend": "shell",
+	})
+	if result.Success {
+		t.Fatal("expected failure for shell-only runtime (overridden)")
+	}
+	if !strings.Contains(strings.ToLower(result.Output), "shell") {
+		t.Fatalf("expected shell runtime message, got: %s", result.Output)
+	}
+}
+
 func TestExecuteRunCursorPlan(t *testing.T) {
 	t.Setenv("SM_CURSOR_BIN", "/bin/echo")
 	e := newReadyExecutor()

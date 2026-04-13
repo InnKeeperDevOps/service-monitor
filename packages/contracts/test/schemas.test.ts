@@ -154,23 +154,6 @@ describe("http.ts", () => {
       ).toThrow();
     });
 
-    it("accepts agentRuntimeBackend", () => {
-      expect(() =>
-        tenantSettingsSchema.parse({
-          tenantId: "t-1",
-          agentRuntimeBackend: "shell"
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects invalid agentRuntimeBackend", () => {
-      expect(() =>
-        tenantSettingsSchema.parse({
-          tenantId: "t-1",
-          agentRuntimeBackend: "podman"
-        })
-      ).toThrow();
-    });
   });
 
   describe("upsertTenantSettingsRequestSchema", () => {
@@ -555,14 +538,30 @@ describe("http.ts", () => {
       ).not.toThrow();
     });
 
-    it("rejects missing name", () => {
+    it("accepts agentRuntimeBackend", () => {
       expect(() =>
         monitoredServiceSchema.parse({
           id: "svc-1",
           tenantId: "t-1",
           agentId: null,
+          name: "api",
           gitRepoUrl: "o/r",
-          branch: "main"
+          branch: "main",
+          agentRuntimeBackend: "shell"
+        })
+      ).not.toThrow();
+    });
+
+    it("rejects invalid agentRuntimeBackend", () => {
+      expect(() =>
+        monitoredServiceSchema.parse({
+          id: "svc-1",
+          tenantId: "t-1",
+          agentId: null,
+          name: "api",
+          gitRepoUrl: "o/r",
+          branch: "main",
+          agentRuntimeBackend: "podman"
         })
       ).toThrow();
     });

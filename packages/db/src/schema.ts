@@ -80,7 +80,8 @@ create table if not exists monitored_services (
   ssh_key_id text references ssh_keys(id) on delete set null,
   branch text not null,
   docker_image text,
-  compose_path text
+  compose_path text,
+  agent_runtime_backend text
 );
 
 create table if not exists workflow_graphs (
@@ -93,6 +94,7 @@ create table if not exists workflow_graphs (
 );
 
 alter table monitored_services add column if not exists workflow_graph_id text references workflow_graphs(id) on delete set null;
+alter table monitored_services add column if not exists agent_runtime_backend text;
 
 alter table workflow_graphs add column if not exists name text not null default 'Untitled Workflow';
 alter table workflow_graphs drop column if exists service_id cascade;

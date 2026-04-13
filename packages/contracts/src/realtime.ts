@@ -81,7 +81,8 @@ const dockerOpCommandSchema = z.object({
   type: z.literal("docker_op"),
   commandId: z.string(),
   operation: z.enum(["build", "run", "compose_up", "compose_down"]),
-  args: z.record(z.string())
+  args: z.record(z.string()),
+  agentRuntimeBackend: z.enum(["docker", "kubernetes", "shell"]).optional()
 });
 
 const cancelRunCommandSchema = z.object({
@@ -111,7 +112,8 @@ const runCursorPlanCommandSchema = z.object({
   permissionsProfile: z.enum(["restricted", "repo", "full"]).optional(),
   gitRepoUrl: z.string(),
   sshKeyType: z.enum(["uploaded", "local_path"]),
-  sshKeyValue: z.string().nullable()
+  sshKeyValue: z.string().nullable(),
+  agentRuntimeBackend: z.enum(["docker", "kubernetes", "shell"]).optional()
 });
 
 const runClaudePlanCommandSchema = z.object({
@@ -123,7 +125,8 @@ const runClaudePlanCommandSchema = z.object({
   permissionsProfile: z.enum(["restricted", "repo", "full"]).optional(),
   gitRepoUrl: z.string(),
   sshKeyType: z.enum(["uploaded", "local_path"]),
-  sshKeyValue: z.string().nullable()
+  sshKeyValue: z.string().nullable(),
+  agentRuntimeBackend: z.enum(["docker", "kubernetes", "shell"]).optional()
 });
 
 /** Run a source file or artifact with the host toolchain (agent must have the interpreter/compiler on PATH). */

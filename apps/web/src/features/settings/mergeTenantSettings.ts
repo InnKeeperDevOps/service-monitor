@@ -3,7 +3,6 @@ import type { TenantSettings } from "@sm/contracts";
 export type TenantSettingsPatch = Partial<{
   docsUrl: string | null;
   preferredExecutor: "cursor" | "claude" | null;
-  agentRuntimeBackend: "docker" | "kubernetes" | "shell" | null;
 }>;
 
 export function mergeTenantSettings(base: TenantSettings, patch: TenantSettingsPatch): TenantSettings {
@@ -16,9 +15,6 @@ export function mergeTenantSettings(base: TenantSettings, patch: TenantSettingsP
 
   const preferredExecutor = patch.preferredExecutor !== undefined ? patch.preferredExecutor : base.preferredExecutor;
   if (preferredExecutor != null) out.preferredExecutor = preferredExecutor;
-
-  const agentRuntimeBackend = patch.agentRuntimeBackend !== undefined ? patch.agentRuntimeBackend : base.agentRuntimeBackend;
-  if (agentRuntimeBackend != null) out.agentRuntimeBackend = agentRuntimeBackend;
 
   return out;
 }

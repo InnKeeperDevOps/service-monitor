@@ -222,6 +222,7 @@ export const api = {
     branch: string;
     dockerImage?: string;
     composePath?: string;
+    agentRuntimeBackend?: string;
   }) =>
     apiFetch<MonitoredService>("/api/v1/services", {
       method: "POST",
@@ -235,6 +236,7 @@ export const api = {
     branch?: string;
     dockerImage?: string;
     composePath?: string;
+    agentRuntimeBackend?: string;
   }) =>
     apiFetch<MonitoredService>(`/api/v1/services/${encodeURIComponent(id)}`, {
       method: "PATCH",

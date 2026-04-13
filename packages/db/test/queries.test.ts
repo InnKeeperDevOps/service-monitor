@@ -355,7 +355,8 @@ describe("listServices", () => {
         ssh_key_id: "k1",
         branch: "main",
         docker_image: "acme/web:latest",
-        compose_path: "compose.yml"
+        compose_path: "compose.yml",
+        agent_runtime_backend: null
       },
     ]);
     const result = await listServices(query, "t1");
@@ -370,7 +371,8 @@ describe("listServices", () => {
         sshKeyId: "k1",
         branch: "main",
         dockerImage: "acme/web:latest",
-        composePath: "compose.yml"
+        composePath: "compose.yml",
+        agentRuntimeBackend: null
       },
     ]);
   });
@@ -388,7 +390,8 @@ describe("createService", () => {
         ssh_key_id: null,
         branch: "main",
         docker_image: "acme/api:1.0",
-        compose_path: "deploy/compose.yml"
+        compose_path: "deploy/compose.yml",
+        agent_runtime_backend: null
       },
     ]);
     const result = await createService(query, "t1", {
@@ -397,15 +400,17 @@ describe("createService", () => {
       sshKeyId: null,
       branch: "main",
       dockerImage: "acme/api:1.0",
-      composePath: "deploy/compose.yml"
+      composePath: "deploy/compose.yml",
+      agentRuntimeBackend: undefined
     });
     expect(result.name).toBe("api");
     expect(result.agentId).toBeNull();
     expect(result.dockerImage).toBe("acme/api:1.0");
     expect(result.composePath).toBe("deploy/compose.yml");
+    expect(result.agentRuntimeBackend).toBeNull();
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO monitored_services"),
-      expect.arrayContaining(["t1", null, "api", "r", null, "main", "acme/api:1.0", "deploy/compose.yml"]),
+      expect.arrayContaining(["t1", null, "api", "r", null, "main", "acme/api:1.0", "deploy/compose.yml", null]),
     );
   });
 });

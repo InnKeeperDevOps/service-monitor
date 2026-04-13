@@ -1,10 +1,11 @@
 import { cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listServices, listSshKeys, createService } = vi.hoisted(() => ({
+const { listServices, listSshKeys, createService, updateService } = vi.hoisted(() => ({
   listServices: vi.fn(),
   listSshKeys: vi.fn(),
-  createService: vi.fn()
+  createService: vi.fn(),
+  updateService: vi.fn()
 }));
 
 const adminAuthState = {
@@ -31,7 +32,8 @@ vi.mock("../src/lib/api.js", () => ({
   api: {
     listServices,
     listSshKeys,
-    createService
+    createService,
+    updateService
   }
 }));
 
@@ -92,7 +94,8 @@ describe("ServicesPage", () => {
       branch: "develop",
       agentId: null,
       dockerImage: null,
-      composePath: null
+      composePath: null,
+      agentRuntimeBackend: "shell"
     });
 
     const submitBtn = screen.getByRole("button", { name: "Create" });
@@ -105,10 +108,74 @@ describe("ServicesPage", () => {
         sshKeyId: "key-1",
         branch: "develop",
         dockerImage: undefined,
-        composePath: undefined
+        composePath: undefined,
+        agentRuntimeBackend: undefined
       });
       expect(screen.getByText("test-svc")).toBeInTheDocument();
       expect(screen.getByText("git@github.com:acme/test-svc.git")).toBeInTheDocument();
+    });
+  });
+
+  it("allows editing an existing service", async () => {
+    listServices.mockResolvedValue({
+      services: [
+        {
+          id: "svc-1",
+          tenantId: "t1",
+          name: "test-svc",
+          gitRepoUrl: "git@github.com:acme/test-svc.git",
+          sshKeyId: "key-1",
+          branch: "develop",
+          agentId: null,
+          dockerImage: null,
+          composePath: null,
+          agentRuntimeBackend: "shell"
+        }
+      ]
+    });
+
+    render(<ServicesPage />);
+    
+    await waitFor(() => {
+      expect(screen.getByText("test-svc")).toBeInTheDocument();
+    });
+
+    const editBtn = screen.getByRole("button", { name: "Edit" });
+    fireEvent.click(editBtn);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Name/)).toHaveValue("test-svc");
+    });
+
+    const branchInput = screen.getByLabelText(/Branch/);
+    fireEvent.change(branchInput, { target: { value: "main" } });
+
+    updateService.mockResolvedValue({
+      id: "svc-1",
+      tenantId: "t1",
+      name: "test-svc",
+      gitRepoUrl: "git@github.com:acme/test-svc.git",
+      sshKeyId: "key-1",
+      branch: "main",
+      agentId: null,
+      dockerImage: null,
+      composePath: null,
+      agentRuntimeBackend: "shell"
+    });
+
+    const submitBtn = screen.getByRole("button", { name: "Save Changes" });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(updateService).toHaveBeenCalledWith("svc-1", {
+        name: "test-svc",
+        gitRepoUrl: "git@github.com:acme/test-svc.git",
+        sshKeyId: "key-1",
+        branch: "main",
+        dockerImage: undefined,
+        composePath: undefined,
+        agentRuntimeBackend: "shell"
+      });
     });
   });
 });

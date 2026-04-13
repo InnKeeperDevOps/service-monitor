@@ -66,8 +66,7 @@ describe("TenantConfigurationPage", () => {
     getSettings.mockResolvedValue({
       tenantId: "t1",
       docsUrl: "https://docs.acme.com",
-      preferredExecutor: "claude",
-      agentRuntimeBackend: "shell"
+      preferredExecutor: "claude"
     });
     updateSettings.mockImplementation(async (payload) => payload);
 
@@ -75,17 +74,14 @@ describe("TenantConfigurationPage", () => {
 
     const docsInput = await screen.findByLabelText("Documentation URL");
     const executorSelect = await screen.findByLabelText("Preferred executor");
-    const runtimeSelect = await screen.findByLabelText("Agent runtime backend");
 
     await waitFor(() => {
       expect(docsInput).toHaveValue("https://docs.acme.com");
       expect(executorSelect).toHaveValue("claude");
-      expect(runtimeSelect).toHaveValue("shell");
     });
     
     fireEvent.change(docsInput, { target: { value: "https://new.docs.acme.com" } });
     fireEvent.change(executorSelect, { target: { value: "cursor" } });
-    fireEvent.change(runtimeSelect, { target: { value: "docker" } });
 
     await waitFor(() => {
       expect(docsInput).toHaveValue("https://new.docs.acme.com");
@@ -97,8 +93,7 @@ describe("TenantConfigurationPage", () => {
         expect.objectContaining({
           tenantId: "t1",
           docsUrl: "https://new.docs.acme.com",
-          preferredExecutor: "cursor",
-          agentRuntimeBackend: "docker"
+          preferredExecutor: "cursor"
         })
       );
     });

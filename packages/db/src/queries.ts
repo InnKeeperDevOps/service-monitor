@@ -297,6 +297,7 @@ export interface ServiceRow {
   branch: string;
   dockerImage?: string | null;
   composePath?: string | null;
+  agentRuntimeBackend?: string | null;
 }
 
 function mapService(r: Record<string, unknown>): ServiceRow {
@@ -311,6 +312,7 @@ function mapService(r: Record<string, unknown>): ServiceRow {
     branch: r.branch as string,
     dockerImage: r.docker_image == null ? null : String(r.docker_image),
     composePath: r.compose_path == null ? null : String(r.compose_path),
+    agentRuntimeBackend: r.agent_runtime_backend == null ? null : String(r.agent_runtime_backend),
   };
 }
 
@@ -351,14 +353,15 @@ export async function createService(
     agentId?: string | null;
     dockerImage?: string;
     composePath?: string;
+    agentRuntimeBackend?: string;
   },
 ): Promise<ServiceRow> {
   const id = crypto.randomUUID();
   const { rows } = await query(
-    `INSERT INTO monitored_services (id, tenant_id, agent_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO monitored_services (id, tenant_id, agent_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path, agent_runtime_backend)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
-    [id, tenantId, data.agentId ?? null, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null],
+    [id, tenantId, data.agentId ?? null, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null, data.agentRuntimeBackend ?? null],
   );
   return mapService(rows[0]);
 }

@@ -102,61 +102,6 @@ describe("AT-AGT-001: Agent runtime — agentRuntimeBackend reflected in hello",
     ws.close();
     await waitForClose(ws);
   });
-
-  it("reflects kubernetes backend after settings change and reconnect", async () => {
-    // First connect — no settings yet, should get the default docker backend.
-    const { ws: ws1, hello: hello1 } = await connectAndCaptureHello();
-    expect(hello1.runtime?.backend).toBe("docker");
-    ws1.close();
-    await waitForClose(ws1);
-
-    // Operator changes the tenant settings.
-    await upsertTenantSettings({
-      tenantId: "t-1",
-      agentRuntimeBackend: "kubernetes"
-    });
-
-    // Agent reconnects and should receive the updated backend.
-    const { ws: ws2, hello: hello2 } = await connectAndCaptureHello();
-    expect(hello2.runtime?.backend).toBe("kubernetes");
-    ws2.close();
-    await waitForClose(ws2);
-  });
-
-  it("reflects shell backend after settings change and reconnect", async () => {
-    await upsertTenantSettings({
-      tenantId: "t-1",
-      agentRuntimeBackend: "shell"
-    });
-
-    const { ws, hello } = await connectAndCaptureHello();
-    expect(hello.runtime?.backend).toBe("shell");
-    ws.close();
-    await waitForClose(ws);
-  });
-
-  it("reflects updated backend when operator switches from shell to docker and agent reconnects", async () => {
-    await upsertTenantSettings({
-      tenantId: "t-1",
-      agentRuntimeBackend: "shell"
-    });
-
-    const { ws: ws1, hello: hello1 } = await connectAndCaptureHello();
-    expect(hello1.runtime?.backend).toBe("shell");
-    ws1.close();
-    await waitForClose(ws1);
-
-    // Operator switches back to docker.
-    await upsertTenantSettings({
-      tenantId: "t-1",
-      agentRuntimeBackend: "docker"
-    });
-
-    const { ws: ws2, hello: hello2 } = await connectAndCaptureHello();
-    expect(hello2.runtime?.backend).toBe("docker");
-    ws2.close();
-    await waitForClose(ws2);
-  });
 });
 
 // ---------------------------------------------------------------------------

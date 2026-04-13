@@ -9,7 +9,7 @@ export function ServicesPage() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
+  const [form, setForm] = useState({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "", agentRuntimeBackend: "" });
   const { isAdmin } = useAuth();
   const canManage = isAdmin;
 
@@ -28,7 +28,8 @@ export function ServicesPage() {
           sshKeyId: form.sshKeyId || null,
           branch: form.branch,
           dockerImage: form.dockerImage.trim() || undefined,
-          composePath: form.composePath.trim() || undefined
+          composePath: form.composePath.trim() || undefined,
+          agentRuntimeBackend: form.agentRuntimeBackend || undefined
         });
         setServices((prev) => prev.map((s) => s.id === editingId ? svc : s));
       } else {
@@ -38,13 +39,14 @@ export function ServicesPage() {
           sshKeyId: form.sshKeyId || undefined,
           branch: form.branch,
           dockerImage: form.dockerImage.trim() || undefined,
-          composePath: form.composePath.trim() || undefined
+          composePath: form.composePath.trim() || undefined,
+          agentRuntimeBackend: form.agentRuntimeBackend || undefined
         });
         setServices((prev) => [...prev, svc]);
       }
       setShowForm(false);
       setEditingId(null);
-      setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
+      setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "", agentRuntimeBackend: "" });
     } catch (e: unknown) {
       setError((e as Error).message);
     }
@@ -57,7 +59,8 @@ export function ServicesPage() {
       sshKeyId: svc.sshKeyId || "",
       branch: svc.branch,
       dockerImage: svc.dockerImage || "",
-      composePath: svc.composePath || ""
+      composePath: svc.composePath || "",
+      agentRuntimeBackend: svc.agentRuntimeBackend || ""
     });
     setEditingId(svc.id);
     setShowForm(true);
@@ -68,7 +71,7 @@ export function ServicesPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
         <h2 style={{ margin: 0 }}>Monitored Services</h2>
         {canManage && (
-          <button onClick={() => { setShowForm(!showForm); setEditingId(null); setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" }); }} style={primaryBtn}>{showForm ? "Cancel" : "Add Service"}</button>
+          <button onClick={() => { setShowForm(!showForm); setEditingId(null); setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "", agentRuntimeBackend: "" }); }} style={primaryBtn}>{showForm ? "Cancel" : "Add Service"}</button>
         )}
       </div>
       {error && <div style={{ color: "var(--color-danger)", marginBottom: "0.5rem" }}>{error}</div>}
@@ -103,6 +106,15 @@ export function ServicesPage() {
           <label>
             Compose Path <span style={{ color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>(optional)</span>
             <input value={form.composePath} onChange={(e) => setForm({ ...form, composePath: e.target.value })} placeholder="e.g. docker-compose.yml" style={inputStyle} />
+          </label>
+          <label>
+            Agent runtime <span style={{ color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>(optional)</span>
+            <select value={form.agentRuntimeBackend} onChange={(e) => setForm({ ...form, agentRuntimeBackend: e.target.value })} style={{ ...inputStyle, background: "var(--color-surface)" }}>
+              <option value="">Default (Docker)</option>
+              <option value="docker">Docker</option>
+              <option value="kubernetes">Kubernetes</option>
+              <option value="shell">Shell only</option>
+            </select>
           </label>
           <button type="submit" style={primaryBtn}>{editingId ? "Save Changes" : "Create"}</button>
         </form>

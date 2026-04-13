@@ -43,9 +43,7 @@ export const agentRuntimeBackendSchema = z.enum(["docker", "kubernetes", "shell"
 export const tenantSettingsSchema = z.object({
   tenantId: z.string(),
   docsUrl: z.string().url().optional(),
-  preferredExecutor: z.enum(["cursor", "claude"]).optional(),
-  /** Where the Go agent runs workloads: Docker socket, Kubernetes CLI, or shell-only. */
-  agentRuntimeBackend: agentRuntimeBackendSchema.optional()
+  preferredExecutor: z.enum(["cursor", "claude"]).optional()
 });
 
 export const upsertTenantSettingsRequestSchema = tenantSettingsSchema;
@@ -354,7 +352,8 @@ export const monitoredServiceSchema = z.object({
   sshKeyId: z.string().nullable().optional(),
   branch: z.string(),
   dockerImage: z.string().nullable().optional(),
-  composePath: z.string().nullable().optional()
+  composePath: z.string().nullable().optional(),
+  agentRuntimeBackend: agentRuntimeBackendSchema.optional()
 });
 
 export const setServiceWorkflowRequestSchema = z.object({
@@ -368,7 +367,8 @@ export const createMonitoredServiceRequestSchema = z.object({
   branch: z.string().min(1),
   agentId: z.string().nullable().optional(),
   dockerImage: z.string().min(1).optional(),
-  composePath: z.string().min(1).optional()
+  composePath: z.string().min(1).optional(),
+  agentRuntimeBackend: agentRuntimeBackendSchema.optional()
 });
 
 export const updateMonitoredServiceRequestSchema = z.object({
@@ -378,7 +378,8 @@ export const updateMonitoredServiceRequestSchema = z.object({
   branch: z.string().min(1).optional(),
   agentId: z.string().nullable().optional(),
   dockerImage: z.string().min(1).optional(),
-  composePath: z.string().min(1).optional()
+  composePath: z.string().min(1).optional(),
+  agentRuntimeBackend: agentRuntimeBackendSchema.optional()
 });
 
 export const listMonitoredServicesResponseSchema = z.object({

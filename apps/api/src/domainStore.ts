@@ -48,6 +48,7 @@ export type DomainStore = {
       agentId?: string | null;
       dockerImage?: string;
       composePath?: string;
+      agentRuntimeBackend?: string;
     }
   ): Promise<MonitoredService>;
   updateServiceWorkflow(
@@ -187,7 +188,8 @@ export function createMemoryDomainStore(): DomainStore {
         sshKeyId: data.sshKeyId ?? null,
         branch: data.branch,
         dockerImage: data.dockerImage ?? null,
-        composePath: data.composePath ?? null
+        composePath: data.composePath ?? null,
+        agentRuntimeBackend: data.agentRuntimeBackend
       };
       services.set(svc.id, svc);
       return svc;

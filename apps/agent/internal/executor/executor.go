@@ -72,6 +72,9 @@ func RunShell(command string) (string, error) {
 
 func (e *Executor) Execute(ctx context.Context, cmdType string, payload map[string]interface{}) CommandResult {
 	backend, dc := e.runtime()
+	if b, ok := payload["agentRuntimeBackend"].(string); ok && b != "" {
+		backend = RuntimeBackend(b)
+	}
 	switch cmdType {
 	case "run_step":
 		return e.executeRunStep(ctx, payload)

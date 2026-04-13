@@ -11,9 +11,10 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
+      exclude: ["scripts/**", "test/**", "node_modules/**", "dist/**", "public/**", "vitest.config.ts"],
       // server.ts integration surface is large; raise toward 80% with focused tests.
       // server/setup/enrollment paths grew; raise as coverage on those modules improves.
-      thresholds: { lines: 63 }
+      thresholds: { lines: 80 }
     }
   }
 });
