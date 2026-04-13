@@ -202,3 +202,30 @@ export function getActivePayload(
     };
   }
 }
+
+export function getUpstreamVariables(nodeId: string, nodes: WorkflowEditorNode[], edges: Edge[]): string[] {
+  const vars: string[] = [];
+  const visited = new Set<string>();
+  const queue = [nodeId];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+
+    const incomingEdges = edges.filter(e => e.target === current);
+    for (const edge of incomingEdges) {
+      const sourceNode = nodes.find(n => n.id === edge.source);
+      if (sourceNode && !visited.has(sourceNode.id)) {
+        queue.push(sourceNode.id);
+        const label = sourceNode.data.label || sourceNode.data.nodeKind;
+        if (sourceNode.data.nodeKind === "httpRequest") {
+          vars.push(`${label}.response.status`, `${label}.response.body`);
+        } else if (sourceNode.data.nodeType === "event") {
+          vars.push(`event.message`, `event.severity`, `event.container_id`);
+        }
+      }
+    }
+  }
+  return [...new Set(vars)];
+}

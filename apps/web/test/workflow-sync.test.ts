@@ -11,6 +11,7 @@ import {
   visualToYaml,
   yamlToVisual,
   getActivePayload,
+  getUpstreamVariables,
   type WorkflowEditorNode
 } from "../src/features/workflow-editor/workflow-sync.js";
 import type { Edge } from "@xyflow/react";
@@ -57,6 +58,21 @@ describe("workflow-sync", () => {
       expect(result).toHaveProperty("filter", "error");
       expect(result).not.toHaveProperty("invalidKey");
     });
+
+    it("should sanitize non-event node data by removing trigger params", () => {
+      const data = {
+        nodeType: "action" as const,
+        nodeKind: "runShell" as const,
+        label: "runShell",
+        filter: "should-be-removed",
+        schedule: "should-be-removed",
+        command: "echo 1"
+      };
+      const result = sanitizeDataForNode("action", "runShell", data);
+      expect(result).toHaveProperty("command", "echo 1");
+      expect(result).not.toHaveProperty("filter");
+      expect(result).not.toHaveProperty("schedule");
+    });
   });
 
   describe("getNodeLabel", () => {
@@ -80,6 +96,15 @@ describe("workflow-sync", () => {
       expect(result).toHaveLength(1);
       expect(result[0].id).toBe("n1");
       expect(result[0].data?.command).toBe("echo test");
+    });
+
+    it("toWorkflowNodes should return undefined data when data is empty", () => {
+      const emptyNodes: WorkflowEditorNode[] = [
+        { id: "n2", type: "actionNode", position: { x: 0, y: 0 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "" } }
+      ];
+      const result = toWorkflowNodes(emptyNodes);
+      expect(result).toHaveLength(1);
+      expect(result[0].data).toBeUndefined();
     });
 
     it("toWorkflowEdges should map correctly", () => {
@@ -158,8 +183,36 @@ edges: []
       expect(payload.payloadName).toBe("YAML Name");
     });
 
+    it("should throw error for yaml parse error when editorMode is yaml", () => {
+      expect(() => getActivePayload("yaml", "invalid: yaml: [", nodes, edges, "Visual Name")).toThrow("YAML Parse Error");
+    });
+
     it("should throw error for invalid yaml when editorMode is yaml", () => {
       expect(() => getActivePayload("yaml", "invalid", nodes, edges, "Visual Name")).toThrow("Invalid YAML structure");
+    });
+  });
+
+  describe("getUpstreamVariables", () => {
+    it("should return variables from upstream nodes", () => {
+      const nodes = [
+        { id: "n1", data: { nodeKind: "httpRequest", label: "req" } },
+        { id: "n2", data: { nodeKind: "branchIf" } }
+      ] as any;
+      const edges = [{ source: "n1", target: "n2" }] as any;
+      const vars = getUpstreamVariables("n2", nodes, edges);
+      expect(vars).toContain("req.response.status");
+    });
+
+    it("should return variables from upstream event nodes", () => {
+      const nodes = [
+        { id: "n1", data: { nodeType: "event", nodeKind: "onCrash", label: "crash" } },
+        { id: "n2", data: { nodeType: "action", nodeKind: "runShell" } }
+      ] as any;
+      const edges = [{ source: "n1", target: "n2" }] as any;
+      const vars = getUpstreamVariables("n2", nodes, edges);
+      expect(vars).toContain("event.message");
+      expect(vars).toContain("event.severity");
+      expect(vars).toContain("event.container_id");
     });
   });
 });
