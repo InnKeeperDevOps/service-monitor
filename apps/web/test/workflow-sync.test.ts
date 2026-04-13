@@ -103,6 +103,7 @@ describe("workflow-sync", () => {
       expect(yamlContent).toContain("runShell");
 
       const visual = yamlToVisual(yamlContent);
+      expect(visual.name).toBe("Test Workflow");
       expect(visual.nodes).toHaveLength(1);
       expect(visual.edges).toHaveLength(1);
       expect(visual.nodes[0].data.command).toBe("echo test");
@@ -125,6 +126,7 @@ describe("workflow-sync", () => {
     const edges: Edge[] = [];
     
     const yamlContent = `
+name: "Visual Name"
 nodes:
   - id: "n1"
     type: "action"
@@ -135,17 +137,29 @@ edges: []
 `;
 
     it("should return visual nodes when editorMode is visual", () => {
-      const payload = getActivePayload("visual", yamlContent, nodes, edges);
+      const payload = getActivePayload("visual", yamlContent, nodes, edges, "Visual Name");
+      expect(payload.payloadName).toBe("Visual Name");
       expect(payload.payloadNodes[0].data?.command).toBe("echo visual");
     });
 
     it("should return parsed yaml nodes when editorMode is yaml", () => {
-      const payload = getActivePayload("yaml", yamlContent, nodes, edges);
+      const payload = getActivePayload("yaml", yamlContent, nodes, edges, "Visual Name");
+      expect(payload.payloadName).toBe("Visual Name"); // YAML has no name, so it falls back to visual name
       expect(payload.payloadNodes[0].data?.command).toBe("echo yaml");
     });
 
+    it("should return parsed yaml name when editorMode is yaml", () => {
+      const yamlContentWithName = `
+name: "YAML Name"
+nodes: []
+edges: []
+`;
+      const payload = getActivePayload("yaml", yamlContentWithName, nodes, edges, "Visual Name");
+      expect(payload.payloadName).toBe("YAML Name");
+    });
+
     it("should throw error for invalid yaml when editorMode is yaml", () => {
-      expect(() => getActivePayload("yaml", "invalid", nodes, edges)).toThrow("Invalid YAML structure");
+      expect(() => getActivePayload("yaml", "invalid", nodes, edges, "Visual Name")).toThrow("Invalid YAML structure");
     });
   });
 });

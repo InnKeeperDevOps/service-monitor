@@ -103,7 +103,10 @@ export function WorkflowEditorPage() {
       setEditorMode("yaml");
     } else {
       try {
-        const { nodes: newNodes, edges: newEdges } = yamlToVisual(yamlContent);
+        const { name, nodes: newNodes, edges: newEdges } = yamlToVisual(yamlContent);
+        if (name) {
+          setSelectedWorkflowName(name);
+        }
         setNodes(newNodes);
         setEdges(newEdges);
         setStatusMessage(null);
@@ -179,15 +182,24 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setValidationErrors([]);
     try {
-      const { payloadNodes, payloadEdges } = getActivePayload(editorMode, yamlContent, nodes, edges);
+      const { payloadName, payloadNodes, payloadEdges } = getActivePayload(
+        editorMode, 
+        yamlContent, 
+        nodes, 
+        edges, 
+        selectedWorkflowName || "Untitled Workflow"
+      );
 
       const graph = await api.createWorkflow({
-        name: selectedWorkflowName || "Untitled Workflow",
+        name: payloadName,
         nodes: payloadNodes,
         edges: payloadEdges,
       });
       setWorkflows((prev) => [graph, ...prev.filter((existing) => existing.id !== graph.id)]);
       setSelectedWorkflowId(graph.id);
+      if (editorMode === "yaml" && payloadName !== selectedWorkflowName) {
+        setSelectedWorkflowName(payloadName);
+      }
       setStatusMessage({ type: "success", text: `Workflow v${graph.version} saved successfully` });
     } catch (err) {
       setStatusMessage({ type: "error", text: (err as Error).message });
@@ -260,11 +272,20 @@ export function WorkflowEditorPage() {
   const handleValidate = useCallback(() => {
     setStatusMessage(null);
     try {
-      const { payloadNodes, payloadEdges } = getActivePayload(editorMode, yamlContent, nodes, edges);
+      const { payloadName, payloadNodes, payloadEdges } = getActivePayload(
+        editorMode, 
+        yamlContent, 
+        nodes, 
+        edges, 
+        selectedWorkflowName || "Untitled Workflow"
+      );
       const errors = validateWorkflowGraph(toDomainNodes(payloadNodes), payloadEdges);
       
       if (errors.length === 0) {
         setValidationErrors([]);
+        if (editorMode === "yaml" && payloadName !== selectedWorkflowName) {
+          setSelectedWorkflowName(payloadName);
+        }
         setStatusMessage({ type: "success", text: "Workflow graph is valid" });
       } else {
         setValidationErrors(errors.map((e) => e.message));
@@ -272,7 +293,7 @@ export function WorkflowEditorPage() {
     } catch (err) {
       setStatusMessage({ type: "error", text: (err as Error).message });
     }
-  }, [nodes, edges, editorMode, yamlContent]);
+  }, [nodes, edges, selectedWorkflowName, editorMode, yamlContent]);
 
   const handleTestRun = useCallback(() => {
     if (!selectedServiceId) {
@@ -284,7 +305,13 @@ export function WorkflowEditorPage() {
     setValidationErrors([]);
 
     try {
-      const { payloadNodes, payloadEdges } = getActivePayload(editorMode, yamlContent, nodes, edges);
+      const { payloadName, payloadNodes, payloadEdges } = getActivePayload(
+        editorMode, 
+        yamlContent, 
+        nodes, 
+        edges, 
+        selectedWorkflowName || "Untitled Workflow"
+      );
       const errors = validateWorkflowGraph(toDomainNodes(payloadNodes), payloadEdges);
       
       if (errors.length > 0) {
@@ -294,12 +321,15 @@ export function WorkflowEditorPage() {
       
       void api.dryRunWorkflow({
         serviceId: selectedServiceId,
-        name: selectedWorkflowName || "Untitled Workflow",
+        name: payloadName,
         nodes: payloadNodes,
         edges: payloadEdges
       })
         .then((result) => {
           setTestRunResult(result.steps);
+          if (editorMode === "yaml" && payloadName !== selectedWorkflowName) {
+            setSelectedWorkflowName(payloadName);
+          }
           setStatusMessage({
             type: result.success ? "success" : "error",
             text: result.success ? "Dry run completed successfully" : "Dry run finished with failures"
@@ -322,14 +352,23 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setValidationErrors([]);
     try {
-      const { payloadNodes, payloadEdges } = getActivePayload(editorMode, yamlContent, nodes, edges);
+      const { payloadName, payloadNodes, payloadEdges } = getActivePayload(
+        editorMode, 
+        yamlContent, 
+        nodes, 
+        edges, 
+        selectedWorkflowName || "Untitled Workflow"
+      );
 
       const execution = await api.executeWorkflow({
         serviceId: selectedServiceId,
-        name: selectedWorkflowName || "Untitled Workflow",
+        name: payloadName,
         nodes: payloadNodes,
         edges: payloadEdges,
       });
+      if (editorMode === "yaml" && payloadName !== selectedWorkflowName) {
+        setSelectedWorkflowName(payloadName);
+      }
       setStatusMessage({
         type: "success",
         text: `Workflow v${execution.workflowVersion} saved; dispatch state is ${execution.dispatchState} for agent ${execution.agentId} (command ${execution.commandId})`

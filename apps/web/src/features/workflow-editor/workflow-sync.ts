@@ -129,7 +129,7 @@ export function visualToYaml(name: string, nodes: WorkflowEditorNode[], edges: E
   return yaml.stringify(graphObj);
 }
 
-export function yamlToVisual(yamlContent: string): { nodes: WorkflowEditorNode[], edges: Edge[] } {
+export function yamlToVisual(yamlContent: string): { name?: string, nodes: WorkflowEditorNode[], edges: Edge[] } {
   let parsed;
   try {
     parsed = yaml.parse(yamlContent);
@@ -137,7 +137,7 @@ export function yamlToVisual(yamlContent: string): { nodes: WorkflowEditorNode[]
     throw new Error(`YAML Parse Error: ${(err as Error).message}`);
   }
 
-  const result = workflowGraphSchema.pick({ nodes: true, edges: true }).safeParse(parsed);
+  const result = workflowGraphSchema.pick({ name: true, nodes: true, edges: true }).safeParse(parsed);
   
   if (!result.success) {
     throw new Error("Invalid YAML structure. Please fix errors before switching.");
@@ -168,15 +168,16 @@ export function yamlToVisual(yamlContent: string): { nodes: WorkflowEditorNode[]
     target: e.to,
   }));
 
-  return { nodes, edges };
+  return { name: result.data.name, nodes, edges };
 }
 
 export function getActivePayload(
   editorMode: "visual" | "yaml",
   yamlContent: string,
   nodes: WorkflowEditorNode[],
-  edges: Edge[]
-): { payloadNodes: WorkflowGraphNode[], payloadEdges: { from: string; to: string }[] } {
+  edges: Edge[],
+  visualName: string
+): { payloadName: string, payloadNodes: WorkflowGraphNode[], payloadEdges: { from: string; to: string }[] } {
   if (editorMode === "yaml") {
     let parsed;
     try {
@@ -184,16 +185,18 @@ export function getActivePayload(
     } catch (err) {
       throw new Error(`YAML Parse Error: ${(err as Error).message}`);
     }
-    const result = workflowGraphSchema.pick({ nodes: true, edges: true }).safeParse(parsed);
+    const result = workflowGraphSchema.pick({ name: true, nodes: true, edges: true }).safeParse(parsed);
     if (!result.success) {
       throw new Error(`YAML Parse Error: Invalid YAML structure`);
     }
     return {
+      payloadName: result.data.name || visualName,
       payloadNodes: result.data.nodes as WorkflowGraphNode[],
       payloadEdges: result.data.edges as { from: string; to: string }[]
     };
   } else {
     return {
+      payloadName: visualName,
       payloadNodes: toWorkflowNodes(nodes),
       payloadEdges: toWorkflowEdges(edges)
     };
