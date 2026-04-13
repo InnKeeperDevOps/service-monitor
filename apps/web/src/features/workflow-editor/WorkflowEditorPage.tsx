@@ -16,6 +16,7 @@ import {
   Background,
   Controls,
   Handle,
+  MarkerType,
   MiniMap,
   Position,
   ReactFlow,
@@ -59,21 +60,21 @@ const DEFERRED_PALETTE = [
 ];
 
 const INITIAL_EDGES: Edge[] = [
-  { id: "e0", source: "t1", target: "br" },
-  { id: "e1", source: "br", target: "p1" },
-  { id: "e2", source: "br", target: "p2" },
-  { id: "e3", source: "p1", target: "jn" },
-  { id: "e4", source: "p2", target: "jn" },
-  { id: "e5", source: "jn", target: "sl" }
+  { id: "e0", source: "t1", target: "br", markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: "e1", source: "br", target: "p1", markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: "e2", source: "br", target: "p2", markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: "e3", source: "p1", target: "jn", markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: "e4", source: "p2", target: "jn", markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: "e5", source: "jn", target: "sl", markerEnd: { type: MarkerType.ArrowClosed } }
 ];
 
 const INITIAL_NODES: WorkflowEditorNode[] = [
   { id: "t1", type: resolveVisualType("event"), position: { x: 0, y: 120 }, data: { nodeType: "event", nodeKind: "onCrash", label: "onCrash" } },
-  { id: "br", type: resolveVisualType("control"), position: { x: 220, y: 120 }, data: { nodeType: "control", nodeKind: "branchIf", label: "branchIf", condition: "severity=critical" } },
-  { id: "p1", type: resolveVisualType("action"), position: { x: 460, y: 30 }, data: { nodeType: "action", nodeKind: "runCursorPlan", label: "runCursorPlan" } },
-  { id: "p2", type: resolveVisualType("action"), position: { x: 460, y: 220 }, data: { nodeType: "action", nodeKind: "runClaudePlan", label: "runClaudePlan" } },
-  { id: "jn", type: resolveVisualType("control"), position: { x: 700, y: 120 }, data: { nodeType: "control", nodeKind: "join", label: "join" } },
-  { id: "sl", type: resolveVisualType("action"), position: { x: 920, y: 120 }, data: { nodeType: "action", nodeKind: "slackNotify", label: "slackNotify", channel: "#alerts" } }
+  { id: "br", type: resolveVisualType("control"), position: { x: 250, y: 120 }, data: { nodeType: "control", nodeKind: "branchIf", label: "branchIf", condition: "severity=critical" } },
+  { id: "p1", type: resolveVisualType("action"), position: { x: 500, y: 50 }, data: { nodeType: "action", nodeKind: "runCursorPlan", label: "runCursorPlan" } },
+  { id: "p2", type: resolveVisualType("action"), position: { x: 500, y: 190 }, data: { nodeType: "action", nodeKind: "runClaudePlan", label: "runClaudePlan" } },
+  { id: "jn", type: resolveVisualType("control"), position: { x: 750, y: 120 }, data: { nodeType: "control", nodeKind: "join", label: "join" } },
+  { id: "sl", type: resolveVisualType("action"), position: { x: 1000, y: 120 }, data: { nodeType: "action", nodeKind: "slackNotify", label: "slackNotify", channel: "#alerts" } }
 ];
 
 export function WorkflowEditorPage() {
@@ -522,7 +523,7 @@ export function WorkflowEditorPage() {
       if (exists) {
         return current;
       }
-      return addEdge({ ...connection, id: `e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }, current);
+      return addEdge({ ...connection, id: `e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, markerEnd: { type: MarkerType.ArrowClosed } }, current);
     });
   }, [nodes]);
 
@@ -682,6 +683,7 @@ export function WorkflowEditorPage() {
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={WORKFLOW_NODE_RENDERERS}
+                defaultEdgeOptions={{ type: "default", markerEnd: { type: MarkerType.ArrowClosed } }}
                 onInit={setReactFlow}
                 onNodesChange={handleNodesChange}
                 onEdgesChange={handleEdgesChange}
@@ -759,9 +761,8 @@ function WorkflowEventNode({ data }: WorkflowCategoryNodeProps) {
         fontWeight: 600
       }}
     >
-      <Handle type="target" position={Position.Top} />
       <span>{getNodeLabel(data)}</span>
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }
@@ -787,9 +788,9 @@ function WorkflowActionNode({ data }: WorkflowCategoryNodeProps) {
         fontWeight: 600
       }}
     >
-      <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Left} />
       <span>{getNodeLabel(data)}</span>
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }
@@ -806,7 +807,7 @@ function WorkflowControlNode({ data }: WorkflowCategoryNodeProps) {
         position: "relative"
       }}
     >
-      <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Left} />
       <div
         style={{
           width: 90,
@@ -828,7 +829,7 @@ function WorkflowControlNode({ data }: WorkflowCategoryNodeProps) {
       >
         {getNodeLabel(data)}
       </div>
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }
