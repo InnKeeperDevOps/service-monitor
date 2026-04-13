@@ -46,6 +46,7 @@ import {
   yamlToVisual,
   getActivePayload,
   toDomainNodes,
+  getUpstreamVariables,
 } from "./workflow-sync.js";
 
 const MVP_PALETTE = [
@@ -712,6 +713,8 @@ export function WorkflowEditorPage() {
               {selectedNode ? (
                 <NodeConfigPanel
                   node={selectedNode}
+                  nodes={nodes}
+                  edges={edges}
                   onUpdate={updateNodeData}
                   onDeleteNode={handleDeleteSelectedNode}
                   onDisconnectNode={handleDisconnectSelectedNode}
@@ -840,14 +843,50 @@ const WORKFLOW_NODE_RENDERERS: NodeTypes = {
   controlNode: WorkflowControlNode
 };
 
+function ConditionVariableSelector({
+  variables,
+  onSelect,
+}: {
+  variables: string[];
+  onSelect: (v: string) => void;
+}) {
+  if (variables.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.25rem" }}>
+      {variables.map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onSelect(v)}
+          style={{
+            background: "var(--color-surface)",
+            border: "1px solid var(--color-border)",
+            borderRadius: 4,
+            padding: "0.15rem 0.35rem",
+            fontSize: "0.75rem",
+            cursor: "pointer",
+            color: "var(--color-text-secondary)"
+          }}
+        >
+          {v}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function NodeConfigPanel({
   node,
+  nodes,
+  edges,
   onUpdate,
   onDeleteNode,
   onDisconnectNode,
   onClose,
 }: {
   node: WorkflowEditorNode;
+  nodes: WorkflowEditorNode[];
+  edges: Edge[];
   onUpdate: (nodeId: string, key: string, value: string) => void;
   onDeleteNode: () => void;
   onDisconnectNode: () => void;
@@ -856,6 +895,8 @@ function NodeConfigPanel({
   const nodeKind = node.data.nodeKind;
   const showFilterField = nodeKind === "onLogPattern";
   const showScheduleField = nodeKind === "onSchedule";
+  const showConditionField = nodeKind === "branchIf" || nodeKind === "if" || nodeKind === "loop";
+  const conditionVariables = showConditionField ? getUpstreamVariables(node.id, nodes, edges) : [];
 
   return (
     <div>
@@ -956,12 +997,32 @@ function NodeConfigPanel({
             />
           </>
         )}
-        {(node.data.nodeKind === "branchIf" || node.data.nodeKind === "if" || node.data.nodeKind === "loop") && (
+        {showConditionField && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            <Input
+              label="Condition"
+              placeholder="severity=critical"
+              value={String(node.data.condition ?? "")}
+              onChange={(e) => onUpdate(node.id, "condition", e.target.value)}
+            />
+            {conditionVariables.length > 0 && (
+              <ConditionVariableSelector
+                variables={conditionVariables}
+                onSelect={(v) => {
+                  const current = String(node.data.condition ?? "");
+                  const separator = current && !current.endsWith(" ") ? " " : "";
+                  onUpdate(node.id, "condition", current + separator + v);
+                }}
+              />
+            )}
+          </div>
+        )}
+        {node.data.nodeKind === "loop" && (
           <Input
-            label="Condition"
-            placeholder="severity=critical"
-            value={String(node.data.condition ?? "")}
-            onChange={(e) => onUpdate(node.id, "condition", e.target.value)}
+            label="Loop Items"
+            placeholder="e.g. incident.tags"
+            value={String(node.data.items ?? "")}
+            onChange={(e) => onUpdate(node.id, "items", e.target.value)}
           />
         )}
         {node.data.nodeKind === "template" && (
