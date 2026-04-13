@@ -48,7 +48,7 @@ export type DomainStore = {
       agentId?: string | null;
       dockerImage?: string;
       composePath?: string;
-      agentRuntimeBackend?: string;
+      agentRuntimeBackend?: "docker" | "kubernetes" | "shell";
     }
   ): Promise<MonitoredService>;
   updateServiceWorkflow(

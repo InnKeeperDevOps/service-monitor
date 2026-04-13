@@ -1566,9 +1566,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
       composePath:
         body.composePath
         ?? (typeof raw.composePath === "string" && raw.composePath.trim().length > 0 ? raw.composePath : undefined),
-      agentRuntimeBackend:
-        body.agentRuntimeBackend
-        ?? (typeof raw.agentRuntimeBackend === "string" && raw.agentRuntimeBackend.trim().length > 0 ? raw.agentRuntimeBackend : undefined)
+      agentRuntimeBackend: body.agentRuntimeBackend
     });
     return reply.status(201).send(svc);
   });
