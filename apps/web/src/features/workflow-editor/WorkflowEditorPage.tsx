@@ -1,13 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, type DragEvent } from "react";
+import { WorkflowYamlEditor } from "./WorkflowYamlEditor.js";
 import {
-  allowedEventDataKeys,
   WORKFLOW_ACTION_KINDS,
   WORKFLOW_CONTROL_KINDS,
   WORKFLOW_EVENT_KINDS,
   WORKFLOW_NODE_TYPES,
-  isWorkflowEventKind,
   validateWorkflowGraph,
-  type WorkflowNode,
   type WorkflowNodeKind,
   type WorkflowNodeType
 } from "@sm/domain";
@@ -31,44 +29,34 @@ import {
   type ReactFlowInstance
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { api, type WorkflowGraph, type WorkflowGraphNode, type MonitoredService } from "../../lib/api.js";
+import { api, type WorkflowGraph, type MonitoredService } from "../../lib/api.js";
 import { Button } from "../../components/Button.js";
 import { Input } from "../../components/Input.js";
+import {
+  type WorkflowEditorNode,
+  type WorkflowEditorNodeData,
+  type WorkflowEditorVisualType,
+  isWorkflowNodeKind,
+  resolveNodeTypeFromKind,
+  resolveVisualType,
+  sanitizeDataForNode,
+  getNodeLabel,
+  visualToYaml,
+  yamlToVisual,
+  getActivePayload,
+  toDomainNodes,
+} from "./workflow-sync.js";
 
-const MVP_PALETTE: { title: string; types: readonly WorkflowNodeKind[] }[] = [
+const MVP_PALETTE = [
   { title: "Events", types: WORKFLOW_EVENT_KINDS },
   { title: "Control", types: WORKFLOW_CONTROL_KINDS },
   { title: "Actions", types: WORKFLOW_ACTION_KINDS }
 ];
 
-const DEFERRED_PALETTE: { title: string; types: string[] }[] = [
+const DEFERRED_PALETTE = [
   { title: "Triggers (coming soon)", types: ["onGitHubEvent", "onHealthCheckFailed", "onContainerExit", "onIncidentOpened", "onIncidentResolved", "onAgentOnline", "onAgentOffline"] },
   { title: "Actions (coming soon)", types: ["teamsNotify", "discordWebhook", "createIncident", "updateIncident", "requestApproval", "uploadArtifact"] }
 ];
-
-type WorkflowEditorNodeData = {
-  nodeKind: WorkflowNodeKind;
-  nodeType: WorkflowNodeType;
-  label: string;
-  displayName?: string;
-  filter?: string;
-  schedule?: string;
-  command?: string;
-  method?: string;
-  url?: string;
-  channel?: string;
-  webhookRef?: string;
-  condition?: string;
-  template?: string;
-  [key: string]: unknown;
-};
-
-type WorkflowEditorVisualType = "eventNode" | "actionNode" | "controlNode";
-type WorkflowEditorNode = Node<WorkflowEditorNodeData, WorkflowEditorVisualType>;
-
-const NODE_TYPE_SET = new Set<string>(WORKFLOW_NODE_TYPES);
-const EVENT_KIND_SET = new Set<string>(WORKFLOW_EVENT_KINDS);
-const CONTROL_KIND_SET = new Set<string>(WORKFLOW_CONTROL_KINDS);
 
 const INITIAL_EDGES: Edge[] = [
   { id: "e0", source: "t1", target: "br" },
@@ -79,32 +67,6 @@ const INITIAL_EDGES: Edge[] = [
   { id: "e5", source: "jn", target: "sl" }
 ];
 
-const TRIGGER_PARAM_KEYS = new Set(["filter", "schedule"]);
-
-function isWorkflowNodeKind(value: string): value is WorkflowNodeKind {
-  return NODE_TYPE_SET.has(value);
-}
-
-function resolveNodeTypeFromKind(nodeKind: WorkflowNodeKind): WorkflowNodeType {
-  if (EVENT_KIND_SET.has(nodeKind)) {
-    return "event";
-  }
-  if (CONTROL_KIND_SET.has(nodeKind)) {
-    return "control";
-  }
-  return "action";
-}
-
-function resolveVisualType(nodeType: WorkflowNodeType): WorkflowEditorVisualType {
-  if (nodeType === "event") {
-    return "eventNode";
-  }
-  if (nodeType === "control") {
-    return "controlNode";
-  }
-  return "actionNode";
-}
-
 const INITIAL_NODES: WorkflowEditorNode[] = [
   { id: "t1", type: resolveVisualType("event"), position: { x: 0, y: 120 }, data: { nodeType: "event", nodeKind: "onCrash", label: "onCrash" } },
   { id: "br", type: resolveVisualType("control"), position: { x: 220, y: 120 }, data: { nodeType: "control", nodeKind: "branchIf", label: "branchIf", condition: "severity=critical" } },
@@ -114,65 +76,9 @@ const INITIAL_NODES: WorkflowEditorNode[] = [
   { id: "sl", type: resolveVisualType("action"), position: { x: 920, y: 120 }, data: { nodeType: "action", nodeKind: "slackNotify", label: "slackNotify", channel: "#alerts" } }
 ];
 
-function sanitizeDataForNode(nodeType: WorkflowNodeType, nodeKind: WorkflowNodeKind, data: WorkflowEditorNodeData): WorkflowEditorNodeData {
-  const nextData = { ...data };
-  if (nodeType === "event" && isWorkflowEventKind(nodeKind)) {
-    const allowedKeys = allowedEventDataKeys(nodeKind);
-    for (const key of Object.keys(nextData)) {
-      if (key === "nodeType" || key === "nodeKind" || key === "label") {
-        continue;
-      }
-      if (!allowedKeys.has(key)) {
-        delete nextData[key];
-      }
-    }
-    return nextData;
-  }
-  for (const key of TRIGGER_PARAM_KEYS) {
-    delete nextData[key];
-  }
-  return nextData;
-}
-
-function getNodeLabel(data: WorkflowEditorNodeData): string {
-  const custom = typeof data.displayName === "string" ? data.displayName.trim() : "";
-  return custom.length > 0 ? custom : data.nodeKind;
-}
-
-function sanitizeNodeData(data: WorkflowEditorNodeData): Record<string, unknown> | undefined {
-  const { nodeType: _nodeType, nodeKind: _nodeKind, label: _label, ...rest } = data;
-  const entries = Object.entries(rest).filter(([, value]) => value !== undefined && value !== null && value !== "");
-  if (entries.length === 0) {
-    return undefined;
-  }
-  return Object.fromEntries(entries);
-}
-
-function toDomainNodes(nodes: WorkflowEditorNode[]): WorkflowNode[] {
-  return nodes.map((n) => ({
-    id: n.id,
-    type: n.data.nodeType,
-    kind: n.data.nodeKind,
-    position: n.position,
-    data: sanitizeNodeData(n.data)
-  }));
-}
-
-function toWorkflowNodes(nodes: WorkflowEditorNode[]): WorkflowGraphNode[] {
-  return nodes.map((n) => ({
-    id: n.id,
-    type: n.data.nodeType,
-    kind: n.data.nodeKind,
-    position: n.position,
-    data: sanitizeNodeData(n.data)
-  }));
-}
-
-function toWorkflowEdges(edges: Edge[]) {
-  return edges.map((e) => ({ from: e.source, to: e.target }));
-}
-
 export function WorkflowEditorPage() {
+  const [editorMode, setEditorMode] = useState<"visual" | "yaml">("visual");
+  const [yamlContent, setYamlContent] = useState<string>("");
   const [nodes, setNodes] = useState<WorkflowEditorNode[]>(INITIAL_NODES);
   const [edges, setEdges] = useState<Edge[]>(INITIAL_EDGES);
   const [saving, setSaving] = useState(false);
@@ -190,6 +96,26 @@ export function WorkflowEditorPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [reactFlow, setReactFlow] = useState<ReactFlowInstance<WorkflowEditorNode, Edge> | null>(null);
+
+  const handleToggleMode = () => {
+    if (editorMode === "visual") {
+      setYamlContent(visualToYaml(selectedWorkflowName || "Untitled Workflow", nodes, edges));
+      setEditorMode("yaml");
+    } else {
+      try {
+        const { name, nodes: newNodes, edges: newEdges } = yamlToVisual(yamlContent);
+        if (name) {
+          setSelectedWorkflowName(name);
+        }
+        setNodes(newNodes);
+        setEdges(newEdges);
+        setStatusMessage(null);
+        setEditorMode("visual");
+      } catch (err) {
+        setStatusMessage({ type: "error", text: (err as Error).message });
+      }
+    }
+  };
 
   const selectedNode = selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) ?? null : null;
   const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) ?? null : null;
@@ -256,20 +182,31 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setValidationErrors([]);
     try {
+      const { payloadName, payloadNodes, payloadEdges } = getActivePayload(
+        editorMode, 
+        yamlContent, 
+        nodes, 
+        edges, 
+        selectedWorkflowName || "Untitled Workflow"
+      );
+
       const graph = await api.createWorkflow({
-        name: selectedWorkflowName || "Untitled Workflow",
-        nodes: toWorkflowNodes(nodes),
-        edges: toWorkflowEdges(edges),
+        name: payloadName,
+        nodes: payloadNodes,
+        edges: payloadEdges,
       });
       setWorkflows((prev) => [graph, ...prev.filter((existing) => existing.id !== graph.id)]);
       setSelectedWorkflowId(graph.id);
+      if (editorMode === "yaml" && payloadName !== selectedWorkflowName) {
+        setSelectedWorkflowName(payloadName);
+      }
       setStatusMessage({ type: "success", text: `Workflow v${graph.version} saved successfully` });
     } catch (err) {
       setStatusMessage({ type: "error", text: (err as Error).message });
     } finally {
       setSaving(false);
     }
-  }, [nodes, edges, selectedWorkflowName]);
+  }, [nodes, edges, selectedWorkflowName, editorMode, yamlContent, selectedServiceId]);
 
   const handleLoad = useCallback(async () => {
     if (!selectedServiceId) {
@@ -323,6 +260,7 @@ export function WorkflowEditorPage() {
         }))
       );
       setSelectedWorkflowId(graph.id);
+      setEditorMode("visual");
       setStatusMessage({ type: "success", text: `Loaded workflow v${graph.version} (${graph.nodes.length} nodes)` });
     } catch (err) {
       setStatusMessage({ type: "error", text: (err as Error).message });
@@ -333,17 +271,29 @@ export function WorkflowEditorPage() {
 
   const handleValidate = useCallback(() => {
     setStatusMessage(null);
-    const errors = validateWorkflowGraph(
-      toDomainNodes(nodes),
-      toWorkflowEdges(edges),
-    );
-    if (errors.length === 0) {
-      setValidationErrors([]);
-      setStatusMessage({ type: "success", text: "Workflow graph is valid" });
-    } else {
-      setValidationErrors(errors.map((e) => e.message));
+    try {
+      const { payloadName, payloadNodes, payloadEdges } = getActivePayload(
+        editorMode, 
+        yamlContent, 
+        nodes, 
+        edges, 
+        selectedWorkflowName || "Untitled Workflow"
+      );
+      const errors = validateWorkflowGraph(toDomainNodes(payloadNodes), payloadEdges);
+      
+      if (errors.length === 0) {
+        setValidationErrors([]);
+        if (editorMode === "yaml" && payloadName !== selectedWorkflowName) {
+          setSelectedWorkflowName(payloadName);
+        }
+        setStatusMessage({ type: "success", text: "Workflow graph is valid" });
+      } else {
+        setValidationErrors(errors.map((e) => e.message));
+      }
+    } catch (err) {
+      setStatusMessage({ type: "error", text: (err as Error).message });
     }
-  }, [nodes, edges]);
+  }, [nodes, edges, selectedWorkflowName, editorMode, yamlContent]);
 
   const handleTestRun = useCallback(() => {
     if (!selectedServiceId) {
@@ -353,31 +303,45 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setTestRunResult(null);
     setValidationErrors([]);
-    const errors = validateWorkflowGraph(
-      toDomainNodes(nodes),
-      toWorkflowEdges(edges),
-    );
-    if (errors.length > 0) {
-      setValidationErrors(errors.map((e) => e.message));
-      return;
-    }
-    void api.dryRunWorkflow({
-      serviceId: selectedServiceId,
-      name: selectedWorkflowName || "Untitled Workflow",
-      nodes: toWorkflowNodes(nodes),
-      edges: toWorkflowEdges(edges)
-    })
-      .then((result) => {
-        setTestRunResult(result.steps);
-        setStatusMessage({
-          type: result.success ? "success" : "error",
-          text: result.success ? "Dry run completed successfully" : "Dry run finished with failures"
-        });
+
+    try {
+      const { payloadName, payloadNodes, payloadEdges } = getActivePayload(
+        editorMode, 
+        yamlContent, 
+        nodes, 
+        edges, 
+        selectedWorkflowName || "Untitled Workflow"
+      );
+      const errors = validateWorkflowGraph(toDomainNodes(payloadNodes), payloadEdges);
+      
+      if (errors.length > 0) {
+        setValidationErrors(errors.map((e) => e.message));
+        return;
+      }
+      
+      void api.dryRunWorkflow({
+        serviceId: selectedServiceId,
+        name: payloadName,
+        nodes: payloadNodes,
+        edges: payloadEdges
       })
-      .catch((err) => {
-        setStatusMessage({ type: "error", text: (err as Error).message });
-      });
-  }, [nodes, edges, selectedServiceId, selectedWorkflowName]);
+        .then((result) => {
+          setTestRunResult(result.steps);
+          if (editorMode === "yaml" && payloadName !== selectedWorkflowName) {
+            setSelectedWorkflowName(payloadName);
+          }
+          setStatusMessage({
+            type: result.success ? "success" : "error",
+            text: result.success ? "Dry run completed successfully" : "Dry run finished with failures"
+          });
+        })
+        .catch((err) => {
+          setStatusMessage({ type: "error", text: (err as Error).message });
+        });
+    } catch (err) {
+      setStatusMessage({ type: "error", text: (err as Error).message });
+    }
+  }, [nodes, edges, selectedServiceId, selectedWorkflowName, editorMode, yamlContent]);
 
   const handleExecuteOnAgent = useCallback(async () => {
     if (!selectedServiceId) {
@@ -388,12 +352,23 @@ export function WorkflowEditorPage() {
     setStatusMessage(null);
     setValidationErrors([]);
     try {
+      const { payloadName, payloadNodes, payloadEdges } = getActivePayload(
+        editorMode, 
+        yamlContent, 
+        nodes, 
+        edges, 
+        selectedWorkflowName || "Untitled Workflow"
+      );
+
       const execution = await api.executeWorkflow({
         serviceId: selectedServiceId,
-        name: selectedWorkflowName || "Untitled Workflow",
-        nodes: toWorkflowNodes(nodes),
-        edges: toWorkflowEdges(edges),
+        name: payloadName,
+        nodes: payloadNodes,
+        edges: payloadEdges,
       });
+      if (editorMode === "yaml" && payloadName !== selectedWorkflowName) {
+        setSelectedWorkflowName(payloadName);
+      }
       setStatusMessage({
         type: "success",
         text: `Workflow v${execution.workflowVersion} saved; dispatch state is ${execution.dispatchState} for agent ${execution.agentId} (command ${execution.commandId})`
@@ -403,7 +378,7 @@ export function WorkflowEditorPage() {
     } finally {
       setSaving(false);
     }
-  }, [nodes, edges, selectedServiceId, selectedWorkflowName]);
+  }, [nodes, edges, selectedServiceId, selectedWorkflowName, editorMode, yamlContent]);
 
   const handleSetActiveWorkflow = useCallback(async () => {
     if (!selectedServiceId) {
@@ -654,6 +629,9 @@ export function WorkflowEditorPage() {
           }} style={{ background: "purple", color: "white" }}>
             Auto-fill Test Workflow
           </Button>
+          <Button size="sm" variant="secondary" onClick={handleToggleMode}>
+            {editorMode === "visual" ? "Switch to YAML" : "Switch to Visual"}
+          </Button>
           <Button size="sm" onClick={handleSave} loading={saving}>
             Save Workflow
           </Button>
@@ -697,52 +675,62 @@ export function WorkflowEditorPage() {
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px" }}>
-          <div style={{ height: 360 }} onDragOver={handleDragOver} onDrop={handleDrop}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={WORKFLOW_NODE_RENDERERS}
-              onInit={setReactFlow}
-              onNodesChange={handleNodesChange}
-              onEdgesChange={handleEdgesChange}
-              onNodesDelete={handleNodesDelete}
-              onEdgesDelete={handleEdgesDelete}
-              onConnect={handleConnect}
-              onNodeClick={handleNodeClick}
-              onEdgeClick={handleEdgeClick}
-              onPaneClick={handlePaneClick}
-              deleteKeyCode={["Backspace", "Delete"]}
-              fitView
-              fitViewOptions={{ maxZoom: 1.2 }}
-              snapToGrid
-              snapGrid={[20, 20]}
-            >
-              <Background />
-              <MiniMap />
-              <Controls />
-            </ReactFlow>
-          </div>
+        {editorMode === "visual" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px" }}>
+            <div style={{ height: 360 }} onDragOver={handleDragOver} onDrop={handleDrop}>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={WORKFLOW_NODE_RENDERERS}
+                onInit={setReactFlow}
+                onNodesChange={handleNodesChange}
+                onEdgesChange={handleEdgesChange}
+                onNodesDelete={handleNodesDelete}
+                onEdgesDelete={handleEdgesDelete}
+                onConnect={handleConnect}
+                onNodeClick={handleNodeClick}
+                onEdgeClick={handleEdgeClick}
+                onPaneClick={handlePaneClick}
+                deleteKeyCode={["Backspace", "Delete"]}
+                fitView
+                fitViewOptions={{ maxZoom: 1.2 }}
+                snapToGrid
+                snapGrid={[20, 20]}
+              >
+                <Background />
+                <MiniMap />
+                <Controls />
+              </ReactFlow>
+            </div>
 
-          <aside
-            aria-label="Side panel"
-            style={{ borderLeft: "1px solid var(--color-border)", padding: "0.75rem", fontSize: "0.8rem", overflow: "auto", maxHeight: 360 }}
-          >
-            {selectedNode ? (
-              <NodeConfigPanel
-                node={selectedNode}
-                onUpdate={updateNodeData}
-                onDeleteNode={handleDeleteSelectedNode}
-                onDisconnectNode={handleDisconnectSelectedNode}
-                onClose={() => setSelectedNodeId(null)}
-              />
-            ) : selectedEdge ? (
-              <EdgeConfigPanel edge={selectedEdge} onDeleteEdge={handleDeleteSelectedEdge} onClose={() => setSelectedEdgeId(null)} />
-            ) : (
-              <PalettePanel filter={paletteFilter} onFilterChange={setPaletteFilter} />
-            )}
-          </aside>
-        </div>
+            <aside
+              aria-label="Side panel"
+              style={{ borderLeft: "1px solid var(--color-border)", padding: "0.75rem", fontSize: "0.8rem", overflow: "auto", maxHeight: 360 }}
+            >
+              {selectedNode ? (
+                <NodeConfigPanel
+                  node={selectedNode}
+                  onUpdate={updateNodeData}
+                  onDeleteNode={handleDeleteSelectedNode}
+                  onDisconnectNode={handleDisconnectSelectedNode}
+                  onClose={() => setSelectedNodeId(null)}
+                />
+              ) : selectedEdge ? (
+                <EdgeConfigPanel edge={selectedEdge} onDeleteEdge={handleDeleteSelectedEdge} onClose={() => setSelectedEdgeId(null)} />
+              ) : (
+                <PalettePanel filter={paletteFilter} onFilterChange={setPaletteFilter} />
+              )}
+            </aside>
+          </div>
+        ) : (
+          <div style={{ height: 360, borderTop: "1px solid var(--color-border)" }}>
+            <WorkflowYamlEditor 
+              value={yamlContent} 
+              onChange={(val) => setYamlContent(val ?? "")} 
+              height="360px"
+            />
+          </div>
+        )}
       </div>
     </section>
   );

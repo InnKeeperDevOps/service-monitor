@@ -11,12 +11,16 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@sm/contracts": "workspace:*",
     "@sm/domain": "workspace:*",
     "@xyflow/react": "^12.6.0",
     "lucide-react": "^0.503.0",
+    "monaco-yaml": "^5.4.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "yaml": "^2.8.3",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
