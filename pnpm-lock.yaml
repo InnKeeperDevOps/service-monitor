@@ -50,6 +50,9 @@ importers:
       '@sm/worker':
         specifier: workspace:*
         version: link:../worker
+      '@sm/workflow-engine':
+        specifier: workspace:^
+        version: link:../../packages/workflow-engine
       fastify:
         specifier: ^5.2.1
         version: 5.8.4

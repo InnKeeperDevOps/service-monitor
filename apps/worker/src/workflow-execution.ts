@@ -19,6 +19,42 @@ export async function runWorkflow(rawJob: unknown): Promise<{ success: boolean; 
       // In a real scenario, we might clone from a DB record, but we'll use a dummy or hardcoded approach here
       // For now, let's assume the user's `clone` step just works or we use a basic git clone if URL is provided in env
       return { success: true, output: `Clone skipped or simulated in ${workspacePath}` };
+    },
+    branchIf: async (_nodeId: string, node: any) => {
+      const condition = String(node.data?.condition ?? "").trim().toLowerCase();
+      const truthy = condition.length > 0 && condition !== "false" && condition !== "0";
+      return {
+        success: true,
+        branchTaken: truthy ? "true" : "false",
+        output: `Evaluated branchIf "${truthy ? "true" : "false"}"`
+      };
+    },
+    if: async (_nodeId: string, node: any) => {
+      const condition = String(node.data?.condition ?? "").trim().toLowerCase();
+      const truthy = condition.length > 0 && condition !== "false" && condition !== "0";
+      return {
+        success: true,
+        branchTaken: truthy ? "true" : "false",
+        output: `Evaluated if "${truthy ? "true" : "false"}"`
+      };
+    },
+    loop: async (_nodeId: string, node: any) => {
+      const items = String(node.data?.items ?? "");
+      return { success: true, output: `Looping over ${items}` };
+    },
+    wait: async (_nodeId: string, node: any) => {
+      const durationStr = String(node.data?.duration ?? "0");
+      const durationMs = parseInt(durationStr, 10);
+      if (!isNaN(durationMs) && durationMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, durationMs));
+      }
+      return { success: true, output: `Waited ${durationMs}ms` };
+    },
+    join: async () => {
+      return { success: true, output: `Join completed` };
+    },
+    split: async () => {
+      return { success: true, output: `Split completed` };
     }
   };
 

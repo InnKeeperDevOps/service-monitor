@@ -17,7 +17,7 @@ export const WORKFLOW_EVENT_KINDS = [
   "onServiceConfigurationUpdate"
 ] as const;
 
-export const WORKFLOW_CONTROL_KINDS = ["branchIf", "join", "wait", "if", "loop"] as const;
+export const WORKFLOW_CONTROL_KINDS = ["branchIf", "join", "wait", "if", "loop", "split"] as const;
 
 export const WORKFLOW_ACTION_KINDS = [
   "runShell",

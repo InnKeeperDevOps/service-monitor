@@ -22,6 +22,7 @@
     "@sm/queue": "workspace:*",
     "@sm/web": "workspace:*",
     "@sm/worker": "workspace:*",
+    "@sm/workflow-engine": "workspace:^",
     "fastify": "^5.2.1",
     "fastify-plugin": "^5.1.0",
     "pg": "^8.14.1"

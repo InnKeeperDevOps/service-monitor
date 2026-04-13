@@ -95,6 +95,11 @@ export async function executeWorkflow(
                 markDescendantsSkipped(targets[i], outgoing, skipped);
               }
             }
+          } else if (node.kind === "if" && result.branchTaken === "false") {
+            const targets = outgoing.get(nodeId) ?? [];
+            for (let i = 0; i < targets.length; i++) {
+              markDescendantsSkipped(targets[i], outgoing, skipped);
+            }
           }
         } catch (err) {
           const result: NodeResult = {
@@ -113,7 +118,7 @@ export async function executeWorkflow(
   return { success, context: ctx, nodeResults };
 }
 
-function markDescendantsSkipped(
+export function markDescendantsSkipped(
   nodeId: string,
   outgoing: Map<string, string[]>,
   skipped: Set<string>

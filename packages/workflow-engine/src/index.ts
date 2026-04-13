@@ -17,7 +17,7 @@ export function validateWorkflowGraph(nodes: WorkflowNode[], edges: WorkflowEdge
 
 export { topologicalWaves };
 
-export { executeWorkflow } from "./executor.js";
+export { executeWorkflow, markDescendantsSkipped } from "./executor.js";
 export type {
   ExecutionContext,
   NodeHandler,

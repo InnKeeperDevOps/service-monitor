@@ -338,4 +338,93 @@ describe("executeWorkflow", () => {
     expect(result.context.outputs["false-path"]).toBe("false-path-done");
     expect(result.context.outputs["true-path"]).toBeUndefined();
   });
+  it("if: true branch executes and no downstream is skipped", async () => {
+    const log: string[] = [];
+    const handlers: Record<string, NodeHandler> = {
+      onCrash: trackingHandler(log),
+      if: async (nodeId) => {
+        log.push(nodeId);
+        return { success: true, output: "evaluated", branchTaken: "true" };
+      },
+      runShell: trackingHandler(log)
+    };
+
+    const result = await executeWorkflow(
+      [
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "if-node", type: "control", kind: "if" },
+        { id: "target-path", type: "action", kind: "runShell" }
+      ],
+      [
+        { from: "t", to: "if-node" },
+        { from: "if-node", to: "target-path" }
+      ],
+      handlers,
+      makeCtx()
+    );
+
+    expect(result.success).toBe(true);
+    expect(log).toContain("target-path");
+    expect(result.context.outputs["target-path"]).toBe("target-path-done");
+  });
+
+  it("if: false branch executes and downstream is skipped", async () => {
+    const log: string[] = [];
+    const handlers: Record<string, NodeHandler> = {
+      onCrash: trackingHandler(log),
+      if: async (nodeId) => {
+        log.push(nodeId);
+        return { success: true, output: "evaluated", branchTaken: "false" };
+      },
+      runShell: trackingHandler(log)
+    };
+
+    const result = await executeWorkflow(
+      [
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "if-node", type: "control", kind: "if" },
+        { id: "target-path", type: "action", kind: "runShell" }
+      ],
+      [
+        { from: "t", to: "if-node" },
+        { from: "if-node", to: "target-path" }
+      ],
+      handlers,
+      makeCtx()
+    );
+
+    expect(result.success).toBe(true);
+    expect(log).not.toContain("target-path");
+    expect(result.context.outputs["target-path"]).toBeUndefined();
+  });
+
+  it("split: executes all targets without branch matching", async () => {
+    const log: string[] = [];
+    const handlers: Record<string, NodeHandler> = {
+      onCrash: trackingHandler(log),
+      split: trackingHandler(log),
+      runShell: trackingHandler(log),
+      emailNotify: trackingHandler(log)
+    };
+
+    const result = await executeWorkflow(
+      [
+        { id: "t", type: "event", kind: "onCrash" },
+        { id: "split-node", type: "control", kind: "split" },
+        { id: "target-path-1", type: "action", kind: "runShell" },
+        { id: "target-path-2", type: "action", kind: "emailNotify" }
+      ],
+      [
+        { from: "t", to: "split-node" },
+        { from: "split-node", to: "target-path-1" },
+        { from: "split-node", to: "target-path-2" }
+      ],
+      handlers,
+      makeCtx()
+    );
+
+    expect(result.success).toBe(true);
+    expect(log).toContain("target-path-1");
+    expect(log).toContain("target-path-2");
+  });
 });

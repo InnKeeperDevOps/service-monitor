@@ -137,7 +137,7 @@ export const workflowEventKindSchema = z.enum([
   "agentRestarted",
   "onServiceConfigurationUpdate"
 ]);
-export const workflowControlKindSchema = z.enum(["branchIf", "join", "wait", "if", "loop"]);
+export const workflowControlKindSchema = z.enum(["branchIf", "join", "wait", "if", "loop", "split"]);
 export const workflowActionKindSchema = z.enum([
     "runShell",
     "runGradlew",

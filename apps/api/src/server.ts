@@ -42,6 +42,7 @@ import {
   type WorkflowExecutionJob,
   type TenantSettings
 } from "@sm/contracts";
+import { markDescendantsSkipped } from "@sm/workflow-engine";
 import {
   WORKFLOW_NODE_TYPES,
   topologicalWaves,
@@ -148,7 +149,7 @@ function createDryRunHandlers(): Record<WorkflowNodeKind, DryRunHandler> {
   const handlers = {} as Record<WorkflowNodeKind, DryRunHandler>;
   for (const nodeKind of WORKFLOW_NODE_TYPES) {
     handlers[nodeKind] = async (nodeId, node) => {
-      if (node.kind === "branchIf") {
+      if (node.kind === "branchIf" || node.kind === "if") {
         const condition = String(node.data?.condition ?? "").trim().toLowerCase();
         const truthy = condition.length > 0 && condition !== "false" && condition !== "0";
         return {
@@ -156,6 +157,18 @@ function createDryRunHandlers(): Record<WorkflowNodeKind, DryRunHandler> {
           branchTaken: truthy ? "true" : "false",
           output: `Dry run branch "${truthy ? "true" : "false"}" selected`
         };
+      }
+      if (node.kind === "loop") {
+        return { success: true, output: `Dry run loop executed` };
+      }
+      if (node.kind === "wait") {
+        return { success: true, output: `Dry run wait executed` };
+      }
+      if (node.kind === "join") {
+        return { success: true, output: `Dry run join executed` };
+      }
+      if (node.kind === "split") {
+        return { success: true, output: `Dry run split executed` };
       }
       if (["runShell", "runGradlew", "runPip", "runNpm", "runMaven", "runGo"].includes(node.kind)) {
         const command = String(node.data?.command ?? "").trim();
@@ -233,6 +246,11 @@ async function executeDryRunGraph(
                 markDescendantsSkipped(targets[i], outgoing, skipped);
               }
             }
+          } else if (node.kind === "if" && result.branchTaken === "false") {
+            const targets = outgoing.get(nodeId) ?? [];
+            for (let i = 0; i < targets.length; i++) {
+              markDescendantsSkipped(targets[i], outgoing, skipped);
+            }
           }
         })
     );
@@ -241,17 +259,6 @@ async function executeDryRunGraph(
   return { success: failed.size === 0, nodeResults };
 }
 
-function markDescendantsSkipped(
-  nodeId: string,
-  outgoing: Map<string, string[]>,
-  skipped: Set<string>
-): void {
-  if (skipped.has(nodeId)) return;
-  skipped.add(nodeId);
-  for (const child of outgoing.get(nodeId) ?? []) {
-    markDescendantsSkipped(child, outgoing, skipped);
-  }
-}
 
 function signValid(secret: string, payload: string, signature?: string): boolean {
   if (!signature) return false;
