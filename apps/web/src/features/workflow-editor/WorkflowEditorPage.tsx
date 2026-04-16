@@ -123,10 +123,8 @@ export function WorkflowEditorPage() {
   const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) ?? null : null;
   const selectedService = services.find((svc) => svc.id === selectedServiceId);
   const serviceWorkflows = useMemo(() => {
-    return workflows
-      .filter((graph) => graph.serviceId === selectedServiceId)
-      .sort((a, b) => b.version - a.version);
-  }, [workflows, selectedServiceId]);
+    return [...workflows].sort((a, b) => b.version - a.version);
+  }, [workflows]);
 
   const refreshWorkflows = useCallback(async () => {
     setLoadingWorkflows(true);
@@ -176,10 +174,6 @@ export function WorkflowEditorPage() {
   }, [selectedServiceId, selectedService, serviceWorkflows]);
 
   const handleSave = useCallback(async () => {
-    if (!selectedServiceId) {
-      setStatusMessage({ type: "error", text: "Select a service before saving workflow" });
-      return;
-    }
     setSaving(true);
     setStatusMessage(null);
     setValidationErrors([]);
@@ -211,10 +205,6 @@ export function WorkflowEditorPage() {
   }, [nodes, edges, selectedWorkflowName, editorMode, yamlContent, selectedServiceId]);
 
   const handleLoad = useCallback(async () => {
-    if (!selectedServiceId) {
-      setStatusMessage({ type: "error", text: "Select a service before loading workflow" });
-      return;
-    }
     setLoadingApi(true);
     setStatusMessage(null);
     setValidationErrors([]);
@@ -223,7 +213,7 @@ export function WorkflowEditorPage() {
       if (available.length === 0) {
         const res = await api.listWorkflows();
         setWorkflows(res.graphs);
-        available = res.graphs.filter((graph) => graph.serviceId === selectedServiceId).sort((a, b) => b.version - a.version);
+        available = [...res.graphs].sort((a, b) => b.version - a.version);
       }
       if (available.length === 0) {
         setStatusMessage({ type: "info", text: "No saved workflows found for this service" });
@@ -552,130 +542,100 @@ export function WorkflowEditorPage() {
   const statusBgMap = { success: "var(--color-success-bg)", error: "var(--color-danger-bg)", info: "var(--color-info-bg)" };
 
   return (
-    <section>
-      <h2 style={{ margin: "0 0 1rem" }}>Workflow Editor</h2>
-      <div style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: 12 }}>
-        <div style={{ padding: "0.75rem 1rem", borderBottom: "1px solid var(--color-border)", display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-          <span style={{ fontSize: "0.85rem", color: "var(--color-text-secondary)", marginRight: "auto" }}>
-            Sample graph: trigger → branchIf → parallel plans → join → slack
-          </span>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
-            Service
-            <select
-              value={selectedServiceId}
-              onChange={(e) => {
-                setSelectedServiceId(e.target.value);
-                setSelectedWorkflowId("");
-              }}
-              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)" }}
-            >
-              <option value="">{services.length === 0 ? "No services available" : "Select service"}</option>
-              {services.map((svc) => (
-                <option key={svc.id} value={svc.id}>
-                  {svc.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
-            Saved
-            <select
-              value={selectedWorkflowId}
-              onChange={(e) => {
-                setSelectedWorkflowId(e.target.value);
-                const graph = serviceWorkflows.find((w) => w.id === e.target.value);
-                if (graph) setSelectedWorkflowName(graph.name);
-              }}
-              disabled={serviceWorkflows.length === 0}
-              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", minWidth: 160 }}
-            >
-              <option value="">{serviceWorkflows.length === 0 ? "No workflows for service" : "Select workflow"}</option>
-              {serviceWorkflows.map((graph) => (
-                <option key={graph.id} value={graph.id}>
-                  {graph.name} (v{graph.version}) - {graph.id.slice(0, 8)}{selectedService?.workflowGraphId === graph.id ? " (active)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
-            Name
-            <input
-              value={selectedWorkflowName}
-              onChange={(e) => setSelectedWorkflowName(e.target.value)}
-              placeholder="e.g. restart-app"
-              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", width: 120 }}
-            />
-          </label>
-          <Button size="sm" variant="secondary" onClick={handleValidate}>
-            Validate
-          </Button>
-          <Button size="sm" variant="secondary" onClick={handleLoad} loading={loadingApi}>
-            Load selected
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => void refreshWorkflows()} loading={loadingWorkflows}>
-            Refresh list
-          </Button>
-          <Button size="sm" onClick={() => {
-            setNodes([
-              { id: "start", type: "eventNode", position: { x: 0, y: 0 }, data: { nodeType: "event", nodeKind: "agentStarted", label: "agentStarted" } },
-              { id: "pull", type: "actionNode", position: { x: 0, y: 100 }, data: { nodeType: "action", nodeKind: "clone", label: "clone" } },
-              { id: "build", type: "actionNode", position: { x: 0, y: 200 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "mvn clean package -DskipTests" } },
-              { id: "run", type: "actionNode", position: { x: 0, y: 300 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "java -jar target/*.jar" } }
-            ] as any);
-            setEdges([
-              { id: "e-1", source: "start", target: "pull" },
-              { id: "e-2", source: "pull", target: "build" },
-              { id: "e-3", source: "build", target: "run" }
-            ]);
-            setSelectedWorkflowName("pull-build-run");
-          }} style={{ background: "purple", color: "white" }}>
-            Auto-fill Test Workflow
-          </Button>
-          <Button size="sm" variant="secondary" onClick={handleToggleMode}>
-            {editorMode === "visual" ? "Switch to YAML" : "Switch to Visual"}
-          </Button>
-          <Button size="sm" onClick={handleSave} loading={saving}>
-            Save Workflow
-          </Button>
-          <Button size="sm" variant="secondary" onClick={handleSetActiveWorkflow}>
-            Set active
-          </Button>
-          <Button size="sm" variant="secondary" onClick={handleTestRun} style={{ background: "var(--color-info)", color: "var(--color-primary-foreground)", borderColor: "var(--color-info)" }}>
-            Validate / Dry run
-          </Button>
-          <Button size="sm" variant="danger" onClick={handleExecuteOnAgent} loading={saving}>
-            Queue on Agent
-          </Button>
+    <section style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 100px)" }}>
+      <div style={{ padding: "0.5rem 1rem", borderBottom: "1px solid var(--color-border)", display: "flex", alignItems: "center", gap: "0.5rem", background: "var(--color-surface)" }}>
+        {/* Left Side: Context */}
+        <span style={{ fontWeight: 600, marginRight: "1rem" }}>Workflow Editor</span>
+        
+        <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+          Service
+          <select
+            value={selectedServiceId}
+            onChange={(e) => {
+              setSelectedServiceId(e.target.value);
+              setSelectedWorkflowId("");
+            }}
+            style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)" }}
+          >
+            <option value="">{services.length === 0 ? "No services available" : "Select service"}</option>
+            {services.map((svc) => (
+              <option key={svc.id} value={svc.id}>{svc.name}</option>
+            ))}
+          </select>
+        </label>
+        
+        <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+          Saved
+          <select
+            value={selectedWorkflowId}
+            onChange={(e) => {
+              setSelectedWorkflowId(e.target.value);
+              const graph = serviceWorkflows.find((w) => w.id === e.target.value);
+              if (graph) setSelectedWorkflowName(graph.name);
+            }}
+            disabled={serviceWorkflows.length === 0}
+            style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", minWidth: 160 }}
+          >
+            <option value="">{serviceWorkflows.length === 0 ? "No saved workflows" : "Select workflow"}</option>
+            {serviceWorkflows.map((graph) => (
+              <option key={graph.id} value={graph.id}>
+                {graph.name} (v{graph.version}) - {graph.id.slice(0, 8)}{selectedService?.workflowGraphId === graph.id ? " (active)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        
+        <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)", marginRight: "auto" }}>
+          Name
+          <input
+            value={selectedWorkflowName}
+            onChange={(e) => setSelectedWorkflowName(e.target.value)}
+            placeholder="e.g. restart-app"
+            style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", width: 120 }}
+          />
+        </label>
+
+        {/* Right Side: Primary Actions */}
+        <Button size="sm" variant="secondary" onClick={handleSetActiveWorkflow}>
+          Set active
+        </Button>
+        <Button size="sm" onClick={handleSave} loading={saving}>
+          Save Workflow
+        </Button>
+        <Button size="sm" variant="danger" onClick={handleExecuteOnAgent} loading={saving}>
+          Queue on Agent
+        </Button>
+      </div>
+      
+      {/* Status Messages */}
+      {statusMessage && (
+        <div style={{ padding: "0.5rem 1rem", background: statusBgMap[statusMessage.type], color: statusColorMap[statusMessage.type], fontSize: "0.85rem", borderBottom: "1px solid var(--color-border)" }}>
+          {statusMessage.text}
         </div>
+      )}
 
-        {statusMessage && (
-          <div style={{ padding: "0.5rem 1rem", background: statusBgMap[statusMessage.type], color: statusColorMap[statusMessage.type], fontSize: "0.85rem", borderBottom: "1px solid var(--color-border)" }}>
-            {statusMessage.text}
-          </div>
-        )}
+      {validationErrors.length > 0 && (
+        <div style={{ padding: "0.5rem 1rem", background: "var(--color-danger-bg)", fontSize: "0.85rem", borderBottom: "1px solid var(--color-border)" }}>
+          <div style={{ fontWeight: 600, color: "var(--color-danger)", marginBottom: "0.25rem" }}>Validation errors:</div>
+          <ul style={{ margin: 0, paddingLeft: "1.25rem", color: "var(--color-danger)" }}>
+            {validationErrors.map((msg, i) => <li key={i}>{msg}</li>)}
+          </ul>
+        </div>
+      )}
 
-        {validationErrors.length > 0 && (
-          <div style={{ padding: "0.5rem 1rem", background: "var(--color-danger-bg)", fontSize: "0.85rem", borderBottom: "1px solid var(--color-border)" }}>
-            <div style={{ fontWeight: 600, color: "var(--color-danger)", marginBottom: "0.25rem" }}>Validation errors:</div>
-            <ul style={{ margin: 0, paddingLeft: "1.25rem", color: "var(--color-danger)" }}>
-              {validationErrors.map((msg, i) => <li key={i}>{msg}</li>)}
-            </ul>
-          </div>
-        )}
-
-        {testRunResult && (
-          <div style={{ padding: "0.5rem 1rem", background: "var(--color-info-bg)", fontSize: "0.85rem", borderBottom: "1px solid var(--color-border)" }}>
-            <div style={{ fontWeight: 600, color: "var(--color-info)", marginBottom: "0.25rem" }}>Dry-run execution:</div>
-            <ol style={{ margin: 0, paddingLeft: "1.25rem", color: "var(--color-info)" }}>
-              {testRunResult.map((step) => (
-                <li key={step.nodeId}>
-                  {step.success ? "PASS" : "FAIL"} {step.nodeType} ({step.nodeId})
-                  {step.output ? ` - ${step.output}` : ""}
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
+      {testRunResult && (
+        <div style={{ padding: "0.5rem 1rem", background: "var(--color-info-bg)", fontSize: "0.85rem", borderBottom: "1px solid var(--color-border)" }}>
+          <div style={{ fontWeight: 600, color: "var(--color-info)", marginBottom: "0.25rem" }}>Dry-run execution:</div>
+          <ol style={{ margin: 0, paddingLeft: "1.25rem", color: "var(--color-info)" }}>
+            {testRunResult.map((step) => (
+              <li key={step.nodeId}>
+                {step.success ? "PASS" : "FAIL"} {step.nodeType} ({step.nodeId})
+                {step.output ? ` - ${step.output}` : ""}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
         {editorMode === "visual" ? (
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px" }}>
@@ -736,7 +696,6 @@ export function WorkflowEditorPage() {
             />
           </div>
         )}
-      </div>
     </section>
   );
 }
