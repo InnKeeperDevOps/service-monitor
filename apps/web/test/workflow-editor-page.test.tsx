@@ -186,10 +186,10 @@ describe("WorkflowEditorPage", () => {
     render(<WorkflowEditorPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Validate / Dry run" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Dry run" })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Validate / Dry run" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dry run" }));
 
     await waitFor(() => {
       expect(api.dryRunWorkflow).toHaveBeenCalled();

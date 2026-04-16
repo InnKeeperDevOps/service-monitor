@@ -123,8 +123,10 @@ export function WorkflowEditorPage() {
   const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) ?? null : null;
   const selectedService = services.find((svc) => svc.id === selectedServiceId);
   const serviceWorkflows = useMemo(() => {
-    return [...workflows].sort((a, b) => b.version - a.version);
-  }, [workflows]);
+    return workflows
+      .filter((graph) => graph.serviceId === selectedServiceId)
+      .sort((a, b) => b.version - a.version);
+  }, [workflows, selectedServiceId]);
 
   const refreshWorkflows = useCallback(async () => {
     setLoadingWorkflows(true);
@@ -213,7 +215,7 @@ export function WorkflowEditorPage() {
       if (available.length === 0) {
         const res = await api.listWorkflows();
         setWorkflows(res.graphs);
-        available = [...res.graphs].sort((a, b) => b.version - a.version);
+        available = res.graphs.filter(g => g.serviceId === selectedServiceId).sort((a, b) => b.version - a.version);
       }
       if (available.length === 0) {
         setStatusMessage({ type: "info", text: "No saved workflows found for this service" });
