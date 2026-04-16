@@ -637,9 +637,52 @@ export function WorkflowEditorPage() {
         </div>
       )}
 
-        {editorMode === "visual" ? (
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px" }}>
-            <div style={{ height: 360 }} onDragOver={handleDragOver} onDrop={handleDrop}>
+      {/* Main Editor Workspace Grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "220px minmax(0, 1fr) auto", flex: 1, overflow: "hidden" }}>
+        
+        {/* Left Sidebar: Tools & Palette */}
+        <aside style={{ borderRight: "1px solid var(--color-border)", padding: "0.75rem", overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", background: "var(--color-surface)" }}>
+          {/* Secondary Actions */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--color-text-secondary)", marginBottom: "0.25rem" }}>Tools</div>
+            <Button size="sm" variant="secondary" onClick={handleValidate} style={{ width: "100%", justifyContent: "flex-start" }}>Validate</Button>
+            <Button size="sm" variant="secondary" onClick={handleTestRun} style={{ width: "100%", justifyContent: "flex-start", color: "var(--color-info)", borderColor: "var(--color-info)" }}>Dry run</Button>
+            <Button size="sm" variant="secondary" onClick={handleLoad} loading={loadingApi} style={{ width: "100%", justifyContent: "flex-start" }}>Load selected</Button>
+            <Button size="sm" variant="secondary" onClick={() => void refreshWorkflows()} loading={loadingWorkflows} style={{ width: "100%", justifyContent: "flex-start" }}>Refresh list</Button>
+            <Button size="sm" variant="secondary" onClick={handleToggleMode} style={{ width: "100%", justifyContent: "flex-start" }}>
+              {editorMode === "visual" ? "Switch to YAML" : "Switch to Visual"}
+            </Button>
+            <div style={{ height: "1px", background: "var(--color-border)", margin: "0.5rem 0" }} />
+            <Button size="sm" onClick={() => {
+                setNodes([
+                  { id: "start", type: "eventNode", position: { x: 0, y: 0 }, data: { nodeType: "event", nodeKind: "agentStarted", label: "agentStarted" } },
+                  { id: "pull", type: "actionNode", position: { x: 0, y: 100 }, data: { nodeType: "action", nodeKind: "clone", label: "clone" } },
+                  { id: "build", type: "actionNode", position: { x: 0, y: 200 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "mvn clean package -DskipTests" } },
+                  { id: "run", type: "actionNode", position: { x: 0, y: 300 }, data: { nodeType: "action", nodeKind: "runShell", label: "runShell", command: "java -jar target/*.jar" } }
+                ] as any);
+                setEdges([
+                  { id: "e-1", source: "start", target: "pull" },
+                  { id: "e-2", source: "pull", target: "build" },
+                  { id: "e-3", source: "build", target: "run" }
+                ]);
+                setSelectedWorkflowName("pull-build-run");
+              }} style={{ background: "purple", color: "white", width: "100%", justifyContent: "flex-start" }}>
+                Auto-fill Test Flow
+              </Button>
+          </div>
+
+          {/* Palette */}
+          {editorMode === "visual" && (
+            <div style={{ flex: 1 }}>
+              <PalettePanel filter={paletteFilter} onFilterChange={setPaletteFilter} />
+            </div>
+          )}
+        </aside>
+
+        {/* Center Workspace */}
+        <div style={{ position: "relative", background: "var(--color-background)", overflow: "hidden" }}>
+          {editorMode === "visual" ? (
+            <div style={{ width: "100%", height: "100%" }} onDragOver={handleDragOver} onDrop={handleDrop}>
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -665,37 +708,39 @@ export function WorkflowEditorPage() {
                 <Controls />
               </ReactFlow>
             </div>
+          ) : (
+            <div style={{ width: "100%", height: "100%" }}>
+              <WorkflowYamlEditor 
+                value={yamlContent} 
+                onChange={(val) => setYamlContent(val ?? "")} 
+                height="100%"
+              />
+            </div>
+          )}
+        </div>
 
-            <aside
-              aria-label="Side panel"
-              style={{ borderLeft: "1px solid var(--color-border)", padding: "0.75rem", fontSize: "0.8rem", overflow: "auto", maxHeight: 360 }}
-            >
-              {selectedNode ? (
-                <NodeConfigPanel
-                  node={selectedNode}
-                  nodes={nodes}
-                  edges={edges}
-                  onUpdate={updateNodeData}
-                  onDeleteNode={handleDeleteSelectedNode}
-                  onDisconnectNode={handleDisconnectSelectedNode}
-                  onClose={() => setSelectedNodeId(null)}
-                />
-              ) : selectedEdge ? (
-                <EdgeConfigPanel edge={selectedEdge} onDeleteEdge={handleDeleteSelectedEdge} onClose={() => setSelectedEdgeId(null)} />
-              ) : (
-                <PalettePanel filter={paletteFilter} onFilterChange={setPaletteFilter} />
-              )}
-            </aside>
-          </div>
-        ) : (
-          <div style={{ height: 360, borderTop: "1px solid var(--color-border)" }}>
-            <WorkflowYamlEditor 
-              value={yamlContent} 
-              onChange={(val) => setYamlContent(val ?? "")} 
-              height="360px"
-            />
-          </div>
+        {/* Contextual Right Panel */}
+        {editorMode === "visual" && (selectedNode || selectedEdge) && (
+          <aside
+            aria-label="Configuration panel"
+            style={{ width: "300px", borderLeft: "1px solid var(--color-border)", padding: "0.75rem", fontSize: "0.8rem", overflowY: "auto", background: "var(--color-surface)" }}
+          >
+            {selectedNode ? (
+              <NodeConfigPanel
+                node={selectedNode}
+                nodes={nodes}
+                edges={edges}
+                onUpdate={updateNodeData}
+                onDeleteNode={handleDeleteSelectedNode}
+                onDisconnectNode={handleDisconnectSelectedNode}
+                onClose={() => setSelectedNodeId(null)}
+              />
+            ) : selectedEdge ? (
+              <EdgeConfigPanel edge={selectedEdge} onDeleteEdge={handleDeleteSelectedEdge} onClose={() => setSelectedEdgeId(null)} />
+            ) : null}
+          </aside>
         )}
+      </div>
     </section>
   );
 }
