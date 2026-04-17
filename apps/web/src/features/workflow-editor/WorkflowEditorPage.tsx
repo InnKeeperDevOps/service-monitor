@@ -30,6 +30,7 @@ import {
   type ReactFlowInstance
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { RefreshCw } from "lucide-react";
 import { api, type WorkflowGraph, type MonitoredService } from "../../lib/api.js";
 import { Button } from "../../components/Button.js";
 import { Input } from "../../components/Input.js";
@@ -123,10 +124,9 @@ export function WorkflowEditorPage() {
   const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) ?? null : null;
   const selectedService = services.find((svc) => svc.id === selectedServiceId);
   const serviceWorkflows = useMemo(() => {
-    return workflows
-      .filter((graph) => graph.serviceId === selectedServiceId)
+    return [...workflows]
       .sort((a, b) => b.version - a.version);
-  }, [workflows, selectedServiceId]);
+  }, [workflows]);
 
   const refreshWorkflows = useCallback(async () => {
     setLoadingWorkflows(true);
@@ -155,25 +155,6 @@ export function WorkflowEditorPage() {
     void refreshServices();
     void refreshWorkflows();
   }, [refreshServices, refreshWorkflows]);
-
-  useEffect(() => {
-    if (!selectedServiceId) {
-      setSelectedWorkflowId("");
-      return;
-    }
-    if (serviceWorkflows.length === 0) {
-      setSelectedWorkflowId("");
-      return;
-    }
-    const preferredWorkflowId = selectedService?.workflowGraphId;
-    if (preferredWorkflowId && serviceWorkflows.some((graph) => graph.id === preferredWorkflowId)) {
-      setSelectedWorkflowId(preferredWorkflowId);
-      return;
-    }
-    setSelectedWorkflowId((current) =>
-      serviceWorkflows.some((graph) => graph.id === current) ? current : serviceWorkflows[0].id
-    );
-  }, [selectedServiceId, selectedService, serviceWorkflows]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -206,7 +187,10 @@ export function WorkflowEditorPage() {
     }
   }, [nodes, edges, selectedWorkflowName, editorMode, yamlContent, selectedServiceId]);
 
-  const handleLoad = useCallback(async () => {
+  const handleLoad = useCallback(async (idToLoad: string) => {
+    if (!idToLoad) {
+      return;
+    }
     setLoadingApi(true);
     setStatusMessage(null);
     setValidationErrors([]);
@@ -215,14 +199,14 @@ export function WorkflowEditorPage() {
       if (available.length === 0) {
         const res = await api.listWorkflows();
         setWorkflows(res.graphs);
-        available = res.graphs.filter(g => g.serviceId === selectedServiceId).sort((a, b) => b.version - a.version);
+        available = [...res.graphs].sort((a, b) => b.version - a.version);
       }
       if (available.length === 0) {
         setStatusMessage({ type: "info", text: "No saved workflows found for this service" });
         return;
       }
       const graph =
-        available.find((candidate) => candidate.id === selectedWorkflowId) ??
+        available.find((candidate) => candidate.id === idToLoad) ??
         available[0];
 
       setNodes(
@@ -254,6 +238,7 @@ export function WorkflowEditorPage() {
         }))
       );
       setSelectedWorkflowId(graph.id);
+      setSelectedWorkflowName(graph.name);
       setEditorMode("visual");
       setStatusMessage({ type: "success", text: `Loaded workflow v${graph.version} (${graph.nodes.length} nodes)` });
     } catch (err) {
@@ -261,7 +246,36 @@ export function WorkflowEditorPage() {
     } finally {
       setLoadingApi(false);
     }
-  }, [selectedServiceId, selectedWorkflowId, serviceWorkflows]);
+  }, [selectedServiceId, serviceWorkflows]);
+
+  useEffect(() => {
+    if (!selectedServiceId) {
+      setSelectedWorkflowId((current) => current === "" ? current : "");
+      return;
+    }
+    if (serviceWorkflows.length === 0) {
+      setSelectedWorkflowId((current) => current === "" ? current : "");
+      return;
+    }
+    const preferredWorkflowId = selectedService?.workflowGraphId;
+    if (preferredWorkflowId && serviceWorkflows.some((graph) => graph.id === preferredWorkflowId)) {
+      setSelectedWorkflowId((current) => {
+        if (current !== preferredWorkflowId) {
+          // Push to next tick to avoid calling async func synchronously inside state updater
+          setTimeout(() => { void handleLoad(preferredWorkflowId); }, 0);
+        }
+        return preferredWorkflowId;
+      });
+      return;
+    }
+    setSelectedWorkflowId((current) => {
+      const nextId = serviceWorkflows.some((graph) => graph.id === current) ? current : serviceWorkflows[0].id;
+      if (current !== nextId) {
+        setTimeout(() => { void handleLoad(nextId); }, 0);
+      }
+      return nextId;
+    });
+  }, [selectedServiceId, selectedService, serviceWorkflows, handleLoad]);
 
   const handleValidate = useCallback(() => {
     setStatusMessage(null);
@@ -566,26 +580,42 @@ export function WorkflowEditorPage() {
           </select>
         </label>
         
-        <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
-          Saved
-          <select
-            value={selectedWorkflowId}
-            onChange={(e) => {
-              setSelectedWorkflowId(e.target.value);
-              const graph = serviceWorkflows.find((w) => w.id === e.target.value);
-              if (graph) setSelectedWorkflowName(graph.name);
-            }}
-            disabled={serviceWorkflows.length === 0}
-            style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", minWidth: 160 }}
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+            Saved
+            <select
+              value={selectedWorkflowId}
+              onChange={(e) => {
+                const nextId = e.target.value;
+                setSelectedWorkflowId(nextId);
+                const graph = serviceWorkflows.find((w) => w.id === nextId);
+                if (graph) setSelectedWorkflowName(graph.name);
+                void handleLoad(nextId);
+              }}
+              disabled={serviceWorkflows.length === 0 || loadingApi}
+              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.2rem 0.35rem", background: "var(--color-surface)", color: "var(--color-text-primary)", minWidth: 160 }}
+            >
+              <option value="">{serviceWorkflows.length === 0 ? "No saved workflows" : "Select workflow"}</option>
+              {serviceWorkflows.map((graph) => (
+                <option key={graph.id} value={graph.id}>
+                  {graph.name} (v{graph.version}) - {graph.id.slice(0, 8)}{selectedService?.workflowGraphId === graph.id ? " (active)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void refreshWorkflows()}
+            loading={loadingWorkflows}
+            aria-label="Refresh saved workflows list"
+            title="Refresh workflow list"
+            style={{ padding: "0.25rem", minWidth: "auto" }}
           >
-            <option value="">{serviceWorkflows.length === 0 ? "No saved workflows" : "Select workflow"}</option>
-            {serviceWorkflows.map((graph) => (
-              <option key={graph.id} value={graph.id}>
-                {graph.name} (v{graph.version}) - {graph.id.slice(0, 8)}{selectedService?.workflowGraphId === graph.id ? " (active)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+            <RefreshCw size={14} aria-hidden />
+          </Button>
+        </div>
         
         <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem", color: "var(--color-text-secondary)", marginRight: "auto" }}>
           Name
@@ -649,8 +679,6 @@ export function WorkflowEditorPage() {
             <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--color-text-secondary)", marginBottom: "0.25rem" }}>Tools</div>
             <Button size="sm" variant="secondary" onClick={handleValidate} style={{ width: "100%", justifyContent: "flex-start" }}>Validate</Button>
             <Button size="sm" variant="secondary" onClick={handleTestRun} style={{ width: "100%", justifyContent: "flex-start", color: "var(--color-info)", borderColor: "var(--color-info)" }}>Dry run</Button>
-            <Button size="sm" variant="secondary" onClick={handleLoad} loading={loadingApi} style={{ width: "100%", justifyContent: "flex-start" }}>Load selected</Button>
-            <Button size="sm" variant="secondary" onClick={() => void refreshWorkflows()} loading={loadingWorkflows} style={{ width: "100%", justifyContent: "flex-start" }}>Refresh list</Button>
             <Button size="sm" variant="secondary" onClick={handleToggleMode} style={{ width: "100%", justifyContent: "flex-start" }}>
               {editorMode === "visual" ? "Switch to YAML" : "Switch to Visual"}
             </Button>

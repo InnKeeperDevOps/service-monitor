@@ -42,7 +42,6 @@ describe("WorkflowEditorPage", () => {
   const mockWorkflows = [
     {
       id: "wf-1",
-      serviceId: "svc-1",
       name: "Test Workflow",
       version: 1,
       nodes: [{ id: "n1", type: "event", kind: "onCrash", position: { x: 0, y: 0 } }],
@@ -51,7 +50,6 @@ describe("WorkflowEditorPage", () => {
     },
     {
       id: "wf-2",
-      serviceId: "svc-2",
       name: "Unused Workflow",
       version: 1,
       nodes: [],
@@ -83,7 +81,7 @@ describe("WorkflowEditorPage", () => {
     });
   });
 
-  it("handles service change and updates workflow list", async () => {
+  it("keeps selected workflow when service changes", async () => {
     vi.mocked(api.listServices).mockResolvedValueOnce({ services: mockServices as any });
     vi.mocked(api.listWorkflows).mockResolvedValueOnce({ graphs: mockWorkflows as any });
 
@@ -98,7 +96,7 @@ describe("WorkflowEditorPage", () => {
 
     await waitFor(() => {
       const wfSelect = screen.getByRole("combobox", { name: /Saved/i }) as HTMLSelectElement;
-      expect(wfSelect.value).toBe("wf-2");
+      expect(wfSelect.value).toBe("wf-1");
     });
   });
 
@@ -109,10 +107,11 @@ describe("WorkflowEditorPage", () => {
     render(<WorkflowEditorPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Load selected" })).toBeInTheDocument();
+      const wfSelect = screen.getByRole("combobox", { name: /Saved/i }) as HTMLSelectElement;
+      expect(wfSelect.value).toBe("wf-1");
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Load selected" }));
+    fireEvent.change(screen.getByRole("combobox", { name: /Saved/i }), { target: { value: "wf-1" } });
 
     await waitFor(() => {
       expect(screen.getByText(/Loaded workflow v1/)).toBeInTheDocument();
@@ -132,6 +131,10 @@ describe("WorkflowEditorPage", () => {
     await waitFor(() => {
       const select = screen.getByRole("combobox", { name: /Service/i }) as HTMLSelectElement;
       expect(select.value).toBe("svc-1");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Loaded workflow v1/)).toBeInTheDocument();
     });
 
     const nameInput = screen.getByPlaceholderText("e.g. restart-app");
@@ -165,6 +168,7 @@ describe("WorkflowEditorPage", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Queue on Agent" })).toBeInTheDocument();
+      expect(screen.getByText(/Loaded workflow v1/)).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Queue on Agent" }));
@@ -187,6 +191,7 @@ describe("WorkflowEditorPage", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Dry run" })).toBeInTheDocument();
+      expect(screen.getByText(/Loaded workflow v1/)).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Dry run" }));

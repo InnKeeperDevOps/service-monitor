@@ -125,7 +125,6 @@ export type WorkflowGraphNode = {
 export type WorkflowGraph = {
   id: string;
   tenantId: string;
-  serviceId: string;
   name: string;
   version: number;
   nodes: WorkflowGraphNode[];
