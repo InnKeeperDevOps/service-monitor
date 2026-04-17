@@ -1,0 +1,30 @@
+---
+description: Use when you need to start, restart, or understand how to run the local development environment
+globs: 
+alwaysApply: false
+---
+# Running the Dev Environment
+
+The dev environment stack is defined in `env/dev/docker-compose.yml` and the production environment stack is in `env/prod/docker-compose.yml`.
+
+To run the local development environment, you should use the Docker Compose files. Remember to switch to the appropriate user (e.g. `firestar` for dev applications).
+
+## Starting the Dev Environment
+To run the entire dev environment (UI, API, Postgres, Redis) in Docker:
+```bash
+docker compose -f env/dev/docker-compose.yml up -d
+```
+
+*Note: In the dev environment, Postgres runs on port 5001, Redis runs on port 6001, and the unified API/Web server runs on port 8092.*
+
+## Starting the Prod Environment
+To run the production environment stack:
+```bash
+docker compose -f env/prod/docker-compose.yml up -d
+```
+
+*Note: In the prod environment, Postgres runs on port 5002, Redis runs on port 6002, and the unified API/Web server runs on port 8091.*
+
+## URLs
+- **Always** test the dev UI using the external URL: `http://panel.dev.kaiad.dev/` or `https://panel.dev.kaiad.dev/` (handled via Nginx proxy). Do not test directly via localhost:5173 or localhost:8092.
+- The production UI is available at: `http://panel.kaiad.dev/` or `https://panel.kaiad.dev/`

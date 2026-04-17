@@ -1,0 +1,16 @@
+---
+description: Always ask the user before making changes to host configurations, including Nginx Proxy Manager.
+alwaysApply: true
+---
+
+# Host Configuration Change Gate
+
+- **Do not modify** host-level configurations without explicit user permission.
+- This includes, but is not limited to:
+  - Nginx Proxy Manager configurations
+  - Reverse proxy settings
+  - System-level OS configurations
+  - Network routing rules
+
+- **Before making any such changes:** state **what** you plan to change, **why** it's needed, and **ask the user** for explicit confirmation.
+- If the user did not specifically ask for host configuration changes, prefer suggesting the steps they should take manually or clearly asking for approval before proceeding with automated edits.
