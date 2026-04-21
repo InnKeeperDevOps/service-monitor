@@ -86,6 +86,81 @@ Key platform capabilities:
 | `db` | Drizzle ORM schema (`tenants`, `users`, `sessions`, `tenant_memberships`, `monitored_services`, `agents`, `incidents`, `workflow_graphs`, etc.) and query helpers. |
 | `queue` | BullMQ queue definitions, job payload types, and shared Redis client factory. |
 | `workflow-engine` | DAG executor for workflow graphs: parallel branches, join nodes, conditional branching, step result tracking. |
+| `config` | Shared Zod-validated runtime configuration types (`kaiad.config.json` shape, env merging helpers). |
+| `github` | GitHub App client wrappers (installation tokens, repo clone/PR/dispatch helpers) shared by api and worker. |
+| `eslint-config` | Repo-wide ESLint preset (`@sm/eslint-config`, uses `eslint-plugin-import-x`). |
+| `tsconfig` | Shared base TypeScript configs extended by every workspace package. |
+
+> All workspace packages are published internally under the `@sm/*` scope (e.g. `@sm/contracts`, `@sm/api`). The `kaiad` name only exists at the repo root.
+
+### Repository layout (top level)
+
+| Path | Purpose |
+|------|---------|
+| `apps/` | Runnable services: `web`, `api`, `worker`, `agent` (see above). |
+| `packages/` | Shared TypeScript libraries consumed by apps via `workspace:*`. |
+| `e2e/acceptance` | `@sm/acceptance` — black-box acceptance tests (AT-* IDs). Run via `pnpm acceptance` (`RUN_ACCEPTANCE=1`). |
+| `e2e/playwright` | `@sm/playwright-e2e` — browser E2E suites (E2E-001…E2E-006) plus `bugs/` and `bugs.md` for tracked findings. Run via `pnpm e2e:playwright`. |
+| `deploy/docker` | `compose.yml` (multi-service stack), `compose.unified.yml` + `Dockerfile.unified` (single-port image with embedded worker). |
+| `deploy/k8s` | Kubernetes manifests: `namespace.yaml`, `secrets.yaml`, `api-deployment.yaml`, `worker-deployment.yaml`. |
+| `env/dev`, `env/prod` | Per-environment `docker-compose.yml` plus a `data/` volume root for local Postgres/Redis state. |
+| `scripts/` | Repo automation: `bump-version-from-tags.mjs` (semver bumps from git tags) and `verify-mermaid-diagram.sh` (CI mermaid linter). Tests in `scripts/tests/`. |
+| `docs/` | Long-form architecture and onboarding docs (not contracts). |
+| `pnpm-workspace.yaml` | Workspace globs: `apps/*`, `packages/*`, `e2e/*`. |
+| `turbo.json` | Pipeline graph: `build`, `lint`, `typecheck`, `test`, `test:coverage` (all respect `^build` deps). |
+| `vitest.workspace.ts` | Aggregated Vitest project list for cross-package runs. |
+| `kaiad.config.json` | Generated at runtime in `KAIAD_DATA_DIR` by the setup wizard; **never** commit a real one. |
+
+### Common scripts (root `package.json`)
+
+Run from the repo root with `pnpm <script>`:
+
+| Script | What it does |
+|--------|--------------|
+| `build` / `build:apps` | Turbo build everything / build only the four apps (skips `apps/agent` if `go` missing unless `SM_REQUIRE_GO=1`). |
+| `lint` | `turbo run lint` across all packages. |
+| `typecheck` | `turbo run typecheck` (depends on `^build`). |
+| `test` / `test:apps` | Turbo test everything / test only apps (Go agent gated on toolchain like `build:apps`). |
+| `test:coverage` | Run Vitest with coverage; CI gate enforces ≥ 80% line coverage per package (see Non-negotiables). |
+| `contracts:openapi` | Regenerate the OpenAPI document from `@sm/contracts` Zod schemas. Run after any contract change. |
+| `acceptance` | Black-box acceptance suite with `RUN_ACCEPTANCE=1`. |
+| `e2e:playwright` | Run Playwright browser E2E suite. |
+| `version:bump[:minor\|:major\|:dry-run]` | Compute next version from git tags and write package.json updates. |
+| `test:versioning` | `node --test` over the version-bump script. |
+
+### `.cursor/rules` index (binding — see `meta-all-rules-binding.mdc`)
+
+| Rule | Trigger / scope |
+|------|-----------------|
+| `meta-all-rules-binding.mdc` | Always — load all other rules. |
+| `dev-environment-commands.mdc` | Use the canonical dev/prod start commands (see also `start-dev-environment` skill). |
+| `host-config-change-gate.mdc` | Editing host-level configs (Caddy, systemd, env files) requires the documented gate. |
+| `docker-compose-touch-gate.mdc` | Touching any compose file triggers the `docker-compose-change-gate` skill. |
+| `commit-requires-coverage-enforcer.mdc` | Commits must keep the 80% coverage gate green. |
+| `verification-before-stopping-code-changes.mdc` | Build + tests required before declaring code work done. |
+| `ui-verification-gate.mdc` | UI / API / workflow changes verified at https://panel.dev.kaiad.dev before completion. |
+| `ui-api-layer.mdc` | `apps/web` must call the API only via the typed client layer (no inline `fetch`). |
+| `error-handling-must-throw-and-log.mdc` | No silent catches; throw + log structured errors. |
+| `no-destructive-git.mdc` | Forbid force-push, history rewrites, and similar destructive operations. |
+| `no-api-testing.mdc` | Do not write low-value API smoke tests; cover behaviour via contract or acceptance tests. |
+| `testing-and-ports.mdc` | Tests must use the documented port map (see Ports Configuration). |
+| `kaiad-users.mdc` | Use the dev credentials (`test@example.com` / `mypassword123`) — do not invent users. |
+| `deviation-requires-bug-report.mdc` | Any deviation from rules must be filed as a bug report. |
+| `post-push-github-actions-monitor.mdc` | After every `git push`, monitor the resulting Actions run until it finishes. |
+
+### `.cursor/skills` index
+
+| Skill | Use when |
+|-------|----------|
+| `start-dev-environment` | Bringing up the dev stack (panel.dev.kaiad.dev). |
+| `start-prod-environment` | Bringing up the prod stack (panel.kaiad.dev). |
+| `start-kaiad-agent` | Launching the local Go agent against the running control plane. |
+| `kaiad-local-agent-enrollment` | Generating an enrollment token and wiring the agent to a tenant. |
+| `build-and-test-all-apps` | Full repo build + test sweep (matches the verification gate). |
+| `test-agent-and-panel` | End-to-end smoke of agent ⇄ panel together. |
+| `web-ui-api-layer` | Adding or editing the typed API client used by `apps/web`. |
+| `docker-compose-change-gate` | Required when modifying anything under `deploy/docker` or `env/*/docker-compose.yml`. |
+| `monitor-github-actions-after-push` | Polling the Actions run after a push (pairs with the post-push monitor rule). |
 
 ### Tech stack
 
