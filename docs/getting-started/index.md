@@ -12,8 +12,8 @@ Kaiad is a **multi-tenant SaaS control plane**: your team operates the platform 
 
 | Layer | Role |
 |--------|------|
-| **Admin SPA** | Operators use the browser UI for configuration, incidents, agents, and workflows. |
-| **API + realtime** | HTTP API for auth, settings, services, incidents, workflows, GitHub metadata; **WebSocket** endpoint for long-lived agent sessions. |
+| **Admin SPA** | Operators use the browser UI for configuration, incidents, agents, and services. |
+| **API + realtime** | HTTP API for auth, settings, services, incidents, agents, GitHub metadata; **WebSocket** endpoint for long-lived agent sessions. |
 | **Agents** | Connect **outbound** (WSS) to the control plane—no inbound firewall holes for agents. |
 | **Workers** | Consume **BullMQ** queues on **Redis**: remediation runs, GitHub mutations, agent commands, log ingestion. |
 | **Postgres** | Durable tenant and domain data when configured; otherwise dev-oriented in-memory stores may apply. |
@@ -24,7 +24,7 @@ Progressive disclosure: start here for the mental model, then [configure the con
 ## Data and control flow (high level)
 
 1. **Agents** send heartbeats and log lines over the **WSS** channel; the platform evaluates **error-level** logs, applies **deduplication**, and opens or updates **incidents** as configured.
-2. **Workers** pick up jobs from **BullMQ** to run workflow steps, call **GitHub** when policy allows, and dispatch **agent commands** through the realtime tier.
+2. **Workers** pick up jobs from **BullMQ** to run remediation tasks, call **GitHub** when policy allows, and dispatch **agent commands** through the realtime tier.
 3. **Operators** use the SPA and **REST API** under `/api/v1` for day-2 configuration and incident handling.
 
 ## Next steps

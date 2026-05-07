@@ -132,47 +132,6 @@ describe("Server routes", () => {
       expect(response.statusCode).toBe(200);
     });
 
-    it("GET /api/v1/workflows returns graphs", async () => {
-      const response = await app.inject({ 
-        method: "GET", 
-        url: "/api/v1/workflows",
-        headers: { authorization: "Bearer dev-token" } 
-      });
-      expect(response.statusCode).toBe(200);
-    });
-  });
-
-  describe("Workflow dry run", () => {
-    it("POST /api/v1/workflows/dry-run returns steps", async () => {
-      const response = await app.inject({ 
-        method: "POST", 
-        url: "/api/v1/workflows/dry-run",
-        headers: { authorization: "Bearer dev-token" },
-        payload: {
-          name: "Test",
-          serviceId: "svc-1",
-          nodes: [{ id: "n1", type: "event", kind: "onSchedule", data: { schedule: "0 * * * *" }, position: {x: 0, y: 0} }],
-          edges: []
-        }
-      });
-      expect(response.statusCode).toBe(200);
-      expect(response.json().success).toBe(true);
-    });
-    
-    it("POST /api/v1/workflows/dry-run blocks invalid node kinds", async () => {
-      const response = await app.inject({ 
-        method: "POST", 
-        url: "/api/v1/workflows/dry-run",
-        headers: { authorization: "Bearer dev-token" },
-        payload: {
-          name: "Test",
-          serviceId: "svc-1",
-          nodes: [{ id: "n1", type: "trigger", kind: "not_a_real_kind", position: {x: 0, y: 0} }],
-          edges: []
-        }
-      });
-      expect(response.statusCode).toBe(400);
-    });
   });
 
   describe("More endpoints", () => {
@@ -196,17 +155,6 @@ describe("Server routes", () => {
       expect(res.statusCode).toBe(201);
     });
 
-    it("PATCH /api/v1/services/:id/workflow works", async () => {
-      const res = await app.inject({
-        method: "PATCH",
-        url: "/api/v1/services/svc-1/workflow",
-        headers: { authorization: "Bearer dev-token" },
-        payload: { workflowGraphId: null }
-      });
-      // Mock domainStore returns false if service not found, so 404
-      expect(res.statusCode).toBe(404);
-    });
-
     it("DELETE /api/v1/services/:id works", async () => {
       const res = await app.inject({
         method: "DELETE",
@@ -214,40 +162,6 @@ describe("Server routes", () => {
         headers: { authorization: "Bearer dev-token" }
       });
       expect(res.statusCode).toBe(404); // mock returns false
-    });
-
-    it("GET /api/v1/workflows/:id works", async () => {
-      const res = await app.inject({
-        method: "GET",
-        url: "/api/v1/workflows/wf-1",
-        headers: { authorization: "Bearer dev-token" }
-      });
-      expect(res.statusCode).toBe(404);
-    });
-
-    it("POST /api/v1/workflows works", async () => {
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/v1/workflows",
-        headers: { authorization: "Bearer dev-token" },
-        payload: { 
-          name: "wf", 
-          nodes: [{ id: "n1", type: "event", kind: "onSchedule", data: { schedule: "0 * * * *" }, position: {x: 0, y: 0} }], 
-          edges: [] 
-        }
-      });
-      expect(res.statusCode).toBe(201);
-    });
-
-    it("POST /api/v1/workflows/:id/execute works", async () => {
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/v1/workflows/wf-1/execute",
-        headers: { authorization: "Bearer dev-token" },
-        payload: { serviceId: "svc-1", name: "wf", nodes: [], edges: [] }
-      });
-      // Mock returns 404 for service not found
-      expect(res.statusCode).toBe(404);
     });
 
     it("GET /api/v1/incidents/:id works", async () => {
@@ -379,33 +293,6 @@ describe("Server routes", () => {
       expect(res.statusCode).toBe(404); // mock usually not found
     });
 
-    it("PATCH /api/v1/workflows/:id/activate works", async () => {
-      const res = await app.inject({
-        method: "PATCH",
-        url: "/api/v1/workflows/wf-1/activate",
-        headers: { authorization: "Bearer dev-token" }
-      });
-      expect(res.statusCode).toBe(404);
-    });
-
-    it("PATCH /api/v1/workflows/:id/deactivate works", async () => {
-      const res = await app.inject({
-        method: "PATCH",
-        url: "/api/v1/workflows/wf-1/deactivate",
-        headers: { authorization: "Bearer dev-token" }
-      });
-      expect(res.statusCode).toBe(404);
-    });
-
-    it("DELETE /api/v1/workflows/:id works", async () => {
-      const res = await app.inject({
-        method: "DELETE",
-        url: "/api/v1/workflows/wf-1",
-        headers: { authorization: "Bearer dev-token" }
-      });
-      expect(res.statusCode).toBe(404);
-    });
-
     it("DELETE /api/v1/agents/:id works", async () => {
       const res = await app.inject({
         method: "DELETE",
@@ -415,27 +302,26 @@ describe("Server routes", () => {
       expect(res.statusCode).toBe(404);
     });
 
-    it("PATCH /api/v1/agents/:id/name works", async () => {
+    it("PATCH /api/v1/agents/:id renames an agent", async () => {
       const res = await app.inject({
         method: "PATCH",
-        url: "/api/v1/agents/a-1/name",
+        url: "/api/v1/agents/a-1",
         headers: { authorization: "Bearer dev-token" },
         payload: { name: "New Name" }
       });
       expect(res.statusCode).toBe(404);
     });
 
-    it("POST /api/v1/agents/:id/command works", async () => {
+    it("GET /api/v1/agents/:id returns 404 for unknown agent", async () => {
       const res = await app.inject({
-        method: "POST",
-        url: "/api/v1/agents/a-1/command",
-        headers: { authorization: "Bearer dev-token" },
-        payload: { type: "runShell", shellCommand: "echo ok" }
+        method: "GET",
+        url: "/api/v1/agents/missing",
+        headers: { authorization: "Bearer dev-token" }
       });
-      expect([200, 201, 400, 404, 500]).toContain(res.statusCode);
+      expect(res.statusCode).toBe(404);
     });
 
-    it("GET /api/v1/internal/agent-commands works", async () => {
+    it("POST /api/v1/internal/agent-commands works", async () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/v1/internal/agent-commands",

@@ -16,15 +16,10 @@ import {
   createMonitoredServiceRequestSchema,
   createSshKeyRequestSchema,
   listSshKeysResponseSchema,
-  executeWorkflowRequestSchema,
-  executeWorkflowResponseSchema,
-  workflowDryRunResponseSchema,
-  createWorkflowGraphRequestSchema,
   healthResponseSchema,
   listAgentsResponseSchema,
   listEnrollmentTokensResponseSchema,
   listIncidentsResponseSchema,
-  listWorkflowGraphsResponseSchema,
   listAuthProvidersResponseSchema,
   meResponseSchema,
   createTenantRequestSchema,
@@ -32,25 +27,14 @@ import {
   oauthAuthorizeResponseSchema,
   oauthCallbackResponseSchema,
   updateIncidentStatusRequestSchema,
-  setServiceWorkflowRequestSchema,
   upsertTenantSettingsRequestSchema,
   agentCommandDispatchResponseSchema,
   platformToAgentMessageSchema,
   type AgentToPlatformMessage,
   type AgentCommandJob,
   type LogIngestionJob,
-  type WorkflowExecutionJob,
   type TenantSettings
 } from "@sm/contracts";
-import { markDescendantsSkipped } from "@sm/workflow-engine";
-import {
-  WORKFLOW_NODE_TYPES,
-  topologicalWaves,
-  validateWorkflowGraph as validateDomainWorkflowGraph,
-  type WorkflowNode,
-  type WorkflowNodeKind,
-  type WorkflowNodeType
-} from "@sm/domain";
 import { correlationIdPlugin } from "./correlationId.js";
 import {
   loginWithDiagnostics,
@@ -98,7 +82,6 @@ import { buildRealtimeAgentHello } from "./agentHelloPayload.js";
 import { ensureCoreSchema } from "@sm/db";
 
 const startedAt = Date.now();
-const WORKFLOW_NODE_KIND_SET = new Set<string>(WORKFLOW_NODE_TYPES);
 
 async function buildMeResponse(store: AuthStore, session: SessionInfo) {
   let rows = await store.findMembershipsWithTenants(session.id);
@@ -124,141 +107,6 @@ async function buildMeResponse(store: AuthStore, session: SessionInfo) {
     memberships,
   });
 }
-
-function toEngineWorkflowNodes(
-  nodes: Array<{ id: string; type: string; kind: string; data?: Record<string, unknown>; position?: { x: number; y: number } }>
-): WorkflowNode[] {
-  return nodes.map((node) => ({
-    id: node.id,
-    type: node.type as WorkflowNodeType,
-    kind: node.kind as WorkflowNodeKind,
-    data: node.data,
-    position: node.position
-  }));
-}
-
-type DryRunNodeResult = {
-  success: boolean;
-  output?: string;
-  branchTaken?: "true" | "false";
-};
-
-type DryRunHandler = (nodeId: string, node: WorkflowNode) => Promise<DryRunNodeResult>;
-
-function createDryRunHandlers(): Record<WorkflowNodeKind, DryRunHandler> {
-  const handlers = {} as Record<WorkflowNodeKind, DryRunHandler>;
-  for (const nodeKind of WORKFLOW_NODE_TYPES) {
-    handlers[nodeKind] = async (nodeId, node) => {
-      if (node.kind === "branchIf" || node.kind === "if") {
-        const condition = String(node.data?.condition ?? "").trim().toLowerCase();
-        const truthy = condition.length > 0 && condition !== "false" && condition !== "0";
-        return {
-          success: true,
-          branchTaken: truthy ? "true" : "false",
-          output: `Dry run branch "${truthy ? "true" : "false"}" selected`
-        };
-      }
-      if (node.kind === "loop") {
-        return { success: true, output: `Dry run loop executed` };
-      }
-      if (node.kind === "wait") {
-        return { success: true, output: `Dry run wait executed` };
-      }
-      if (node.kind === "join") {
-        return { success: true, output: `Dry run join executed` };
-      }
-      if (node.kind === "split") {
-        return { success: true, output: `Dry run split executed` };
-      }
-      if (["runShell", "runGradlew", "runPip", "runNpm", "runMaven", "runGo"].includes(node.kind)) {
-        const command = String(node.data?.command ?? "").trim();
-        return { success: true, output: `Dry run would execute: ${node.kind} ${command}` };
-      }
-      if (node.kind === "httpRequest") {
-        const method = String(node.data?.method ?? "GET").toUpperCase();
-        const url = String(node.data?.url ?? "https://example.com");
-        return { success: true, output: `Dry run would request: ${method} ${url}` };
-      }
-      return { success: true, output: `Dry run executed ${node.kind} (${nodeId})` };
-    };
-  }
-  return handlers;
-}
-
-async function executeDryRunGraph(
-  nodes: WorkflowNode[],
-  edges: Array<{ from: string; to: string }>,
-  handlers: Record<WorkflowNodeKind, DryRunHandler>
-): Promise<{ success: boolean; nodeResults: Record<string, DryRunNodeResult> }> {
-  const nodeResults: Record<string, DryRunNodeResult> = {};
-  const failed = new Set<string>();
-  const skipped = new Set<string>();
-
-  const outgoing = new Map<string, string[]>();
-  const incoming = new Map<string, string[]>();
-  for (const node of nodes) {
-    outgoing.set(node.id, []);
-    incoming.set(node.id, []);
-  }
-  for (const edge of edges) {
-    outgoing.get(edge.from)?.push(edge.to);
-    incoming.get(edge.to)?.push(edge.from);
-  }
-
-  const waves = topologicalWaves(nodes, edges);
-  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
-
-  for (const wave of waves) {
-    await Promise.all(
-      wave
-        .filter((nodeId) => !skipped.has(nodeId))
-        .map(async (nodeId) => {
-          const node = nodeMap.get(nodeId);
-          if (!node) return;
-          const incomingNodes = incoming.get(nodeId) ?? [];
-          const allIncomingFailed = incomingNodes.length > 0 && incomingNodes.every(
-            (incomingNode) => failed.has(incomingNode) || skipped.has(incomingNode)
-          );
-          if (allIncomingFailed) {
-            skipped.add(nodeId);
-            return;
-          }
-
-          const handler = handlers[node.kind];
-          if (!handler) {
-            nodeResults[nodeId] = { success: false, output: `No dry-run handler for ${node.kind}` };
-            failed.add(nodeId);
-            return;
-          }
-
-          const result = await handler(nodeId, node);
-          nodeResults[nodeId] = result;
-          if (!result.success) {
-            failed.add(nodeId);
-            return;
-          }
-
-          if (node.kind === "branchIf" && result.branchTaken) {
-            const targets = outgoing.get(nodeId) ?? [];
-            const takenIndex = result.branchTaken === "true" ? 0 : 1;
-            for (let i = 0; i < targets.length; i++) {
-              if (i !== takenIndex) {
-                markDescendantsSkipped(targets[i], outgoing, skipped);
-              }
-            }
-          } else if (node.kind === "if" && result.branchTaken === "false") {
-            const targets = outgoing.get(nodeId) ?? [];
-            for (let i = 0; i < targets.length; i++) {
-              markDescendantsSkipped(targets[i], outgoing, skipped);
-            }
-          }
-        })
-    );
-  }
-
-  return { success: failed.size === 0, nodeResults };
-}
-
 
 function signValid(secret: string, payload: string, signature?: string): boolean {
   if (!signature) return false;
@@ -322,7 +170,6 @@ function emitLoginStepLog(
 export type BuildServerOptions = {
   enqueueLogIngestion?: (job: LogIngestionJob) => void | Promise<void>;
   enqueueAgentCommand?: (job: AgentCommandJob) => void | Promise<void>;
-  enqueueWorkflowExecution?: (job: WorkflowExecutionJob) => void | Promise<void>;
   /** When omitted, checkers are derived from POSTGRES_* / REDIS_* env (TCP probes). */
   readinessCheckers?: ReadinessChecker[];
   domainStore?: DomainStore;
@@ -332,7 +179,7 @@ export type BuildServerOptions = {
 };
 
 export type RuntimeQueueWiring = {
-  buildOptions: Pick<BuildServerOptions, "enqueueLogIngestion" | "enqueueAgentCommand" | "enqueueWorkflowExecution" | "redis">;
+  buildOptions: Pick<BuildServerOptions, "enqueueLogIngestion" | "enqueueAgentCommand" | "redis">;
   close: () => Promise<void>;
 };
 
@@ -341,9 +188,6 @@ export type { ReadinessChecker } from "./readyChecks.js";
 const noopLogIngestion = (_job: LogIngestionJob) => Promise.resolve();
 const noopAgentCommandEnqueue = async (_job: AgentCommandJob) => {
   throw new Error("Agent command queue is not configured");
-};
-const noopWorkflowExecutionEnqueue = async (_job: WorkflowExecutionJob) => {
-  throw new Error("Workflow execution queue is not configured");
 };
 
 async function pgImportAvailable(): Promise<boolean> {
@@ -400,12 +244,9 @@ function createLazyDomainStore(resolve: () => Promise<DomainStore>): DomainStore
     listServices: (tenantId) => get().then((s) => s.listServices(tenantId)),
     getService: (tenantId, id) => get().then((s) => s.getService(tenantId, id)),
     createService: (tenantId, data) => get().then((s) => s.createService(tenantId, data)),
-    updateServiceWorkflow: (tenantId, serviceId, workflowGraphId) =>
-      get().then((s) => s.updateServiceWorkflow(tenantId, serviceId, workflowGraphId)),
     deleteService: (tenantId, id) => get().then((s) => s.deleteService(tenantId, id)),
-    listWorkflowGraphs: (tenantId) => get().then((s) => s.listWorkflowGraphs(tenantId)),
-    getWorkflowGraph: (tenantId, workflowId) => get().then((s) => s.getWorkflowGraph(tenantId, workflowId)),
-    createWorkflowGraph: (tenantId, data) => get().then((s) => s.createWorkflowGraph(tenantId, data)),
+    updateAgent: (tenantId, agentId, data) => get().then((s) => s.updateAgent(tenantId, agentId, data)),
+    deleteAgent: (tenantId, agentId) => get().then((s) => s.deleteAgent(tenantId, agentId)),
     listSshKeys: (tenantId) => get().then((s) => s.listSshKeys(tenantId)),
     createSshKey: (tenantId, data) => get().then((s) => s.createSshKey(tenantId, data)),
     deleteSshKey: (tenantId, id) => get().then((s) => s.deleteSshKey(tenantId, id))
@@ -511,8 +352,6 @@ async function resolveGithubInstallInfo(cfg: KaiadConfig | null): Promise<{
 
 export function buildServer(opts: BuildServerOptions = {}) {
   const enqueueLogIngestion = opts.enqueueLogIngestion ?? noopLogIngestion;
-  const enqueueAgentCommand = opts.enqueueAgentCommand ?? noopAgentCommandEnqueue;
-  const enqueueWorkflowExecution = opts.enqueueWorkflowExecution ?? noopWorkflowExecutionEnqueue;
   const readinessCheckers = opts.readinessCheckers ?? createReadinessCheckersFromEnv();
   const domainStore = resolveDomainStore(opts);
   const authStore = opts.authStore ?? createMemoryAuthStore();
@@ -1553,6 +1392,54 @@ export function buildServer(opts: BuildServerOptions = {}) {
     return listAgentsResponseSchema.parse({ agents: agentsWithPresence });
   });
 
+  app.get<{ Params: { id: string } }>("/api/v1/agents/:id", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    const agent = await domainStore.getAgent(session.tenantId, req.params.id);
+    if (!agent) {
+      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Agent not found", correlationId: (req as any).correlationId }));
+    }
+    const connected = realtimeManager.getConnectedAgentIds().includes(agent.id);
+    return { ...agent, websocketConnected: connected };
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/v1/agents/:id", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    if (session.role !== "owner" && session.role !== "admin") {
+      return reply.status(403).send(apiErrorSchema.parse({ code: "FORBIDDEN", message: "Admin access required", correlationId: (req as any).correlationId }));
+    }
+    const body = (req.body ?? {}) as { name?: string | null; allowedCapabilities?: string[] };
+    const updated = await domainStore.updateAgent(session.tenantId, req.params.id, {
+      name: typeof body.name === "string" ? body.name : body.name === null ? null : undefined,
+      allowedCapabilities: Array.isArray(body.allowedCapabilities) ? body.allowedCapabilities : undefined
+    });
+    if (!updated) {
+      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Agent not found", correlationId: (req as any).correlationId }));
+    }
+    return updated;
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/v1/agents/:id", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    if (session.role !== "owner" && session.role !== "admin") {
+      return reply.status(403).send(apiErrorSchema.parse({ code: "FORBIDDEN", message: "Admin access required", correlationId: (req as any).correlationId }));
+    }
+    const deleted = await domainStore.deleteAgent(session.tenantId, req.params.id);
+    if (!deleted) {
+      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Agent not found", correlationId: (req as any).correlationId }));
+    }
+    realtimeManager.disconnectAgent(req.params.id);
+    return reply.status(204).send();
+  });
+
   // --- Monitored Services ---
 
   app.get("/api/v1/services", async (req, reply) => {
@@ -1584,29 +1471,6 @@ export function buildServer(opts: BuildServerOptions = {}) {
     return reply.status(201).send(svc);
   });
 
-  app.patch<{ Params: { id: string } }>("/api/v1/services/:id/workflow", async (req, reply) => {
-    const session = await resolveSession(authStore, req.headers.authorization);
-    if (!session) {
-      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
-    }
-    const body = setServiceWorkflowRequestSchema.parse(req.body);
-    const service = await domainStore.getService(session.tenantId, req.params.id);
-    if (!service) {
-      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Service not found", correlationId: (req as any).correlationId }));
-    }
-    if (body.workflowGraphId) {
-      const workflow = await domainStore.getWorkflowGraph(session.tenantId, body.workflowGraphId);
-      if (!workflow) {
-        return reply.status(400).send(apiErrorSchema.parse({ code: "BAD_REQUEST", message: "Workflow not found", correlationId: (req as any).correlationId }));
-      }
-    }
-    const updated = await domainStore.updateServiceWorkflow(session.tenantId, service.id, body.workflowGraphId ?? null);
-    if (!updated) {
-      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Service not found", correlationId: (req as any).correlationId }));
-    }
-    return updated;
-  });
-
   app.delete<{ Params: { id: string } }>("/api/v1/services/:id", async (req, reply) => {
     const session = await resolveSession(authStore, req.headers.authorization);
     if (!session) {
@@ -1617,206 +1481,6 @@ export function buildServer(opts: BuildServerOptions = {}) {
       return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Service not found", correlationId: (req as any).correlationId }));
     }
     return reply.status(204).send();
-  });
-
-  // --- Workflow Graphs ---
-
-  app.get("/api/v1/workflows", async (req, reply) => {
-    const session = await resolveSession(authStore, req.headers.authorization);
-    if (!session) {
-      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
-    }
-    const graphs = await domainStore.listWorkflowGraphs(session.tenantId);
-    return listWorkflowGraphsResponseSchema.parse({ graphs });
-  });
-
-  app.get<{ Params: { id: string } }>("/api/v1/workflows/:id", async (req, reply) => {
-    const session = await resolveSession(authStore, req.headers.authorization);
-    if (!session) {
-      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
-    }
-    const workflow = await domainStore.getWorkflowGraph(session.tenantId, req.params.id);
-    if (!workflow) {
-      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Workflow not found", correlationId: (req as any).correlationId }));
-    }
-    return workflow;
-  });
-
-  app.post("/api/v1/workflows", async (req, reply) => {
-    const session = await resolveSession(authStore, req.headers.authorization);
-    if (!session) {
-      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
-    }
-    const parsedBody = createWorkflowGraphRequestSchema.safeParse(req.body);
-    if (!parsedBody.success) {
-      return reply.status(400).send(
-        apiErrorSchema.parse({
-          code: "BAD_REQUEST",
-          message: parsedBody.error.issues[0]?.message ?? "Invalid workflow graph payload",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const body = parsedBody.data;
-    const nodes = toEngineWorkflowNodes(body.nodes);
-    const edges = body.edges.map((edge) => ({ from: edge.from, to: edge.to }));
-    const validationErrors = validateDomainWorkflowGraph(nodes, edges);
-    if (validationErrors.length > 0) {
-      return reply.status(400).send(
-        apiErrorSchema.parse({
-          code: "BAD_REQUEST",
-          message: validationErrors[0].message,
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const graph = await domainStore.createWorkflowGraph(session.tenantId, body);
-    return reply.status(201).send(graph);
-  });
-
-  app.post("/api/v1/workflows/execute", async (req, reply) => {
-    const session = await resolveSession(authStore, req.headers.authorization);
-    if (!session) {
-      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
-    }
-    const parsedBody = executeWorkflowRequestSchema.safeParse(req.body);
-    if (!parsedBody.success) {
-      return reply.status(400).send(
-        apiErrorSchema.parse({
-          code: "BAD_REQUEST",
-          message: parsedBody.error.issues[0]?.message ?? "Invalid workflow execute payload",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const body = parsedBody.data;
-    const nodes = toEngineWorkflowNodes(body.nodes);
-    const edges = body.edges.map((edge) => ({ from: edge.from, to: edge.to }));
-    const validationErrors = validateDomainWorkflowGraph(nodes, edges);
-    if (validationErrors.length > 0) {
-      return reply.status(400).send(
-        apiErrorSchema.parse({
-          code: "BAD_REQUEST",
-          message: validationErrors[0].message,
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const service = await domainStore.getService(session.tenantId, body.serviceId);
-    if (!service) {
-      return reply.status(404).send(
-        apiErrorSchema.parse({
-          code: "NOT_FOUND",
-          message: "Service not found",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const graph = await domainStore.createWorkflowGraph(session.tenantId, body);
-    const commandId = `cmd-${crypto.randomUUID()}`;
-    const workflowExecutionId = `wf-exec-${crypto.randomUUID()}`;
-    try {
-      await enqueueWorkflowExecution({
-        workflowExecutionId,
-        tenantId: session.tenantId,
-        serviceId: body.serviceId,
-        workflowGraphId: graph.id,
-        workflowVersion: graph.version,
-        triggerPayload: null,
-        nodes: body.nodes,
-        edges: body.edges
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to enqueue workflow execution command";
-      return reply.status(503).send(
-        apiErrorSchema.parse({
-          code: "INTERNAL_ERROR",
-          message,
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    return reply.status(202).send(
-      executeWorkflowResponseSchema.parse({
-        accepted: true as const,
-        workflowId: graph.id,
-        workflowVersion: graph.version,
-        agentId: service.agentId ?? "server",
-        commandId,
-        dispatchState: "queued_for_dispatch" as const
-      })
-    );
-  });
-
-  app.post("/api/v1/workflows/dry-run", async (req, reply) => {
-    const session = await resolveSession(authStore, req.headers.authorization);
-    if (!session) {
-      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
-    }
-    const parsedBody = executeWorkflowRequestSchema.safeParse(req.body);
-    if (!parsedBody.success) {
-      return reply.status(400).send(
-        apiErrorSchema.parse({
-          code: "BAD_REQUEST",
-          message: parsedBody.error.issues[0]?.message ?? "Invalid workflow dry-run payload",
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-    const body = parsedBody.data;
-    const invalidNodeKind = body.nodes.find((node) => !WORKFLOW_NODE_KIND_SET.has(node.kind));
-    if (invalidNodeKind) {
-      return reply.status(400).send(
-        apiErrorSchema.parse({
-          code: "BAD_REQUEST",
-          message: `Unknown workflow node kind: ${invalidNodeKind.kind}`,
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-
-    const nodes = toEngineWorkflowNodes(body.nodes);
-    const edges = body.edges.map((edge) => ({ from: edge.from, to: edge.to }));
-    const validationErrors = validateDomainWorkflowGraph(nodes, edges);
-    if (validationErrors.length > 0) {
-      return reply.status(400).send(
-        apiErrorSchema.parse({
-          code: "BAD_REQUEST",
-          message: validationErrors[0].message,
-          correlationId: (req as any).correlationId
-        })
-      );
-    }
-
-    const result = await executeDryRunGraph(
-      nodes,
-      edges,
-      createDryRunHandlers()
-    );
-
-    const steps = nodes.map((node) => {
-      const nodeResult = result.nodeResults[node.id];
-      if (!nodeResult) {
-        return {
-          nodeId: node.id,
-          nodeType: node.kind,
-          success: false,
-          output: "Skipped (branch condition not taken)"
-        };
-      }
-      const output = nodeResult.output == null ? undefined : String(nodeResult.output);
-      return {
-        nodeId: node.id,
-        nodeType: node.kind,
-        success: nodeResult.success,
-        output
-      };
-    });
-
-    return workflowDryRunResponseSchema.parse({
-      success: result.success,
-      steps
-    });
   });
 
   app.setNotFoundHandler(async (req, reply) => {

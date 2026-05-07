@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fingerprintError, isActionAllowed, topologicalWaves } from "../src/index.js";
+import { fingerprintError, isActionAllowed } from "../src/index.js";
 
 describe("domain", () => {
   it("builds stable fingerprints for similar volatile messages", () => {
@@ -25,24 +25,5 @@ describe("domain", () => {
         "merge_pr"
       )
     ).toBe(false);
-  });
-
-  it("returns topological waves", () => {
-    const waves = topologicalWaves(
-      [
-        { id: "a", type: "event", kind: "onStartup" },
-        { id: "b", type: "action", kind: "runShell" },
-        { id: "c", type: "action", kind: "dockerRun" },
-        { id: "d", type: "control", kind: "join" }
-      ],
-      [
-        { from: "a", to: "b" },
-        { from: "a", to: "c" },
-        { from: "b", to: "d" },
-        { from: "c", to: "d" }
-      ]
-    );
-    expect(waves[0]).toEqual(["a"]);
-    expect(waves[2]).toEqual(["d"]);
   });
 });

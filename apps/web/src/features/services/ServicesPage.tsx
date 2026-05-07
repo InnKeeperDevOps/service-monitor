@@ -126,7 +126,7 @@ export function ServicesPage() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              {["Name", "Repository", "Branch", "Agent", "Workflow", "Detectors", "Actions"].map((h) => (
+              {["Name", "Repository", "Branch", "Agent", "Detectors", "Actions"].map((h) => (
                 <th key={h} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid var(--color-border)", color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>
                   {h}
                 </th>
@@ -143,9 +143,6 @@ export function ServicesPage() {
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>{svc.branch}</td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
                   {svc.agentId ?? "\u2014"}
-                </td>
-                <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
-                  {svc.workflowGraphId ?? "\u2014"}
                 </td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
                   Default

@@ -16,13 +16,11 @@ vi.mock("@sm/db", () => {
     getAgent: vi.fn(),
     recordAgentHeartbeat: vi.fn(),
     markAgentOffline: vi.fn(),
+    updateAgent: vi.fn(),
+    deleteAgent: vi.fn(),
     listServices: vi.fn(),
     getService: vi.fn(),
     createService: vi.fn(),
-    updateServiceWorkflow: vi.fn(),
-    listWorkflowGraphs: vi.fn(),
-    getWorkflowGraph: vi.fn(),
-    createWorkflowGraph: vi.fn(),
   };
 });
 
@@ -201,20 +199,12 @@ describe("createPostgresDomainStore", () => {
     await store.createService("t-1", {} as any);
     expect(queries.createService).toHaveBeenCalled();
 
-    vi.mocked(queries.updateServiceWorkflow).mockResolvedValueOnce({} as any);
-    await store.updateServiceWorkflow("t-1", "s-1", "w-1");
-    expect(queries.updateServiceWorkflow).toHaveBeenCalled();
+    vi.mocked(queries.updateAgent).mockResolvedValueOnce({} as any);
+    await store.updateAgent("t-1", "a-1", { name: "x" });
+    expect(queries.updateAgent).toHaveBeenCalled();
 
-    vi.mocked(queries.listWorkflowGraphs).mockResolvedValueOnce([] as any);
-    await store.listWorkflowGraphs("t-1");
-    expect(queries.listWorkflowGraphs).toHaveBeenCalled();
-
-    vi.mocked(queries.getWorkflowGraph).mockResolvedValueOnce(null as any);
-    await store.getWorkflowGraph("t-1", "w-1");
-    expect(queries.getWorkflowGraph).toHaveBeenCalled();
-
-    vi.mocked(queries.createWorkflowGraph).mockResolvedValueOnce({} as any);
-    await store.createWorkflowGraph("t-1", {} as any);
-    expect(queries.createWorkflowGraph).toHaveBeenCalled();
+    vi.mocked(queries.deleteAgent).mockResolvedValueOnce(true as any);
+    await store.deleteAgent("t-1", "a-1");
+    expect(queries.deleteAgent).toHaveBeenCalled();
   });
 });

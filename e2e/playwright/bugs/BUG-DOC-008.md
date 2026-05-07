@@ -30,7 +30,7 @@ Neither is mentioned in `service-monitor/AGENTS.md`. Implementers working on HTT
 Add a fifth non-negotiable (or a dedicated Security section):
 
 ```markdown
-5. **SSRF protection** — all outbound HTTP calls (webhook deliveries, GitHub API, `httpRequest` workflow nodes) must validate the full redirect chain against an allowlist. Redirects to private IPs or metadata endpoints must be blocked (see test case T-SEC-004).
+5. **SSRF protection** — all outbound HTTP calls (webhook deliveries, GitHub API, agent-driven HTTP requests) must validate the full redirect chain against an allowlist. Redirects to private IPs or metadata endpoints must be blocked (see test case T-SEC-004).
 ```
 
 And a note on KMS/mTLS:

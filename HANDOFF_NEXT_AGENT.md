@@ -22,7 +22,7 @@
 | `github-app-integration` | **Complete** |
 | `design-philosophy` | **Complete** |
 | `web-admin-ui` | **Complete** |
-| `workflow-editor-engine` | **Complete** |
+| `agents-administration-ui` | **Complete** |
 | `docs-jekyll` | **Complete** |
 | `testing-coverage` | **Complete** |
 | `acceptance-endpoint-suite` | **Complete** |
@@ -41,7 +41,7 @@
 # TS tests
 cd /home/firestar/service-monitor
 corepack pnpm --filter @sm/contracts build && corepack pnpm --filter @sm/db build && corepack pnpm --filter @sm/github build && corepack pnpm --filter @sm/config build
-for pkg in @sm/config @sm/contracts @sm/db @sm/domain @sm/queue @sm/github @sm/workflow-engine @sm/api @sm/worker @sm/web; do corepack pnpm --filter $pkg test; done
+for pkg in @sm/config @sm/contracts @sm/db @sm/domain @sm/queue @sm/github @sm/api @sm/worker @sm/web; do corepack pnpm --filter $pkg test; done
 
 # Go tests
 cd apps/agent && PATH=$PATH:/usr/local/go/bin go test ./... -v

@@ -119,239 +119,10 @@ export const updateIncidentStatusRequestSchema = z.object({
   status: incidentStatusSchema
 });
 
-export const workflowNodeTypeSchema = z.enum(["event", "action", "control"]);
-export const workflowEventKindSchema = z.enum([
-  "onBuild",
-  "onStartup",
-  "onCrash",
-  "onShutdown",
-  "onLogPattern",
-  "onSchedule",
-  "agentStarted",
-  "agentStopped",
-  "agentOnline",
-  "agentOffline",
-  "agentConnected",
-  "agentDisconnected",
-  "agentCrashed",
-  "agentRestarted",
-  "onServiceConfigurationUpdate"
-]);
-export const workflowControlKindSchema = z.enum(["branchIf", "join", "wait", "if", "loop", "split"]);
-export const workflowActionKindSchema = z.enum([
-    "runShell",
-    "runGradlew",
-    "runPip",
-    "runNpm",
-    "runMaven",
-    "runGo",
-    "dockerBuild",
-  "dockerRun",
-  "composeUp",
-  "composeDown",
-  "setEnv",
-  "injectSecret",
-  "template",
-  "runCursorPlan",
-  "runClaudePlan",
-  "httpRequest",
-  "slackNotify",
-  "emailNotify",
-  "genericWebhook",
-  "clone",
-  "checkoutBranch",
-  "createPR",
-  "mergePR",
-  "push",
-  "dispatchWorkflow",
-  "commentOnPR",
-  "createIssue",
-  "addLabels"
-]);
-const workflowNodeBaseShape = {
-  id: z.string(),
-  position: z.object({ x: z.number(), y: z.number() }).optional()
-};
-
-function eventDataSchema(shape: z.ZodRawShape) {
-  return z.object({
-    displayName: z.string().optional(),
-    ...shape
-  }).strict();
-}
-
-const eventNodeSchemas = [
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("onBuild"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("onStartup"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("onCrash"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("onShutdown"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("onLogPattern"),
-    data: eventDataSchema({ filter: z.string().min(1) })
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("onSchedule"),
-    data: eventDataSchema({ schedule: z.string().min(1) })
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("agentStarted"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("agentStopped"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("agentOnline"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("agentOffline"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("agentConnected"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("agentDisconnected"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("agentCrashed"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("agentRestarted"),
-    data: eventDataSchema({}).optional()
-  }),
-  z.object({
-    ...workflowNodeBaseShape,
-    type: z.literal("event"),
-    kind: z.literal("onServiceConfigurationUpdate"),
-    data: eventDataSchema({}).optional()
-  })
-] as const;
-
-const workflowActionNodeSchema = z.object({
-  ...workflowNodeBaseShape,
-  type: z.literal("action"),
-  kind: workflowActionKindSchema,
-  data: z.record(z.unknown()).optional()
-});
-
-const workflowControlNodeSchema = z.object({
-  ...workflowNodeBaseShape,
-  type: z.literal("control"),
-  kind: workflowControlKindSchema,
-  data: z.record(z.unknown()).optional()
-});
-
-export const workflowGraphNodeSchema = z.union([
-  z.discriminatedUnion("kind", eventNodeSchemas),
-  workflowActionNodeSchema,
-  workflowControlNodeSchema
-]);
-
-export const workflowGraphEdgeSchema = z.object({
-  from: z.string(),
-  to: z.string()
-});
-
-export const workflowGraphSchema = z.object({
-  id: z.string(),
-  tenantId: z.string(),
-  name: z.string(),
-  version: z.number().int().positive(),
-  nodes: z.array(workflowGraphNodeSchema),
-  edges: z.array(workflowGraphEdgeSchema),
-  viewport: z.object({ x: z.number(), y: z.number(), zoom: z.number() }).optional(),
-  isActive: z.boolean()
-});
-
-export const createWorkflowGraphRequestSchema = z.object({
-  name: z.string().min(1),
-  nodes: z.array(workflowGraphNodeSchema),
-  edges: z.array(workflowGraphEdgeSchema)
-});
-
-export const executeWorkflowRequestSchema = z.object({
-  serviceId: z.string(),
-  name: z.string().min(1),
-  nodes: z.array(workflowGraphNodeSchema),
-  edges: z.array(workflowGraphEdgeSchema)
-});
-
-export const listWorkflowGraphsResponseSchema = z.object({
-  graphs: z.array(workflowGraphSchema)
-});
-
-export const executeWorkflowResponseSchema = z.object({
-  accepted: z.literal(true),
-  workflowId: z.string(),
-  workflowVersion: z.number().int().positive(),
-  agentId: z.string(),
-  commandId: z.string(),
-  dispatchState: z.enum(["queued_for_dispatch"])
-});
-
-export const workflowDryRunStepSchema = z.object({
-  nodeId: z.string(),
-  nodeType: z.string(),
-  success: z.boolean(),
-  output: z.string().optional()
-});
-
-export const workflowDryRunResponseSchema = z.object({
-  success: z.boolean(),
-  steps: z.array(workflowDryRunStepSchema)
-});
-
 export const monitoredServiceSchema = z.object({
   id: z.string(),
   tenantId: z.string(),
   agentId: z.string().nullable(),
-  workflowGraphId: z.string().nullable().optional(),
   name: z.string(),
   gitRepoUrl: z.string(),
   sshKeyId: z.string().nullable().optional(),
@@ -359,10 +130,6 @@ export const monitoredServiceSchema = z.object({
   dockerImage: z.string().nullable().optional(),
   composePath: z.string().nullable().optional(),
   agentRuntimeBackend: agentRuntimeBackendSchema.optional()
-});
-
-export const setServiceWorkflowRequestSchema = z.object({
-  workflowGraphId: z.string().nullable()
 });
 
 export const createMonitoredServiceRequestSchema = z.object({
@@ -417,16 +184,9 @@ export type CreateSshKeyRequest = z.infer<typeof createSshKeyRequestSchema>;
 export type ListSshKeysResponse = z.infer<typeof listSshKeysResponseSchema>;
 export type Incident = z.infer<typeof incidentSchema>;
 export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
-export type WorkflowGraph = z.infer<typeof workflowGraphSchema>;
-export type WorkflowGraphNode = z.infer<typeof workflowGraphNodeSchema>;
-export type WorkflowGraphEdge = z.infer<typeof workflowGraphEdgeSchema>;
-export type ExecuteWorkflowRequest = z.infer<typeof executeWorkflowRequestSchema>;
-export type ExecuteWorkflowResponse = z.infer<typeof executeWorkflowResponseSchema>;
-export type WorkflowDryRunResponse = z.infer<typeof workflowDryRunResponseSchema>;
 export type MonitoredService = z.infer<typeof monitoredServiceSchema>;
 export type CreateMonitoredServiceRequest = z.infer<typeof createMonitoredServiceRequestSchema>;
 export type UpdateMonitoredServiceRequest = z.infer<typeof updateMonitoredServiceRequestSchema>;
-export type SetServiceWorkflowRequest = z.infer<typeof setServiceWorkflowRequestSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 
 // ---------------------------------------------------------------------------

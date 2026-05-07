@@ -14,7 +14,7 @@ This documentation site refers to the platform as **Kaiad** (also the name shown
 | You want to… | Kaiad provides… |
 |--------------|-----------------|
 | See when things go wrong | Log-derived signals, **incidents** with deduplication (fingerprint + cooldown), and a place to triage them in the UI. |
-| Automate response | **Workflows** and **workers** that run steps on **Redis-backed queues** (BullMQ), including Git operations when policy allows. |
+| Automate response | **Workers** that run remediation steps on **Redis-backed queues** (BullMQ), including Git operations when policy allows. |
 | Act where the software runs | **Agents** (Go) that connect **outbound** to your Kaiad deployment over **WSS**, then execute shell, Docker, or plan-based steps you send from the platform. |
 | Tie identity to GitHub | A **GitHub App** installation per scope, **signed webhooks** into the API, and worker-side use of installation tokens for mutations. |
 
@@ -33,7 +33,7 @@ Operators use the **browser UI** and the **REST API** (`/api/v1`). **Agents** ne
 ## How a typical flow works
 
 1. An **agent** connects with an **enrollment token**, sends **heartbeats**, and may stream **container logs**; the platform can raise or merge **incidents** based on rules and deduplication.
-2. **Workers** dequeue jobs from **Redis**: run workflow steps, perform **GitHub** actions when allowed, enqueue **agent commands**, and process **log ingestion** jobs.
+2. **Workers** dequeue jobs from **Redis**: run remediation jobs, perform **GitHub** actions when allowed, enqueue **agent commands**, and process **log ingestion** jobs.
 3. **Operators** use the **SPA** and **API** to configure tenants, review incidents, manage **enrollment tokens**, and inspect **agents**.
 
 For a deeper narrative, see [Getting started]({% link getting-started/index.md %}).
@@ -42,7 +42,7 @@ For a deeper narrative, see [Getting started]({% link getting-started/index.md %
 
 | Piece | Role |
 |-------|------|
-| **Web** (`apps/web`) | React/Vite **admin UI**: auth, settings, incidents, agents, workflows. |
+| **Web** (`apps/web`) | React/Vite **admin UI**: auth, settings, incidents, agents, services. |
 | **API** (`apps/api`) | **Fastify** HTTP server: REST, auth, webhooks, tenant data; **WebSocket** endpoint for agent sessions. |
 | **Workers** (`apps/worker`) | **BullMQ** consumers plus a small **health** HTTP server for orchestration. |
 | **Agent** (`apps/agent`) | **Go** binary: outbound **WSS**, Docker socket (typical), command execution. |
@@ -61,7 +61,6 @@ Agents are **egress-only** toward Kaiad for the SaaS path; customers firewall **
 - [Configure the control plane]({% link getting-started/configure-control-plane.md %}) — environment variables, API/worker processes, Compose reference.
 - [GitHub App setup]({% link getting-started/github-app.md %}) — permissions, webhooks, secrets, troubleshooting.
 - [Install Agent]({% link agent/install.md %}) — release binaries, systemd, Docker, environment variables.
-- [Workflow MVP Nodes]({% link workflows/mvp-nodes.md %}) — workflow building blocks.
 
 ## Reference
 

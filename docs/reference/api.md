@@ -59,6 +59,9 @@ In **non-production**, a development bearer shortcut may exist—do not rely on 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/v1/agents` | Bearer | List agents registered for the tenant. |
+| GET | `/api/v1/agents/:id` | Bearer | Fetch one agent including live WebSocket presence. |
+| PATCH | `/api/v1/agents/:id` | Bearer (admin) | Update agent metadata (`name`, `allowedCapabilities`). |
+| DELETE | `/api/v1/agents/:id` | Bearer (admin) | Remove an agent registration; detaches it from any services and closes its realtime session. |
 | GET | `/api/v1/agents/enrollment-tokens` | Bearer | List active enrollment tokens. |
 | POST | `/api/v1/agents/enrollment-tokens` | Bearer | Create enrollment token (optional `ttlSeconds`). |
 
@@ -69,13 +72,6 @@ In **non-production**, a development bearer shortcut may exist—do not rely on 
 | GET | `/api/v1/github/installations` | Bearer | List GitHub installations recorded for the tenant. |
 | POST | `/api/v1/github/installations` | Bearer | Upsert installation metadata; tenant scope enforced. |
 | POST | `/api/v1/github/policy/check` | Bearer | Evaluate automation policy for a proposed action; **403** if policy denies. |
-
-## Workflows
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/api/v1/workflows` | Bearer | List workflow graphs for the tenant. |
-| POST | `/api/v1/workflows` | Bearer | Create workflow graph (**201**). |
 
 ## Webhooks
 

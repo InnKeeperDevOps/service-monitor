@@ -6,7 +6,7 @@ nav_order: 4
 
 # Worker failure
 
-**Workers** consume BullMQ jobs: ingest/detection, workflow steps, GitHub API calls, notifications, and **AgentCommand** dispatch via the realtime tier.
+**Workers** consume BullMQ jobs: ingest/detection, GitHub API calls, notifications, and **AgentCommand** dispatch via the realtime tier.
 
 ## Symptoms
 

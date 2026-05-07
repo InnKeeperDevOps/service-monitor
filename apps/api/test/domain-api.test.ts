@@ -162,29 +162,10 @@ describe("services API", () => {
     expect(listRes.json().services).toHaveLength(1);
     expect(listRes.json().services[0]).toEqual(
       expect.objectContaining({
-        workflowGraphId: null,
         dockerImage: "acme/app:latest",
         composePath: "deploy/compose.yml"
       })
     );
-  });
-
-  it("sets active workflow for a service", async () => {
-    const svc = await domainStore.createService("t-1", { name: "svc-active", gitRepoUrl: "o/r", branch: "main" });
-    const graph = await domainStore.createWorkflowGraph("t-1", {
-      name: "Test workflow",
-      nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
-      edges: []
-    });
-
-    const setRes = await app.inject({
-      method: "PATCH",
-      url: `/api/v1/services/${svc.id}/workflow`,
-      headers: AUTH,
-      payload: { workflowGraphId: graph.id }
-    });
-    expect(setRes.statusCode).toBe(200);
-    expect(setRes.json().workflowGraphId).toBe(graph.id);
   });
 });
 
@@ -235,131 +216,58 @@ describe("ssh-keys API", () => {
   });
 });
 
-describe("workflows API", () => {
-  it("returns 401 for unauthenticated GET /api/v1/workflows", async () => {
-    const res = await app.inject({ method: "GET", url: "/api/v1/workflows" });
+describe("agents administration API", () => {
+  it("returns 401 for unauthenticated GET /api/v1/agents/:id", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/agents/a-1" });
     expect(res.statusCode).toBe(401);
   });
 
-  it("creates and lists workflow graphs", async () => {
-    const svc = await domainStore.createService("t-1", { name: "app", gitRepoUrl: "o/r", branch: "main" });
-
-    const createRes = await app.inject({
-      method: "POST",
-      url: "/api/v1/workflows",
-      headers: AUTH,
-      payload: {
-        name: "wf",
-        nodes: [{ id: "n1", type: "event", kind: "onCrash" }, { id: "n2", type: "action", kind: "runShell" }],
-        edges: [{ from: "n1", to: "n2" }]
-      }
-    });
-    expect(createRes.statusCode).toBe(201);
-    expect(createRes.json().version).toBe(1);
-
-    const listRes = await app.inject({ method: "GET", url: "/api/v1/workflows", headers: AUTH });
-    expect(listRes.statusCode).toBe(200);
-    expect(listRes.json().graphs).toHaveLength(1);
+  it("returns 404 when fetching an unknown agent", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/agents/missing", headers: AUTH });
+    expect(res.statusCode).toBe(404);
   });
 
-  it("increments version for same service", async () => {
-    const payload = {
-      name: "wf",
-      nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
-      edges: []
-    };
-
-    const v1 = await app.inject({ method: "POST", url: "/api/v1/workflows", headers: AUTH, payload });
-    expect(v1.json().version).toBe(1);
-    const v2 = await app.inject({ method: "POST", url: "/api/v1/workflows", headers: AUTH, payload });
-    expect(v2.json().version).toBe(2);
-  });
-
-  it("queues workflow execution command when queue hook is configured", async () => {
-    const enqueueWorkflowExecution = vi.fn().mockResolvedValue(undefined);
-    const executeApp = buildServer({
-      domainStore,
-      enqueueWorkflowExecution
+  it("renames a registered agent", async () => {
+    __seedAgentForTests({
+      id: "a-rename",
+      tenantId: "t-1",
+      name: null,
+      version: null,
+      status: "online",
+      lastSeenAt: null,
+      certFingerprint: null,
+      allowedCapabilities: []
     });
-    await executeApp.ready();
-    const svc = await domainStore.createService("t-1", {
-      name: "with-agent",
-      gitRepoUrl: "o/r",
-      branch: "main",
-      agentId: "agent-1"
-    });
-    const res = await executeApp.inject({
-      method: "POST",
-      url: "/api/v1/workflows/execute",
-      headers: AUTH,
-      payload: {
-        serviceId: svc.id,
-        name: "wf",
-        nodes: [{ id: "n1", type: "event", kind: "onCrash" }, { id: "n2", type: "action", kind: "runShell" }],
-        edges: [{ from: "n1", to: "n2" }]
-      }
-    });
-    expect(res.statusCode).toBe(202);
-    expect(res.json()).toEqual(
-      expect.objectContaining({
-        accepted: true,
-        dispatchState: "queued_for_dispatch"
-      })
-    );
-    expect(enqueueWorkflowExecution).toHaveBeenCalledTimes(1);
-    expect(enqueueWorkflowExecution.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        serviceId: svc.id
-      })
-    );
-    await executeApp.close();
-  });
-
-  it("returns dry-run execution steps", async () => {
-    const svc = await domainStore.createService("t-1", { name: "dry-run", gitRepoUrl: "o/r", branch: "main" });
     const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/workflows/dry-run",
+      method: "PATCH",
+      url: "/api/v1/agents/a-rename",
       headers: AUTH,
-      payload: {
-        serviceId: svc.id,
-        name: "wf",
-        nodes: [
-          { id: "n1", type: "event", kind: "onCrash" },
-          { id: "n2", type: "action", kind: "runShell", data: { command: "echo ok" } }
-        ],
-        edges: [{ from: "n1", to: "n2" }]
-      }
+      payload: { name: "Edge agent #1" }
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual(
-      expect.objectContaining({
-        success: true,
-        steps: expect.arrayContaining([
-          expect.objectContaining({ nodeId: "n1", nodeType: "onCrash", success: true }),
-          expect.objectContaining({ nodeId: "n2", nodeType: "runShell", success: true })
-        ])
-      })
-    );
+    expect(res.json().name).toBe("Edge agent #1");
   });
 
-  it("rejects invalid trigger parameters", async () => {
-    const svc = await domainStore.createService("t-1", { name: "invalid-trigger-data", gitRepoUrl: "o/r", branch: "main" });
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/v1/workflows",
-      headers: AUTH,
-      payload: {
-        serviceId: svc.id,
-        nodes: [{ id: "n1", type: "event", kind: "onCrash", data: { schedule: "*/5 * * * *" } }],
-        edges: []
-      }
+  it("deletes a registered agent and detaches its services", async () => {
+    __seedAgentForTests({
+      id: "a-del",
+      tenantId: "t-1",
+      name: "to delete",
+      version: null,
+      status: "online",
+      lastSeenAt: null,
+      certFingerprint: null,
+      allowedCapabilities: []
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual(
-      expect.objectContaining({
-        code: "BAD_REQUEST"
-      })
-    );
+    const svc = await domainStore.createService("t-1", {
+      name: "linked",
+      gitRepoUrl: "o/r",
+      branch: "main",
+      agentId: "a-del"
+    });
+    const res = await app.inject({ method: "DELETE", url: "/api/v1/agents/a-del", headers: AUTH });
+    expect(res.statusCode).toBe(204);
+    const detached = await domainStore.getService("t-1", svc.id);
+    expect(detached?.agentId).toBeNull();
   });
 });

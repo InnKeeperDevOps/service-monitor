@@ -139,4 +139,19 @@ export class RealtimeManager {
   getConnectedAgentIds(): string[] {
     return [...this.sessions.keys()];
   }
+
+  /** Forcefully closes the realtime session for an agent, e.g. when an admin removes it. */
+  disconnectAgent(agentId: string): boolean {
+    const session = this.sessions.get(agentId);
+    if (!session) return false;
+    const sock = session.socket as { close?: () => void };
+    try {
+      sock.close?.();
+    } catch {
+      // Closing the underlying socket is best-effort; the session is still removed below.
+    }
+    this.sessions.delete(agentId);
+    this.hostStatsByAgent.delete(agentId);
+    return true;
+  }
 }

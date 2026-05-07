@@ -16,7 +16,7 @@ Redis backs **BullMQ** (job orchestration) and may support sessions, rate limits
 
 ## Impact
 
-- **High**: No durable queue progress—workflows, webhooks, and scheduled tasks back up.
+- **High**: No durable queue progress—remediation jobs, webhooks, and scheduled tasks back up.
 - **Medium** (if Redis only used for optional cache/session): degraded auth or throttling behavior depending on deployment.
 
 ## Immediate actions
