@@ -1,4 +1,4 @@
-import type { CreateTenantRequest, MeResponse, TenantSettings, SshKey, CreateSshKeyRequest, MonitoredService as ContractMonitoredService } from "@sm/contracts";
+import type { CreateTenantRequest, MeResponse, TenantSettings, SshKey, CreateSshKeyRequest } from "@sm/contracts";
 export type { SshKey, CreateSshKeyRequest, CreateTenantRequest, MeResponse, TenantSettings };
 import type { AuthUser } from "./useAuth.js";
 
@@ -108,43 +108,9 @@ export type MonitoredService = {
   sshKeyId?: string | null;
   branch: string;
   agentId: string | null;
-  workflowGraphId?: string | null;
   dockerImage?: string | null;
   composePath?: string | null;
   agentRuntimeBackend?: string | null;
-};
-
-export type WorkflowGraphNode = {
-  id: string;
-  type: "event" | "action" | "control";
-  kind: string;
-  position?: { x: number; y: number };
-  data?: Record<string, unknown>;
-};
-
-export type WorkflowGraph = {
-  id: string;
-  tenantId: string;
-  name: string;
-  version: number;
-  nodes: WorkflowGraphNode[];
-  edges: { from: string; to: string }[];
-  viewport?: { x: number; y: number; zoom: number };
-  isActive: boolean;
-};
-
-export type WorkflowExecutionResponse = {
-  accepted: true;
-  workflowId: string;
-  workflowVersion: number;
-  agentId: string;
-  commandId: string;
-  dispatchState: "queued_for_dispatch";
-};
-
-export type WorkflowDryRunResponse = {
-  success: boolean;
-  steps: { nodeId: string; nodeType: string; success: boolean; output?: string }[];
 };
 
 /** Matches server OAuth provider registration (POST /api/v1/settings/oauth-providers). */
@@ -214,6 +180,17 @@ export const api = {
       body: JSON.stringify({ status })
     }),
   listAgents: () => apiFetch<{ agents: Agent[] }>("/api/v1/agents"),
+  getAgent: (id: string) =>
+    apiFetch<Agent>(`/api/v1/agents/${encodeURIComponent(id)}`),
+  updateAgent: (id: string, data: { name?: string | null; allowedCapabilities?: string[] }) =>
+    apiFetch<Agent>(`/api/v1/agents/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    }),
+  deleteAgent: (id: string) =>
+    apiFetch<void>(`/api/v1/agents/${encodeURIComponent(id)}`, {
+      method: "DELETE"
+    }),
   listServices: () => apiFetch<{ services: MonitoredService[] }>("/api/v1/services"),
   createService: (data: {
     name: string;
@@ -243,30 +220,6 @@ export const api = {
       body: JSON.stringify(data)
     }),
 
-  createWorkflow: (data: { name: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
-    apiFetch<WorkflowGraph>("/api/v1/workflows", {
-      method: "POST",
-      body: JSON.stringify(data)
-    }),
-
-  executeWorkflow: (data: { name: string; serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
-    apiFetch<WorkflowExecutionResponse>("/api/v1/workflows/execute", {
-      method: "POST",
-      body: JSON.stringify(data)
-    }),
-
-  dryRunWorkflow: (data: { name: string; serviceId: string; nodes: WorkflowGraphNode[]; edges: { from: string; to: string }[] }) =>
-    apiFetch<WorkflowDryRunResponse>("/api/v1/workflows/dry-run", {
-      method: "POST",
-      body: JSON.stringify(data)
-    }),
-
-  listWorkflows: () => apiFetch<{ graphs: WorkflowGraph[] }>("/api/v1/workflows"),
-  setServiceWorkflow: (serviceId: string, workflowGraphId: string | null) =>
-    apiFetch<MonitoredService>(`/api/v1/services/${serviceId}/workflow`, {
-      method: "PATCH",
-      body: JSON.stringify({ workflowGraphId })
-    }),
   getSettings: () => getTenantSettings(),
   updateSettings: (data: TenantSettings) =>
     apiFetch<TenantSettings>("/api/v1/settings", {

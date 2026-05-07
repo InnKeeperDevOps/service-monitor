@@ -21,7 +21,15 @@ func isProduction() bool {
 	return strings.EqualFold(os.Getenv("NODE_ENV"), "production")
 }
 
+// serviceIDForContainer chooses a service id for log frames emitted from a
+// container. When `SM_SERVICE_ID` is set (e.g. baked into the start command by
+// the admin UI when an enrollment token is generated) it pins every container
+// on this agent to that tenant-scoped service. Otherwise it falls back to the
+// container name (or short id) heuristic so dev hosts still get readable ids.
 func serviceIDForContainer(c docker.ContainerInfo) string {
+	if pinned := strings.TrimSpace(os.Getenv("SM_SERVICE_ID")); pinned != "" {
+		return pinned
+	}
 	if len(c.Names) > 0 {
 		name := strings.TrimPrefix(c.Names[0], "/")
 		if name != "" {
@@ -89,7 +97,12 @@ func main() {
 	dc := docker.NewClient(socketPath)
 	exec := executor.NewExecutor(dc)
 
-	log.Printf("starting agent id=%s ws=%s (docker socket=%s; runtime from Kaiad hello)", agentID, baseURL, dc.SocketPath())
+	pinnedServiceID := strings.TrimSpace(os.Getenv("SM_SERVICE_ID"))
+	if pinnedServiceID != "" {
+		log.Printf("starting agent id=%s ws=%s service=%s (docker socket=%s; runtime from Kaiad hello)", agentID, baseURL, pinnedServiceID, dc.SocketPath())
+	} else {
+		log.Printf("starting agent id=%s ws=%s (docker socket=%s; runtime from Kaiad hello)", agentID, baseURL, dc.SocketPath())
+	}
 	if agentdebug.Enabled() {
 		log.Printf("[agent:debug] SM_SKIP_KAIAD_CONFIG_WAIT=%q SM_ENABLE_LOG_STREAMING=%q SM_AGENT_PERSIST_CREDENTIALS=%q NODE_ENV=%q",
 			os.Getenv("SM_SKIP_KAIAD_CONFIG_WAIT"), os.Getenv("SM_ENABLE_LOG_STREAMING"), os.Getenv("SM_AGENT_PERSIST_CREDENTIALS"), os.Getenv("NODE_ENV"))

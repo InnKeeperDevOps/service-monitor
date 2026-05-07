@@ -282,6 +282,48 @@ export async function markAgentOffline(query: QueryFn, tenantId: string, agentId
   );
 }
 
+export async function updateAgent(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string,
+  data: { name?: string | null; allowedCapabilities?: string[] }
+): Promise<AgentRow | undefined> {
+  const sets: string[] = [];
+  const params: unknown[] = [agentId, tenantId];
+  if (data.name !== undefined) {
+    params.push(data.name);
+    sets.push(`name = $${params.length}`);
+  }
+  if (data.allowedCapabilities !== undefined) {
+    params.push(data.allowedCapabilities);
+    sets.push(`allowed_capabilities = $${params.length}`);
+  }
+  if (sets.length === 0) {
+    const { rows } = await query(
+      `SELECT * FROM agents WHERE id = $1 AND tenant_id = $2`,
+      [agentId, tenantId]
+    );
+    return rows.length > 0 ? mapAgent(rows[0]) : undefined;
+  }
+  const { rows } = await query(
+    `UPDATE agents SET ${sets.join(", ")} WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+    params
+  );
+  return rows.length > 0 ? mapAgent(rows[0]) : undefined;
+}
+
+export async function deleteAgent(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string
+): Promise<boolean> {
+  const { rows } = await query(
+    `DELETE FROM agents WHERE id = $1 AND tenant_id = $2 RETURNING id`,
+    [agentId, tenantId]
+  );
+  return rows.length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Monitored Services
 // ---------------------------------------------------------------------------
@@ -290,7 +332,6 @@ export interface ServiceRow {
   id: string;
   tenantId: string;
   agentId: string | null;
-  workflowGraphId: string | null;
   name: string;
   gitRepoUrl: string;
   sshKeyId: string | null;
@@ -305,7 +346,6 @@ function mapService(r: Record<string, unknown>): ServiceRow {
     id: r.id as string,
     tenantId: r.tenant_id as string,
     agentId: (r.agent_id as string) ?? null,
-    workflowGraphId: (r.workflow_graph_id as string) ?? null,
     name: r.name as string,
     gitRepoUrl: r.git_repo_url as string,
     sshKeyId: (r.ssh_key_id as string) ?? null,
@@ -364,103 +404,4 @@ export async function createService(
     [id, tenantId, data.agentId ?? null, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null, data.agentRuntimeBackend ?? null],
   );
   return mapService(rows[0]);
-}
-
-export async function updateServiceWorkflow(
-  query: QueryFn,
-  tenantId: string,
-  serviceId: string,
-  workflowGraphId: string | null
-): Promise<ServiceRow | undefined> {
-  const { rows } = await query(
-    `UPDATE monitored_services
-     SET workflow_graph_id = $3
-     WHERE tenant_id = $1 AND id = $2
-     RETURNING *`,
-    [tenantId, serviceId, workflowGraphId]
-  );
-  if (rows.length === 0) {
-    return undefined;
-  }
-  return mapService(rows[0]);
-}
-
-// ---------------------------------------------------------------------------
-// Workflow Graphs
-// ---------------------------------------------------------------------------
-
-export interface WorkflowGraphRow {
-  id: string;
-  tenantId: string;
-  name: string;
-  version: number;
-  nodes: unknown[];
-  edges: unknown[];
-  isActive: boolean;
-}
-
-function mapWorkflowGraph(r: Record<string, unknown>): WorkflowGraphRow {
-  const graph =
-    typeof r.graph_json === "string"
-      ? JSON.parse(r.graph_json)
-      : (r.graph_json as { nodes: unknown[]; edges: unknown[] });
-  return {
-    id: r.id as string,
-    tenantId: r.tenant_id as string,
-    name: r.name as string,
-    version: Number(r.version),
-    nodes: graph.nodes ?? [],
-    edges: graph.edges ?? [],
-    isActive: Boolean(r.is_active),
-  };
-}
-
-export async function listWorkflowGraphs(
-  query: QueryFn,
-  tenantId: string,
-): Promise<WorkflowGraphRow[]> {
-  const { rows } = await query(
-    `SELECT * FROM workflow_graphs WHERE tenant_id = $1`,
-    [tenantId],
-  );
-  return rows.map(mapWorkflowGraph);
-}
-
-export async function getWorkflowGraph(
-  query: QueryFn,
-  tenantId: string,
-  workflowId: string
-): Promise<WorkflowGraphRow | undefined> {
-  const { rows } = await query(
-    `SELECT * FROM workflow_graphs WHERE tenant_id = $1 AND id = $2`,
-    [tenantId, workflowId]
-  );
-  if (rows.length === 0) {
-    return undefined;
-  }
-  return mapWorkflowGraph(rows[0]);
-}
-
-export async function createWorkflowGraph(
-  query: QueryFn,
-  tenantId: string,
-  data: { name: string; nodes: unknown[]; edges: unknown[] },
-): Promise<WorkflowGraphRow> {
-  const { rows: versionRows } = await query(
-    `SELECT COALESCE(MAX(version), 0) AS max_version
-     FROM workflow_graphs
-     WHERE tenant_id = $1 AND name = $2`,
-    [tenantId, data.name],
-  );
-  const nextVersion = Number(versionRows[0].max_version) + 1;
-
-  const id = crypto.randomUUID();
-  const graphJson = JSON.stringify({ nodes: data.nodes, edges: data.edges });
-  const { rows } = await query(
-    `INSERT INTO workflow_graphs (id, tenant_id, name, version, graph_json, is_active)
-     VALUES ($1, $2, $3, $4, $5, false)
-     RETURNING *`,
-    [id, tenantId, data.name, nextVersion, graphJson],
-  );
-  return mapWorkflowGraph(rows[0]);
 }

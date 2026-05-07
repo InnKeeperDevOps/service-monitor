@@ -67,35 +67,32 @@ describe("api lib", () => {
     ]);
   });
 
-  it("sends bearer token and json body for workflow create", async () => {
+  it("sends bearer token and json body for service create", async () => {
     localStorage.setItem("sm_token", "test-token");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
-      status: 200,
+      status: 201,
       json: async () => ({
-        id: "wf-1",
+        id: "svc-1",
         tenantId: "t-1",
-        serviceId: "svc-1",
-        version: 1,
-        nodes: [],
-        edges: [],
-        isActive: false
+        name: "svc",
+        gitRepoUrl: "https://github.com/x/y.git",
+        branch: "main",
+        agentId: null
       })
     } as Response);
 
-    // Mock original test
-    await api.createWorkflow({ name: "test", nodes: [], edges: [] });
+    await api.createService({ name: "svc", gitRepoUrl: "https://github.com/x/y.git", branch: "main" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:3001/api/v1/workflows");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:3001/api/v1/services");
     expect(fetchMock.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
           Authorization: "Bearer test-token",
           "Content-Type": "application/json"
-        }),
-        body: JSON.stringify({ name: "test", nodes: [], edges: [] })
+        })
       })
     );
   });
@@ -182,10 +179,6 @@ describe("api lib", () => {
       await api.listServices();
       await api.createService({ name: "svc1", gitRepoUrl: "url", branch: "main" });
       await api.updateService("svc1", { name: "svc1-new" });
-      await api.executeWorkflow({ name: "wf", serviceId: "svc1", nodes: [], edges: [] });
-      await api.dryRunWorkflow({ name: "wf", serviceId: "svc1", nodes: [], edges: [] });
-      await api.listWorkflows();
-      await api.setServiceWorkflow("svc1", "wf1");
       await api.getSettings();
       await api.updateSettings({ tenantId: "t1" });
       await api.listEnrollmentTokens();

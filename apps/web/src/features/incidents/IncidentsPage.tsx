@@ -139,8 +139,8 @@ function IncidentRow({
                 {inc.eventCount} event{inc.eventCount !== 1 ? "s" : ""}
               </div>
               <div style={{ display: "flex", gap: "1rem" }}>
-                <a href="#workflows" style={{ color: "var(--color-primary)", textDecoration: "none", fontWeight: 500 }}>
-                  View Workflow →
+                <a href="#agents" style={{ color: "var(--color-primary)", textDecoration: "none", fontWeight: 500 }}>
+                  View Agents →
                 </a>
                 <a href="#settings" style={{ color: "var(--color-primary)", textDecoration: "none", fontWeight: 500 }}>
                   Review GitHub Policy →

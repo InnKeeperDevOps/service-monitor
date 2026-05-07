@@ -19,7 +19,7 @@ Customer **agents** run on customer infrastructure and connect **outbound** to t
 - **TLS** end-to-end at the edge; terminate at LB or gateway per deployment.
 - **Agent identity**: enforce **token** or **mTLS** per product contract; rotate on compromise.
 - **Path isolation**: restrict agent WSS route exposure vs browser HTTPS (separate listener or strict routing).
-- **Egress from jobs**: workflow-driven **httpRequest** / webhooks run in **privileged** contexts—treat as **SSRF-sensitive**; allowlist where possible.
+- **Egress from jobs**: outbound HTTP requests and webhook deliveries run in **privileged** contexts—treat as **SSRF-sensitive**; allowlist where possible.
 
 ## Validation checks
 

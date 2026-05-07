@@ -12,6 +12,7 @@ const {
   getGithubAppSettings,
   updateGithubAppSettings,
   updateSettings,
+  listServices,
   clipboardWriteText
 } = vi.hoisted(() => ({
   createEnrollmentToken: vi.fn(),
@@ -24,6 +25,7 @@ const {
   getGithubAppSettings: vi.fn(),
   updateGithubAppSettings: vi.fn(),
   updateSettings: vi.fn(),
+  listServices: vi.fn(),
   clipboardWriteText: vi.fn()
 }));
 
@@ -72,7 +74,8 @@ vi.mock("../src/lib/api.js", () => ({
     createOAuthProvider,
     getGithubAppSettings,
     updateGithubAppSettings,
-    updateSettings
+    updateSettings,
+    listServices
   }
 }));
 
@@ -95,9 +98,11 @@ describe("SettingsPage enrollment token generation", () => {
     getGithubAppSettings.mockReset();
     updateGithubAppSettings.mockReset();
     updateSettings.mockReset();
+    listServices.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
+    listServices.mockResolvedValue({ services: [] });
     getGithubAppSettings.mockResolvedValue({
       appId: null,
       appSlug: null,
@@ -170,6 +175,57 @@ describe("SettingsPage enrollment token generation", () => {
 
     expect(createEnrollmentToken).not.toHaveBeenCalled();
     expect(await screen.findByText("Expiration must be in the future.")).toBeInTheDocument();
+  });
+
+  it("embeds the selected service id in the start command", async () => {
+    listServices.mockResolvedValue({
+      services: [
+        {
+          id: "svc-api-1",
+          tenantId: "t1",
+          name: "api-server",
+          gitRepoUrl: "https://github.com/acme/api.git",
+          branch: "main",
+          agentId: null
+        }
+      ]
+    });
+    createEnrollmentToken.mockResolvedValue({
+      id: "tok_meta_svc",
+      tenantId: "tenant_1",
+      token: "svc-token",
+      createdBy: "user_1",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      usedAt: null,
+      revokedAt: null,
+      isActive: true
+    });
+
+    render(<SettingsPage />);
+
+    const serviceSelect = (await screen.findByLabelText(
+      "Service this agent runs"
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "api-server (svc-api-1)" })
+      ).toBeInTheDocument();
+    });
+    fireEvent.change(serviceSelect, { target: { value: "svc-api-1" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate token" }));
+
+    await screen.findByText("svc-token");
+    expect(
+      await screen.findByText((text) =>
+        text.includes("SM_SERVICE_ID=svc-api-1") &&
+        text.includes("SM_ENROLLMENT_TOKEN=svc-token")
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Start command (bound to svc-api-1):")
+    ).toBeInTheDocument();
   });
 
   it("copies generated token to clipboard", async () => {
@@ -355,9 +411,11 @@ describe("SettingsPage authentication OAuth providers", () => {
     getGithubAppSettings.mockReset();
     updateGithubAppSettings.mockReset();
     updateSettings.mockReset();
+    listServices.mockReset();
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
     getSettings.mockResolvedValue(null);
     getAuthProviders.mockResolvedValue({ providers: [] });
+    listServices.mockResolvedValue({ services: [] });
     getGithubAppSettings.mockResolvedValue({
       appId: null,
       appSlug: null,

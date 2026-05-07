@@ -87,7 +87,7 @@ describe("IncidentsPage", () => {
     await waitFor(() => {
       // Details should be visible
       expect(screen.getByText("fingerprint1234567890")).toBeInTheDocument();
-      expect(screen.getByText("View Workflow →")).toBeInTheDocument();
+      expect(screen.getByText("View Agents →")).toBeInTheDocument();
     });
 
     // Click again to collapse

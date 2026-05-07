@@ -124,7 +124,6 @@ describe("AgentsPage", () => {
           repo: "o/r",
           branch: "main",
           agentId: "agent-1",
-          workflowGraphId: null,
           dockerImage: null,
           composePath: null
         }

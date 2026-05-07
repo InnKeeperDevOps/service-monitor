@@ -50,9 +50,9 @@ describe("worker runtime — queue wiring", () => {
   it("creates Redis and three named workers when Redis is enabled", () => {
     startQueueConsumersFromEnv({});
     expect(createRedisConnectionFromEnv).toHaveBeenCalledTimes(1);
-    expect(createNamedWorker).toHaveBeenCalledTimes(4);
+    expect(createNamedWorker).toHaveBeenCalledTimes(3);
     const keys = createNamedWorker.mock.calls.map((c) => c[0]);
-    expect(keys).toEqual(["remediation", "agentCommands", "workflowExecution", "logIngestion"]);
+    expect(keys).toEqual(["remediation", "agentCommands", "logIngestion"]);
   });
 
   it("remediation worker processor delegates to runRemediation", async () => {
@@ -183,15 +183,6 @@ describe("worker runtime — queue wiring", () => {
         fetchMock as unknown as typeof fetch
       )
     ).rejects.toThrow(/Agent command dispatch failed: 429/);
-  });
-
-  it("workflowExecution worker delegates to runWorkflow", async () => {
-    const mockConn = { quit: vi.fn() };
-    createRedisConnectionFromEnv.mockReturnValue(mockConn as never);
-    wireBullmqWorkers(mockConn as never);
-    const workerCall = createNamedWorker.mock.calls.find((c) => c[0] === "workflowExecution");
-    expect(workerCall).toBeDefined();
-    // we just check it was created
   });
 
   it("logIngestion worker processes log ingestion jobs", async () => {

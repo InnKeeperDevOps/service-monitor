@@ -237,25 +237,6 @@ paths:
           description: Unauthorized
         '403':
           description: Forbidden
-  /api/v1/workflows:
-    get:
-      operationId: listWorkflows
-      description: List workflows
-      responses:
-        '200':
-          description: Workflows
-        '401':
-          description: Unauthorized
-    post:
-      operationId: createWorkflow
-      description: Create a workflow
-      responses:
-        '201':
-          description: Created
-        '401':
-          description: Unauthorized
-        '403':
-          description: Forbidden
   /webhooks/github:
     post:
       operationId: postGithubWebhook

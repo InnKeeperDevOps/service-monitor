@@ -5,7 +5,6 @@ import {
   Box,
   Building2,
   Cpu,
-  GitBranch,
   Key,
   LayoutDashboard,
   LogOut,
@@ -19,7 +18,6 @@ import { ServicesPage } from "./features/services/ServicesPage.js";
 import { SettingsPage } from "./features/settings/SettingsPage.js";
 import { LoginPage } from "./features/auth/LoginPage.js";
 import { SetupWizardPage } from "./features/setup/SetupWizardPage.js";
-import { WorkflowEditorPage } from "./features/workflow-editor/WorkflowEditorPage.js";
 import { SshKeysPage } from "./features/ssh-keys/SshKeysPage.js";
 import { TenantsPage } from "./features/tenants/TenantsPage.js";
 import { TenantConfigurationPage } from "./features/tenants/TenantConfigurationPage.js";
@@ -36,7 +34,6 @@ type Route =
   | "agents"
   | "services"
   | "sshKeys"
-  | "workflows"
   | "settings"
   | "tenants"
   | "tenantConfig"
@@ -44,11 +41,10 @@ type Route =
 
 const NAV_ITEMS: { route: Route; label: string; icon: typeof LayoutDashboard; adminOnly?: boolean }[] = [
   { route: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { route: "incidents", label: "Incidents", icon: AlertTriangle },
-  { route: "services", label: "Services", icon: Box },
-  { route: "sshKeys", label: "SSH Keys", icon: Key as any },
   { route: "agents", label: "Agents", icon: Cpu },
-  { route: "workflows", label: "Workflows", icon: GitBranch },
+  { route: "services", label: "Services", icon: Box },
+  { route: "incidents", label: "Incidents", icon: AlertTriangle },
+  { route: "sshKeys", label: "SSH Keys", icon: Key as any },
   { route: "tenants", label: "Tenants", icon: Building2, adminOnly: true },
   { route: "settings", label: "Settings", icon: Settings, adminOnly: true }
 ];
@@ -66,7 +62,6 @@ function readNavFromHash(): { route: Route; tenantConfigTenantId: string | null 
     "agents",
     "services",
     "sshKeys",
-    "workflows",
     "settings",
     "tenants",
     "login"
@@ -271,7 +266,6 @@ function AppMain() {
           {route === "agents" && <AgentsPage />}
           {route === "services" && <ServicesPage />}
           {route === "sshKeys" && <SshKeysPage />}
-          {route === "workflows" && <WorkflowEditorPage />}
           {route === "tenants" && <TenantsPage onAuthUserUpdated={setUser} />}
           {route === "settings" && <SettingsPage />}
           {route === "tenantConfig" && tenantConfigTenantId && (
@@ -448,7 +442,7 @@ function DashboardPage() {
       </Card>
 
       <p style={{ color: "var(--color-text-secondary)", marginTop: "1.25rem" }}>
-        Navigate using the sidebar to manage incidents, services, agents, and workflows.
+        Navigate using the sidebar to manage agents, services, and incidents.
       </p>
     </section>
   );

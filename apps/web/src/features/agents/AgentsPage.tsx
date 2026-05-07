@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Cpu, RefreshCw } from "lucide-react";
+import { Cpu, Pencil, RefreshCw, Trash2, X, Check } from "lucide-react";
 import { api, type Agent, type MonitoredService } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
 import { Badge } from "../../components/Badge.js";
@@ -62,8 +62,12 @@ export function AgentsPage() {
   const [services, setServices] = useState<MonitoredService[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [secondsAgo, setSecondsAgo] = useState(0);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   const fetchData = useCallback(() => {
     setError(null);
@@ -111,6 +115,55 @@ export function AgentsPage() {
     return { liveWs, byStatus };
   }, [agents]);
 
+  const startEdit = useCallback((a: Agent) => {
+    setEditingId(a.id);
+    setEditName(a.name ?? "");
+    setActionError(null);
+  }, []);
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditName("");
+  }, []);
+
+  const saveEdit = useCallback(
+    async (agentId: string) => {
+      const trimmed = editName.trim();
+      setSavingId(agentId);
+      setActionError(null);
+      try {
+        await api.updateAgent(agentId, { name: trimmed === "" ? null : trimmed });
+        setEditingId(null);
+        setEditName("");
+        await fetchData();
+      } catch (e: unknown) {
+        setActionError((e as Error).message);
+      } finally {
+        setSavingId(null);
+      }
+    },
+    [editName, fetchData]
+  );
+
+  const deleteAgent = useCallback(
+    async (agentId: string, displayName: string) => {
+      if (!window.confirm(`Remove agent "${displayName}"? Any services bound to it will be detached.`)) {
+        return;
+      }
+      setSavingId(agentId);
+      setActionError(null);
+      try {
+        await api.deleteAgent(agentId);
+        await fetchData();
+      } catch (e: unknown) {
+        setActionError((e as Error).message);
+      } finally {
+        setSavingId(null);
+      }
+    },
+    [fetchData]
+  );
+
   return (
     <section>
       <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem", flexWrap: "wrap" }}>
@@ -130,6 +183,11 @@ export function AgentsPage() {
       {error && (
         <div style={{ color: "var(--color-danger)", marginBottom: "0.75rem" }} role="alert">
           {error}
+        </div>
+      )}
+      {actionError && (
+        <div style={{ color: "var(--color-danger)", marginBottom: "0.75rem" }} role="alert">
+          {actionError}
         </div>
       )}
 
@@ -212,6 +270,11 @@ export function AgentsPage() {
                 <th scope="col" style={thStyle}>
                   Services
                 </th>
+                {!isViewer && (
+                  <th scope="col" style={thStyle}>
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -221,17 +284,37 @@ export function AgentsPage() {
                 const displayName = a.name?.trim() || a.id;
                 const badgeVariant = AGENT_STATUS_BADGE[a.status] ?? "muted";
                 const live = a.websocketConnected === true;
+                const isEditing = editingId === a.id;
+                const isSaving = savingId === a.id;
                 return (
                   <tr key={a.id}>
                     <td style={tdStyle}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
                         <Cpu size={14} aria-hidden />
-                        <span>
-                          <span style={{ fontWeight: 600 }}>{displayName}</span>
-                          {a.name?.trim() ? (
-                            <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)" }}>{a.id}</div>
-                          ) : null}
-                        </span>
+                        {isEditing ? (
+                          <input
+                            aria-label={`Rename agent ${a.id}`}
+                            value={editName}
+                            onChange={(ev) => setEditName(ev.target.value)}
+                            disabled={isSaving}
+                            style={{
+                              padding: "0.25rem 0.4rem",
+                              fontSize: "0.85rem",
+                              background: "var(--color-surface)",
+                              color: "var(--color-text-primary)",
+                              border: "1px solid var(--color-border)",
+                              borderRadius: 4,
+                              minWidth: 180
+                            }}
+                          />
+                        ) : (
+                          <span>
+                            <span style={{ fontWeight: 600 }}>{displayName}</span>
+                            {a.name?.trim() ? (
+                              <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)" }}>{a.id}</div>
+                            ) : null}
+                          </span>
+                        )}
                       </span>
                     </td>
                     <td style={tdStyle}>
@@ -274,6 +357,53 @@ export function AgentsPage() {
                         "0"
                       )}
                     </td>
+                    {!isViewer && (
+                      <td style={{ ...tdStyle, fontSize: "0.85rem" }}>
+                        {isEditing ? (
+                          <span style={{ display: "inline-flex", gap: "0.35rem" }}>
+                            <Button
+                              size="sm"
+                              variant="primary"
+                              onClick={() => void saveEdit(a.id)}
+                              disabled={isSaving}
+                              aria-label={`Save name for agent ${a.id}`}
+                            >
+                              <Check size={14} /> Save
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={cancelEdit}
+                              disabled={isSaving}
+                              aria-label={`Cancel rename for agent ${a.id}`}
+                            >
+                              <X size={14} /> Cancel
+                            </Button>
+                          </span>
+                        ) : (
+                          <span style={{ display: "inline-flex", gap: "0.35rem" }}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => startEdit(a)}
+                              disabled={isSaving}
+                              aria-label={`Rename agent ${a.id}`}
+                            >
+                              <Pencil size={14} /> Rename
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => void deleteAgent(a.id, displayName)}
+                              disabled={isSaving}
+                              aria-label={`Remove agent ${a.id}`}
+                            >
+                              <Trash2 size={14} /> Remove
+                            </Button>
+                          </span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}

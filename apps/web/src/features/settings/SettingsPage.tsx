@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Settings, Key, GitBranch, Lock } from "lucide-react";
-import { api, type AuthProviderEntry, type OAuthProviderConfigPayload } from "../../lib/api.js";
+import { api, type AuthProviderEntry, type MonitoredService, type OAuthProviderConfigPayload } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
 
 const GOOGLE_OAUTH_DEFAULTS: Pick<OAuthProviderConfigPayload, "id" | "provider" | "authorizeUrl" | "tokenUrl" | "userInfoUrl" | "scopes"> = {
@@ -74,12 +74,14 @@ function toPresetExpiration(preset: EnrollmentTokenPreset): string {
   return formatDateTimeLocal(new Date(Date.now() + ENROLLMENT_PRESET_SECONDS[preset] * 1000));
 }
 
-function buildAgentStartCommand(token: string): string {
+export function buildAgentStartCommand(token: string, serviceId?: string | null): string {
   const realtimeUrl =
     typeof window === "undefined"
       ? "wss://your-kaiad.example.com/realtime"
       : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/realtime`;
-  return `SM_REALTIME_URL=${realtimeUrl} NODE_ENV=production SM_ENROLLMENT_TOKEN=${token} /usr/local/bin/agent`;
+  const trimmed = serviceId?.trim();
+  const serviceClause = trimmed ? `SM_SERVICE_ID=${trimmed} ` : "";
+  return `SM_REALTIME_URL=${realtimeUrl} NODE_ENV=production SM_ENROLLMENT_TOKEN=${token} ${serviceClause}/usr/local/bin/agent`;
 }
 
 export function SettingsPage() {
@@ -100,9 +102,12 @@ export function SettingsPage() {
   const [isSubmittingOAuth, setIsSubmittingOAuth] = useState(false);
 
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
+  const [services, setServices] = useState<MonitoredService[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<EnrollmentTokenPreset>("24h");
   const [expiresAtInput, setExpiresAtInput] = useState<string>(() => toPresetExpiration("24h"));
+  const [selectedServiceId, setSelectedServiceId] = useState<string>("");
+  const [latestServiceId, setLatestServiceId] = useState<string>("");
   const [isGeneratingToken, setIsGeneratingToken] = useState(false);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
   const [deactivatingTokenId, setDeactivatingTokenId] = useState<string | null>(null);
@@ -114,6 +119,7 @@ export function SettingsPage() {
   useEffect(() => {
     api.listEnrollmentTokens().then((r) => setTokens(r.tokens)).catch(() => {});
     api.getAuthProviders().then((r) => setAuthProviders(r.providers)).catch(() => {});
+    api.listServices().then((r) => setServices(r.services)).catch(() => {});
   }, []);
 
   async function handleGenerateEnrollmentToken() {
@@ -144,6 +150,7 @@ export function SettingsPage() {
       const { token, ...metadata } = created;
       setTokens((prev) => [metadata, ...prev]);
       setLatestToken(token);
+      setLatestServiceId(selectedServiceId);
       setError(null);
     } catch (e) {
       setTokenError((e as Error).message);
@@ -175,7 +182,7 @@ export function SettingsPage() {
       if (!navigator.clipboard?.writeText) {
         throw new Error("Clipboard API unavailable");
       }
-      await navigator.clipboard.writeText(buildAgentStartCommand(latestToken));
+      await navigator.clipboard.writeText(buildAgentStartCommand(latestToken, latestServiceId));
       setCommandCopyMessage("Copied command to clipboard.");
     } catch {
       setCommandCopyMessage("Unable to copy command automatically.");
@@ -533,6 +540,25 @@ export function SettingsPage() {
               style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.35rem 0.45rem", background: "var(--color-surface)", color: "var(--color-text-primary)" }}
             />
           </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.8rem" }}>
+            <span style={{ color: "var(--color-text-secondary)" }}>Service this agent runs</span>
+            <select
+              aria-label="Service this agent runs"
+              value={selectedServiceId}
+              onChange={(e) => setSelectedServiceId(e.target.value)}
+              disabled={services.length === 0}
+              style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.35rem 0.45rem", background: "var(--color-surface)", color: "var(--color-text-primary)", minWidth: 220 }}
+            >
+              <option value="">
+                {services.length === 0 ? "No services configured" : "Unbound (no service)"}
+              </option>
+              {services.map((svc) => (
+                <option key={svc.id} value={svc.id}>
+                  {svc.name} ({svc.id})
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             onClick={() => void handleGenerateEnrollmentToken()}
             disabled={isGeneratingToken}
@@ -581,10 +607,10 @@ export function SettingsPage() {
             </div>
             <div style={{ marginTop: "0.65rem" }}>
               <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", marginBottom: "0.35rem" }}>
-                Start command:
+                Start command{latestServiceId ? ` (bound to ${latestServiceId})` : ""}:
               </div>
               <code style={{ display: "block", fontSize: "0.8rem", wordBreak: "break-all" }}>
-                {buildAgentStartCommand(latestToken)}
+                {buildAgentStartCommand(latestToken, latestServiceId)}
               </code>
               <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                 <button

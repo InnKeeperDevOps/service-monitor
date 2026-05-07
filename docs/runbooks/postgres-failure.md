@@ -6,7 +6,7 @@ nav_order: 2
 
 # PostgreSQL failure
 
-PostgreSQL is the **system of record** for tenants, RBAC, incidents, workflows, and audit-related state.
+PostgreSQL is the **system of record** for tenants, RBAC, incidents, agents, services, and audit-related state.
 
 ## Symptoms
 
@@ -32,4 +32,4 @@ PostgreSQL is the **system of record** for tenants, RBAC, incidents, workflows, 
 - `psql` or admin SQL from an app host succeeds with the same creds as the API/worker.
 - Migrations applied to expected version; API **readiness** passes.
 - Spot-check **tenant-scoped** read/write in staging or a safe canary query.
-- Worker can **complete** a job that touches Postgres (incident update, workflow step).
+- Worker can **complete** a job that touches Postgres (incident update, agent command).

@@ -4,9 +4,6 @@ import type {
   Incident,
   IncidentStatus,
   MonitoredService,
-  WorkflowGraph,
-  WorkflowGraphNode,
-  WorkflowGraphEdge,
   SshKey
 } from "@sm/contracts";
 
@@ -23,6 +20,13 @@ export type DomainStore = {
     data: { agentId: string; version: string | null },
   ): Promise<void>;
   markAgentOffline(tenantId: string, agentId: string): Promise<void>;
+  /** Tenant-scoped administrative metadata update (rename, capability allow-list). */
+  updateAgent(
+    tenantId: string,
+    agentId: string,
+    data: { name?: string | null; allowedCapabilities?: string[] }
+  ): Promise<Agent | undefined>;
+  deleteAgent(tenantId: string, agentId: string): Promise<boolean>;
 
   listSshKeys(tenantId: string): Promise<SshKey[]>;
   createSshKey(
@@ -51,22 +55,12 @@ export type DomainStore = {
       agentRuntimeBackend?: "docker" | "kubernetes" | "shell";
     }
   ): Promise<MonitoredService>;
-  updateServiceWorkflow(
-    tenantId: string,
-    serviceId: string,
-    workflowGraphId: string | null
-  ): Promise<MonitoredService | undefined>;
   deleteService(tenantId: string, id: string): Promise<boolean>;
-
-  listWorkflowGraphs(tenantId: string): Promise<WorkflowGraph[]>;
-  getWorkflowGraph(tenantId: string, workflowId: string): Promise<WorkflowGraph | undefined>;
-  createWorkflowGraph(tenantId: string, data: { name: string; nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] }): Promise<WorkflowGraph>;
 };
 
 const incidents = new Map<string, Incident>();
 const agents = new Map<string, Agent>();
 const services = new Map<string, MonitoredService>();
-const workflows = new Map<string, WorkflowGraph>();
 const sshKeys = new Map<string, SshKey>();
 
 function uid(): string {
@@ -146,6 +140,31 @@ export function createMemoryDomainStore(): DomainStore {
       agents.set(agentId, { ...a, status: "offline" });
     },
 
+    async updateAgent(tenantId, agentId, data) {
+      const a = agents.get(agentId);
+      if (!a || a.tenantId !== tenantId) return undefined;
+      const next: Agent = {
+        ...a,
+        name: data.name === undefined ? a.name : data.name,
+        allowedCapabilities:
+          data.allowedCapabilities === undefined ? a.allowedCapabilities : [...data.allowedCapabilities]
+      };
+      agents.set(agentId, next);
+      return next;
+    },
+
+    async deleteAgent(tenantId, agentId) {
+      const a = agents.get(agentId);
+      if (!a || a.tenantId !== tenantId) return false;
+      agents.delete(agentId);
+      for (const [svcId, svc] of services.entries()) {
+        if (svc.tenantId === tenantId && svc.agentId === agentId) {
+          services.set(svcId, { ...svc, agentId: null });
+        }
+      }
+      return true;
+    },
+
     async listSshKeys(tenantId) {
       return [...sshKeys.values()].filter((k) => k.tenantId === tenantId);
     },
@@ -182,7 +201,6 @@ export function createMemoryDomainStore(): DomainStore {
         id: `svc-${uid()}`,
         tenantId,
         agentId: data.agentId ?? null,
-        workflowGraphId: null,
         name: data.name,
         gitRepoUrl: data.gitRepoUrl,
         sshKeyId: data.sshKeyId ?? null,
@@ -194,43 +212,11 @@ export function createMemoryDomainStore(): DomainStore {
       services.set(svc.id, svc);
       return svc;
     },
-    async updateServiceWorkflow(tenantId, serviceId, workflowGraphId) {
-      const svc = services.get(serviceId);
-      if (!svc || svc.tenantId !== tenantId) return undefined;
-      svc.workflowGraphId = workflowGraphId;
-      return svc;
-    },
     async deleteService(tenantId, id) {
       const svc = services.get(id);
       if (!svc || svc.tenantId !== tenantId) return false;
       services.delete(id);
       return true;
-    },
-
-    async listWorkflowGraphs(tenantId) {
-      return [...workflows.values()].filter((w) => w.tenantId === tenantId);
-    },
-    async getWorkflowGraph(tenantId, workflowId) {
-      const workflow = workflows.get(workflowId);
-      if (!workflow || workflow.tenantId !== tenantId) return undefined;
-      return workflow;
-    },
-    async createWorkflowGraph(tenantId, data) {
-      const existing = [...workflows.values()].filter(
-        (w) => w.tenantId === tenantId && w.name === data.name
-      );
-      const nextVersion = existing.length > 0 ? Math.max(...existing.map((w) => w.version)) + 1 : 1;
-      const wg: WorkflowGraph = {
-        id: `wf-${uid()}`,
-        tenantId,
-        name: data.name,
-        version: nextVersion,
-        nodes: data.nodes,
-        edges: data.edges,
-        isActive: false
-      };
-      workflows.set(wg.id, wg);
-      return wg;
     }
   };
 }
@@ -239,7 +225,6 @@ export function __resetDomainStoreForTests(): void {
   incidents.clear();
   agents.clear();
   services.clear();
-  workflows.clear();
   sshKeys.clear();
 }
 

@@ -42,7 +42,6 @@ describe("db schema", () => {
       expect(coreSchemaSql).toContain("branch text not null");
       expect(coreSchemaSql).toContain("docker_image text");
       expect(coreSchemaSql).toContain("compose_path text");
-      expect(coreSchemaSql).toContain("workflow_graph_id");
     });
 
     it("defines service_runs with tenant, service, agent FKs and state check", () => {
@@ -55,12 +54,11 @@ describe("db schema", () => {
       expect(coreSchemaSql).toContain("last_heartbeat_at");
     });
 
-    it("defines workflow_graphs with tenant, name, version, graph_json jsonb, is_active", () => {
-      expect(coreSchemaSql).toContain("create table if not exists workflow_graphs");
-      expect(coreSchemaSql).toContain("name text not null");
-      expect(coreSchemaSql).toContain("graph_json jsonb");
-      expect(coreSchemaSql).toContain("is_active");
-      expect(coreSchemaSql).toMatch(/version (integer|text) not null/);
+    it("drops legacy workflow_graphs table and workflow_graph_id column", () => {
+      expect(coreSchemaSql).toContain("drop table if exists workflow_graphs");
+      expect(coreSchemaSql).toContain(
+        "alter table monitored_services drop column if exists workflow_graph_id"
+      );
     });
 
     it("defines incidents with tenant, service FK, fingerprint, status check, seen timestamps", () => {

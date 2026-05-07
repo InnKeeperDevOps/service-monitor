@@ -16,20 +16,19 @@ User-defined Cursor **User Rules** take precedence if anything conflicts.
 Two recovery flows:
 
 1. **Crash recovery** — when a managed server process crashes, a Cursor or Claude CLI session is started against the error logs, a fix is produced and committed to `main`, and the agent restarts the server.
-2. **Error-log fix** — when a non-fatal error is written to logs, a fix job is queued via Redis/BullMQ. The same CLI agent picks it up, commits a fix to `main`, and the workflow restarts the process.
+2. **Error-log fix** — when a non-fatal error is written to logs, a fix job is queued via Redis/BullMQ. The same CLI agent picks it up, commits a fix to `main`, and the platform restarts the process.
 
 Both flows close the loop by instructing the agent that owns the server process to restart it.
 
 ### Description
 
-Kaiad is a **multi-tenant control plane** with a customer-managed **outbound Go agent**. Tenants install the Go agent on their own infrastructure; the agent connects outbound over WSS (TLS WebSocket) to the hosted control plane. The control plane sends `AgentCommand` messages down that channel — shell execution, workflow steps, GitHub operations, and CLI-agent invocations — and receives telemetry and log streams back up.
+Kaiad is a **multi-tenant control plane** with a customer-managed **outbound Go agent**. Tenants install the Go agent on their own infrastructure; the agent connects outbound over WSS (TLS WebSocket) to the hosted control plane. The control plane sends `AgentCommand` messages down that channel — shell execution, GitHub operations, and CLI-agent invocations — and receives telemetry and log streams back up.
 
 Key platform capabilities:
 
 - **Service monitoring** — tenants register services; the agent streams Docker container logs and lifecycle events to the control plane.
 - **Incident deduplication** — the API fingerprints incoming errors and deduplicates incidents so repeated log noise produces one remediation job.
-- **Workflow engine** — a React Flow-based graph editor lets tenants define automation workflows (triggers, shell commands, HTTP requests, Slack notifications, branch conditions). Workflows are stored as graph JSON and executed by the agent via `sm-workflow-exec`.
-- **AI-assisted remediation** — worker jobs enqueue Cursor CLI or Claude CLI runs on the agent's host; the runner applies fixes, commits to `main`, and the workflow restarts the server.
+- **AI-assisted remediation** — worker jobs enqueue Cursor CLI or Claude CLI runs on the agent's host; the runner applies fixes, commits to `main`, and the platform restarts the server.
 - **GitHub App integration** — the control plane can clone repos, open PRs, push branches, and trigger GitHub Actions workflow dispatches under tenant policy (allowlisted repos, branches, and actions; fully audited).
 - **Multi-tenant session model** — users belong to one or more tenants with RBAC roles (owner, admin, viewer). Session tenant is switchable via `/session/active-tenant`; all settings and agent data are tenant-scoped.
 - **First-run setup wizard** — a guided web UI configures Postgres, Redis, the first admin account, GitHub App credentials, optional OAuth (Google), and optional Kubernetes metadata; persisted to `kaiad.config.json` with environment variable precedence.
@@ -44,14 +43,13 @@ Key platform capabilities:
 - **Services page** — list and manage monitored services per tenant.
 - **Connected Agents page** — table of enrolled agents with live WebSocket presence (`websocketConnected`), status, version, capabilities, and linked service count.
 - **Tenants page** — list tenant memberships with role; gear icon opens per-tenant configuration (Automation Policy, Executors, kill switch).
-- **Workflow editor** — React Flow canvas for building, saving, and running automation graphs (node types: trigger, runShell, httpRequest, slackNotify, branchIf, etc.).
 - **Settings page** — authentication providers (OAuth), enrollment tokens, GitHub App credentials (App ID, PEM, webhook secret).
 - **Setup wizard** — first-run multi-step wizard (infra, admin, GitHub App, optional OAuth, optional webhook tenant, optional Kubernetes metadata).
 - **Design system** — Control Slate tokens, Lucide icons, semantic CSS/Tailwind, role-aware information architecture.
 
 #### `apps/api` — Fastify HTTP API + WebSocket gateway (port 3001)
 
-- **REST API** (`/api/v1/*`) — CRUD for tenants, services, agents, incidents, enrollment tokens, workflows, settings, GitHub App config, and setup wizard routes.
+- **REST API** (`/api/v1/*`) — CRUD for tenants, services, agents (including agent rename/remove), incidents, enrollment tokens, settings, GitHub App config, and setup wizard routes.
 - **Realtime gateway** (`/realtime` WebSocket) — bidirectional channel for the Go agent: receives telemetry and log frames up; pushes `AgentCommand` messages down. Managed by `RealtimeManager`.
 - **Auth** — session cookies, Postgres-backed auth store after setup (memory store in dev/tests), OAuth callback handler, RBAC middleware.
 - **Setup routes** — minimal bootstrap surface before setup completes (`/api/v1/setup/*`); full routes promoted via hot reload after wizard finishes.
@@ -64,7 +62,6 @@ Key platform capabilities:
 
 - **Remediation jobs** — dequeue error/incident jobs and dispatch Cursor CLI or Claude CLI commands to the connected agent.
 - **GitHub jobs** — clone, PR, push, workflow dispatch under tenant GitHub App installation tokens.
-- **Workflow execution jobs** — enqueue `sm-workflow-exec` shell commands on the agent.
 - **Health server** — lightweight HTTP on port 9090 (`/health`) for independent probing in multi-container deployments.
 - **Standalone or embedded** — runs as its own process in the default Compose stack; can be embedded in `apps/api` via `SM_EMBED_WORKER=1` for single-container deployments.
 
@@ -72,7 +69,7 @@ Key platform capabilities:
 
 - **Outbound WebSocket connection** — connects to the control plane's `/realtime` endpoint using an enrollment token; maintains a persistent, backpressure-aware channel with exponential reconnect backoff.
 - **Docker lifecycle monitoring** — watches Docker container start/stop/crash events and streams logs to the control plane.
-- **Command execution** — receives `AgentCommand` frames and dispatches: shell commands, workflow executor (`sm-workflow-exec`), Cursor CLI or Claude CLI runner invocations.
+- **Command execution** — receives `AgentCommand` frames and dispatches: shell commands, Cursor CLI or Claude CLI runner invocations.
 - **AI-agent runner** — launches Cursor or Claude CLI in an isolated job context with the error log as input; captures the fix, commits to `main`, then signals the control plane to restart the server.
 - **Credential persistence** — supports file-backed enrollment credentials (`SM_AGENT_PERSIST_CREDENTIALS=1`); production requires explicit `SM_ENROLLMENT_TOKEN`.
 - **Enrollment** — registers with the control plane on first connect; token lifecycle is Postgres-durable (no in-memory-only tokens in production).
@@ -82,10 +79,9 @@ Key platform capabilities:
 | Package | Purpose |
 |---------|---------|
 | `contracts` | Zod schemas for HTTP request/response, WebSocket frames, BullMQ job payloads, and OpenAPI output. Single source of truth across api, worker, web, and agent. |
-| `domain` | Business logic types and validation (workflow graph, service, incident rules). |
-| `db` | Drizzle ORM schema (`tenants`, `users`, `sessions`, `tenant_memberships`, `monitored_services`, `agents`, `incidents`, `workflow_graphs`, etc.) and query helpers. |
+| `domain` | Business logic types and validation (service, incident, deduplication, detector rules). |
+| `db` | Drizzle ORM schema (`tenants`, `users`, `sessions`, `tenant_memberships`, `monitored_services`, `agents`, `incidents`, etc.) and query helpers. |
 | `queue` | BullMQ queue definitions, job payload types, and shared Redis client factory. |
-| `workflow-engine` | DAG executor for workflow graphs: parallel branches, join nodes, conditional branching, step result tracking. |
 | `config` | Shared Zod-validated runtime configuration types (`kaiad.config.json` shape, env merging helpers). |
 | `github` | GitHub App client wrappers (installation tokens, repo clone/PR/dispatch helpers) shared by api and worker. |
 | `eslint-config` | Repo-wide ESLint preset (`@sm/eslint-config`, uses `eslint-plugin-import-x`). |
@@ -138,7 +134,7 @@ Run from the repo root with `pnpm <script>`:
 | `docker-compose-touch-gate.mdc` | Touching any compose file triggers the `docker-compose-change-gate` skill. |
 | `commit-requires-coverage-enforcer.mdc` | Commits must keep the 80% coverage gate green. |
 | `verification-before-stopping-code-changes.mdc` | Build + tests required before declaring code work done. |
-| `ui-verification-gate.mdc` | UI / API / workflow changes verified at https://panel.dev.kaiad.dev before completion. |
+| `ui-verification-gate.mdc` | UI / API behavior changes verified at https://panel.dev.kaiad.dev before completion. |
 | `ui-api-layer.mdc` | `apps/web` must call the API only via the typed client layer (no inline `fetch`). |
 | `error-handling-must-throw-and-log.mdc` | No silent catches; throw + log structured errors. |
 | `no-destructive-git.mdc` | Forbid force-push, history rewrites, and similar destructive operations. |
@@ -259,7 +255,7 @@ sequenceDiagram
     RD->>CP: job dequeued by worker
     CP->>RM: getConnectedAgentIds
     RM-->>CP: agent socket ref
-    CP->>A: AgentCommand (shell / workflow / CLI)
+    CP->>A: AgentCommand (shell / CLI)
     A-->>CP: ack / result frame
   end
 
@@ -326,37 +322,30 @@ sequenceDiagram
   A->>MS: restart process
 ```
 
-#### Workflow execution flow
+#### Agent administration flow
 
 ```mermaid
 flowchart LR
   subgraph web [apps/web]
-    Editor[Workflow editor React Flow]
+    AgentsUI[Agents page (rename / remove)]
   end
 
   subgraph api [apps/api]
-    Save[POST /api/v1/workflows]
-    Exec[POST /api/v1/workflows/:id/execute]
-    PG2[(graph_json in Postgres)]
+    List[GET /api/v1/agents]
+    Detail[GET /api/v1/agents/:id]
+    Patch[PATCH /api/v1/agents/:id]
+    Del[DELETE /api/v1/agents/:id]
+    PG2[(agents table in Postgres)]
+    RT[RealtimeManager session map]
   end
 
-  subgraph worker [apps/worker]
-    Job[workflow-exec BullMQ job]
-  end
-
-  subgraph agent [apps/agent]
-    Cmd[sm-workflow-exec]
-    Engine[workflow-engine DAG executor]
-  end
-
-  Editor -->|save graph| Save
-  Save --> PG2
-  Editor -->|trigger run| Exec
-  Exec -->|enqueue| Job
-  Job -->|AgentCommand| Cmd
-  Cmd -->|fetch graph| PG2
-  Cmd --> Engine
-  Engine -->|runShell / httpRequest / slackNotify / branchIf| agent
+  AgentsUI --> List
+  AgentsUI --> Detail
+  AgentsUI --> Patch
+  AgentsUI --> Del
+  Patch --> PG2
+  Del --> PG2
+  Del -->|disconnectAgent| RT
 ```
 
 #### Multi-tenant session and settings scope

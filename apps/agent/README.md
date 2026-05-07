@@ -20,6 +20,7 @@ Optional flags: `-token <secret>` (requires `?token=` on the WebSocket URL; set 
 
 - Primary transport: TLS WebSocket (`SM_REALTIME_URL`).
 - **Stateless by default:** the agent does **not** read or write enrollment credentials on disk. Supply `SM_ENROLLMENT_TOKEN`, `SM_AGENT_ID`, and `SM_REALTIME_URL` from the environment on every run (for example Kubernetes secrets). Set **`SM_AGENT_PERSIST_CREDENTIALS=1`** only if you intentionally want the legacy file at `SM_CREDENTIAL_PATH` (default `~/.service-monitor/agent-credential.json`) for load/save across restarts.
+- **Service binding:** when an admin generates an enrollment token in the panel and picks a service, the start command bakes in **`SM_SERVICE_ID=<service-id>`**. With this env var set, the agent pins every log frame it emits to that tenant-scoped service id (overriding the per-container name heuristic). Leave it unset for hosts that should expose multiple services and rely on container-name routing.
 - In production (`NODE_ENV=production`), the agent fails closed unless `SM_ENROLLMENT_TOKEN` is set (persisted credentials are ignored unless `SM_AGENT_PERSIST_CREDENTIALS=1`).
 - mTLS lifecycle remains a documented hardening path.
 - **`run_toolchain`** — run `python3`, `java` (jar), `node`, `go`, `php`, `typescript`, `rust`, `swift`, or `kotlin` against a file path (see [ARCHITECTURE.md](ARCHITECTURE.md)); optional env overrides **`SM_TYPESCRIPT_RUNNER`**, **`SM_KOTLIN_RUNNER`**.

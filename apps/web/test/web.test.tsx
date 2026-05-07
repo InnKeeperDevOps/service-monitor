@@ -69,7 +69,7 @@ describe("web app", () => {
     expect(hrefs).toContain("#incidents");
     expect(hrefs).toContain("#agents");
     expect(hrefs).toContain("#services");
-    expect(hrefs).toContain("#workflows");
+    expect(hrefs).toContain("#sshKeys");
     expect(hrefs).toContain("#settings");
   });
 

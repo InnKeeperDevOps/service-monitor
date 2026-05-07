@@ -12,9 +12,6 @@ import {
   createEnrollmentTokenRequestSchema,
   createEnrollmentTokenResponseSchema,
   createMonitoredServiceRequestSchema,
-  executeWorkflowRequestSchema,
-  executeWorkflowResponseSchema,
-  createWorkflowGraphRequestSchema,
   enrollmentTokenMetadataSchema,
   healthResponseSchema,
   incidentSchema,
@@ -23,7 +20,6 @@ import {
   listEnrollmentTokensResponseSchema,
   listIncidentsResponseSchema,
   listMonitoredServicesResponseSchema,
-  listWorkflowGraphsResponseSchema,
   logIngestionJobSchema,
   meResponseSchema,
   monitoredServiceSchema,
@@ -31,10 +27,7 @@ import {
   remediationJobSchema,
   tenantSettingsSchema,
   updateIncidentStatusRequestSchema,
-  upsertTenantSettingsRequestSchema,
-  workflowGraphEdgeSchema,
-  workflowGraphNodeSchema,
-  workflowGraphSchema
+  upsertTenantSettingsRequestSchema
 } from "../src/index.js";
 
 const iso = "2026-01-01T00:00:00.000Z";
@@ -347,180 +340,6 @@ describe("http.ts", () => {
 
     it("rejects empty object", () => {
       expect(() => updateIncidentStatusRequestSchema.parse({})).toThrow();
-    });
-  });
-
-  describe("workflowGraphNodeSchema", () => {
-    it("accepts node with type and kind", () => {
-      expect(() =>
-        workflowGraphNodeSchema.parse({
-          id: "n1",
-          type: "action",
-          kind: "runShell",
-          data: { label: "Build" }
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects missing kind", () => {
-      expect(() => workflowGraphNodeSchema.parse({ id: "n1", type: "action" })).toThrow();
-    });
-  });
-
-  describe("workflowGraphEdgeSchema", () => {
-    it("accepts edge", () => {
-      expect(() =>
-        workflowGraphEdgeSchema.parse({ from: "a", to: "b" })
-      ).not.toThrow();
-    });
-
-    it("rejects missing to", () => {
-      expect(() => workflowGraphEdgeSchema.parse({ from: "a" })).toThrow();
-    });
-  });
-
-  describe("workflowGraphSchema", () => {
-    const baseNodes = [{ id: "n1", type: "event", kind: "onCrash" }];
-    const baseEdges = [{ from: "n1", to: "n2" }];
-
-    it("accepts graph", () => {
-      expect(() =>
-        workflowGraphSchema.parse({
-          id: "g-1",
-          tenantId: "t-1",
-          name: "wf",
-          version: 1,
-          nodes: baseNodes,
-          edges: baseEdges,
-          isActive: true
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects non-positive version", () => {
-      expect(() =>
-        workflowGraphSchema.parse({
-          id: "g-1",
-          tenantId: "t-1",
-          name: "wf",
-          version: 0,
-          nodes: baseNodes,
-          edges: baseEdges,
-          isActive: false
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("workflowGraphNodeSchema trigger data rules", () => {
-    it("accepts onSchedule with schedule", () => {
-      expect(() =>
-        workflowGraphNodeSchema.parse({
-          id: "n1",
-          type: "event",
-          kind: "onSchedule",
-          data: { schedule: "*/5 * * * *" }
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects onCrash with schedule", () => {
-      expect(() =>
-        workflowGraphNodeSchema.parse({
-          id: "n1",
-          type: "event",
-          kind: "onCrash",
-          data: { schedule: "*/5 * * * *" }
-        })
-      ).toThrow();
-    });
-
-    it("rejects onLogPattern without filter", () => {
-      expect(() =>
-        workflowGraphNodeSchema.parse({
-          id: "n1",
-          type: "event",
-          kind: "onLogPattern",
-          data: {}
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("createWorkflowGraphRequestSchema", () => {
-    it("accepts create request", () => {
-      expect(() =>
-        createWorkflowGraphRequestSchema.parse({
-          name: "wf-name",
-          nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
-          edges: []
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects missing name", () => {
-      expect(() =>
-        createWorkflowGraphRequestSchema.parse({
-          nodes: [],
-          edges: []
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("listWorkflowGraphsResponseSchema", () => {
-    it("accepts graphs list", () => {
-      expect(() =>
-        listWorkflowGraphsResponseSchema.parse({
-          graphs: [
-            {
-              id: "g-1",
-              tenantId: "t-1",
-              name: "wf-name",
-              version: 1,
-              nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
-              edges: [],
-              isActive: true
-            }
-          ]
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects invalid graph entry", () => {
-      expect(() =>
-        listWorkflowGraphsResponseSchema.parse({
-          graphs: [{ id: "g-1" }]
-        })
-      ).toThrow();
-    });
-  });
-
-  describe("executeWorkflowRequestSchema", () => {
-    it("accepts execute request payload", () => {
-      expect(() =>
-        executeWorkflowRequestSchema.parse({
-          serviceId: "svc-1",
-          name: "wf-name",
-          nodes: [{ id: "n1", type: "event", kind: "onCrash" }],
-          edges: []
-        })
-      ).not.toThrow();
-    });
-  });
-
-  describe("executeWorkflowResponseSchema", () => {
-    it("accepts execute response payload", () => {
-      expect(() =>
-        executeWorkflowResponseSchema.parse({
-          accepted: true,
-          workflowId: "wf-1",
-          workflowVersion: 2,
-          agentId: "a-1",
-          commandId: "cmd-1",
-          dispatchState: "queued_for_dispatch"
-        })
-      ).not.toThrow();
     });
   });
 

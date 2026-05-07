@@ -15,8 +15,8 @@ import {
   getSshKey,
   createSshKey,
   deleteSshKey,
-  listWorkflowGraphs,
-  createWorkflowGraph,
+  updateAgent,
+  deleteAgent,
   type QueryFn,
 } from "../src/queries.js";
 
@@ -365,7 +365,6 @@ describe("listServices", () => {
         id: "s1",
         tenantId: "t1",
         agentId: "a1",
-        workflowGraphId: null,
         name: "web",
         gitRepoUrl: "r",
         sshKeyId: "k1",
@@ -416,97 +415,67 @@ describe("createService", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Workflow Graphs
+// Agent admin
 // ---------------------------------------------------------------------------
 
-describe("listWorkflowGraphs", () => {
-  it("parses graph_json into nodes and edges", async () => {
+describe("updateAgent", () => {
+  it("updates name when provided", async () => {
     const query = mockQuery([
       {
-        id: "wf1",
+        id: "a1",
         tenant_id: "t1",
-        name: "wf",
-        version: 2,
-        graph_json: { nodes: [{ id: "n1", type: "check" }], edges: [{ from: "n1", to: "n2" }] },
-        is_active: true,
+        name: "renamed",
+        version: "1.0.0",
+        status: "online",
+        last_seen_at: null,
+        cert_fingerprint: null,
+        allowed_capabilities: [],
       },
     ]);
-    const result = await listWorkflowGraphs(query, "t1");
-    expect(result).toEqual([
-      {
-        id: "wf1",
-        tenantId: "t1",
-        name: "wf",
-        version: 2,
-        nodes: [{ id: "n1", type: "check" }],
-        edges: [{ from: "n1", to: "n2" }],
-        isActive: true,
-      },
-    ]);
+    const result = await updateAgent(query, "t1", "a1", { name: "renamed" });
+    expect(result?.name).toBe("renamed");
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE agents SET name = $3"),
+      ["a1", "t1", "renamed"]
+    );
   });
 
-  it("handles string graph_json", async () => {
+  it("falls back to a SELECT when no fields are provided", async () => {
     const query = mockQuery([
       {
-        id: "wf1",
+        id: "a1",
         tenant_id: "t1",
-        name: "wf",
-        version: 1,
-        graph_json: JSON.stringify({ nodes: [], edges: [] }),
-        is_active: false,
+        name: "existing",
+        version: null,
+        status: "online",
+        last_seen_at: null,
       },
     ]);
-    const result = await listWorkflowGraphs(query, "t1");
-    expect(result[0].nodes).toEqual([]);
-    expect(result[0].edges).toEqual([]);
+    const result = await updateAgent(query, "t1", "a1", {});
+    expect(result?.name).toBe("existing");
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("SELECT * FROM agents"),
+      ["a1", "t1"]
+    );
+  });
+
+  it("returns undefined when not found", async () => {
+    const query = mockQuery([]);
+    const result = await updateAgent(query, "t1", "missing", { name: "x" });
+    expect(result).toBeUndefined();
   });
 });
 
-describe("createWorkflowGraph", () => {
-  it("calculates next version from MAX", async () => {
-    const query = sequentialQuery(
-      [{ max_version: 3 }],
-      [
-        {
-          id: "wf-new",
-          tenant_id: "t1",
-          name: "wf",
-          version: 4,
-          graph_json: { nodes: [{ id: "n1", type: "t" }], edges: [] },
-          is_active: false,
-        },
-      ],
-    );
-    const result = await createWorkflowGraph(query, "t1", {
-      name: "wf",
-      nodes: [{ id: "n1", type: "t" }],
-      edges: [],
-    });
-    expect(result.version).toBe(4);
-    expect(result.isActive).toBe(false);
-    const insertCall = (query as ReturnType<typeof vi.fn>).mock.calls[1];
-    expect(insertCall[1]).toContain(4);
+describe("deleteAgent", () => {
+  it("returns true when row deleted", async () => {
+    const query = mockQuery([{ id: "a1" }]);
+    const result = await deleteAgent(query, "t1", "a1");
+    expect(result).toBe(true);
   });
 
-  it("starts at version 1 when no prior graphs", async () => {
-    const query = sequentialQuery(
-      [{ max_version: 0 }],
-      [
-        {
-          id: "wf-first",
-          tenant_id: "t1",
-          name: "wf",
-          version: 1,
-          graph_json: { nodes: [], edges: [] },
-          is_active: false,
-        },
-      ],
-    );
-    const result = await createWorkflowGraph(query, "t1", {
-      name: "wf",
-      nodes: [],
-      edges: [],
-    });
-    expect(result.version).toBe(1);
+  it("returns false when no row matched", async () => {
+    const query = mockQuery([]);
+    const result = await deleteAgent(query, "t1", "missing");
+    expect(result).toBe(false);
   });
 });
