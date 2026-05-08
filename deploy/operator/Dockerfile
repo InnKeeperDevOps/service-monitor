@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build the kaiad-operator manager binary.
-FROM golang:1.24 AS build
+FROM golang:1.26 AS build
 WORKDIR /workspace
 
 # Copy go.mod / go.sum first to maximize layer caching.

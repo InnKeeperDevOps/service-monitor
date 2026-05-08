@@ -191,8 +191,11 @@ func TestReconcile_CreatesDeploymentAndRBAC(t *testing.T) {
 	if !hasCondition(updated, conditionReady, metav1.ConditionFalse) {
 		t.Error("Ready=False expected (deployment not ready in fake client)")
 	}
-	if updated.Status.EnrolledAgentID != "agt-1" {
-		t.Errorf("EnrolledAgentID = %q, want agt-1", updated.Status.EnrolledAgentID)
+	// Operator pins enrolledAgentId to its locally-computed kagent-<uid> form
+	// (the mint response's agentId is informational only — the agent
+	// self-generates from SM_AGENT_ID). The fake CR has UID "uid-1".
+	if updated.Status.EnrolledAgentID != "kagent-uid-1" {
+		t.Errorf("EnrolledAgentID = %q, want kagent-uid-1", updated.Status.EnrolledAgentID)
 	}
 	if updated.Status.DeploymentName != agent.Name {
 		t.Errorf("DeploymentName = %q, want %q", updated.Status.DeploymentName, agent.Name)

@@ -96,6 +96,13 @@ func (r *KaiadAgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.commitStatus(ctx, agent, ctrl.Result{RequeueAfter: 30 * time.Second})
 	}
 	setCondition(agent, conditionEnrollment, metav1.ConditionTrue, reasonEnrollmentReady, "Enrollment token available")
+	// Pin the platform's enrolledAgentId to the same SM_AGENT_ID we bake into
+	// the agent pod's env. Mint responses don't carry an agent id back today
+	// (the agent self-generates), so we derive both sides from the CR's UID.
+	expectedAgentID := computeAgentID(agent)
+	if expectedAgentID != "" && agent.Status.EnrolledAgentID != expectedAgentID {
+		agent.Status.EnrolledAgentID = expectedAgentID
+	}
 	if enroll.FutureAgentID != "" && agent.Status.EnrolledAgentID == "" {
 		agent.Status.EnrolledAgentID = enroll.FutureAgentID
 	}
@@ -354,9 +361,22 @@ func (r *KaiadAgentReconciler) applyDeployment(ctx context.Context, agent *kaiad
 	return dep, nil
 }
 
+// computeAgentID derives the SM_AGENT_ID used for both the agent pod's env
+// and the CR's status.enrolledAgentId. Stable across reconciles via the CR's
+// UID; falls back to namespace.name pre-UID. Prefixed `kagent-` so platform
+// inspection can tell operator-installed agents from manually-enrolled ones.
+func computeAgentID(agent *kaiadv1alpha1.KaiadAgent) string {
+	id := string(agent.UID)
+	if id == "" {
+		id = fmt.Sprintf("%s.%s", agent.Namespace, agent.Name)
+	}
+	return "kagent-" + id
+}
+
 func buildAgentEnv(agent *kaiadv1alpha1.KaiadAgent, enroll *EnrollmentResolution) []corev1.EnvVar {
 	envs := []corev1.EnvVar{
 		{Name: "SM_REALTIME_URL", Value: agent.Spec.ControlPlane.RealtimeURL},
+		{Name: "SM_AGENT_ID", Value: computeAgentID(agent)},
 		{Name: "NODE_ENV", Value: "production"},
 		{Name: "SM_AGENT_RUNTIME_OVERRIDE", Value: "kubernetes"},
 		{Name: "SM_AGENT_PERSIST_CREDENTIALS", Value: "1"},
