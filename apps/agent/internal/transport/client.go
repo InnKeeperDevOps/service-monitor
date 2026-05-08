@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -36,6 +37,27 @@ type heartbeatMessage struct {
 	Capacity     int    `json:"capacity"`
 	TenantID     string `json:"tenantId,omitempty"`
 	AgentVersion string `json:"agentVersion,omitempty"`
+}
+
+// ErrPermanentRejection is returned from RunContext when the platform
+// rejected the agent's connection in a way that retrying won't fix —
+// notably an INVALID_TOKEN (the enrollment token was already consumed or
+// expired). The caller (main.go) should surface this as a fatal error so
+// the orchestrator (kubelet, systemd) restarts the agent process; on
+// restart the agent reads the (presumably re-minted) SM_ENROLLMENT_TOKEN
+// environment variable fresh.
+var ErrPermanentRejection = errors.New("transport: permanent rejection by control plane")
+
+// permanentApiErrorCodes is the set of `apiError.code` values from the
+// platform that mean "give up; reconnecting won't help." Mirrors the
+// codes server.ts emits before closing the WS during /realtime
+// validation. INVALID_MESSAGE / ENROLLMENT_STORE_UNAVAILABLE are
+// intentionally NOT in this list — the first is an agent bug worth
+// retrying once the agent's view of the protocol is sane, the second is
+// a control-plane outage that should resolve.
+var permanentApiErrorCodes = map[string]struct{}{
+	"INVALID_TOKEN": {},
+	"UNAUTHORIZED":  {},
 }
 
 type commandAckMessage struct {
@@ -269,6 +291,13 @@ func (c *Client) RunContext(ctx context.Context) error {
 		if err != nil && ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if errors.Is(err, ErrPermanentRejection) {
+			// Don't retry forever on a token the platform won't accept.
+			// Returning a non-nil error makes main.go exit non-zero so
+			// kubelet/systemd restarts us with the latest env vars (see
+			// the operator's stale-secret re-mint path).
+			return err
+		}
 
 		if err := c.sleepBackoff(ctx, attempt); err != nil {
 			return err
@@ -497,12 +526,35 @@ func (c *Client) handleIncoming(ctx context.Context, errCh chan<- error, data []
 	var envelope struct {
 		Type      string `json:"type"`
 		CommandID string `json:"commandId"`
+		// apiError shape: server emits `{ code, message, correlationId? }`
+		// when rejecting a /realtime upgrade (INVALID_TOKEN, UNAUTHORIZED,
+		// etc.) before closing the socket. There's no `type`, so the
+		// command-dispatch branches below would silently drop it.
+		Code    string `json:"code"`
+		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		c.protoDebug("inbound invalid JSON (%d bytes): %v", len(data), err)
 		return
 	}
 	c.protoDebug("inbound type=%s commandId=%s bytes=%d", envelope.Type, envelope.CommandID, len(data))
+
+	if envelope.Type == "" && envelope.Code != "" {
+		// apiError frame — surface visibly and (for permanent codes) bail
+		// the whole process so the orchestrator restarts us with a fresh
+		// SM_ENROLLMENT_TOKEN env (the operator's stale-secret detection
+		// will have re-minted by then).
+		log.Printf("control plane rejected connection: code=%s message=%q", envelope.Code, envelope.Message)
+		if _, permanent := permanentApiErrorCodes[envelope.Code]; permanent {
+			select {
+			case errCh <- fmt.Errorf("%w: %s: %s", ErrPermanentRejection, envelope.Code, envelope.Message):
+			default:
+				// Buffer is 1; if the read loop already wrote the close error,
+				// it's about to return anyway — leave it alone.
+			}
+		}
+		return
+	}
 
 	if envelope.Type == "hello" {
 		var hello AgentHello

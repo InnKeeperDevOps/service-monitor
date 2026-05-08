@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -280,6 +281,265 @@ func TestReconcile_PreProvisionedSecretIsRespected(t *testing.T) {
 		}
 	}
 	t.Error("SM_ENROLLMENT_TOKEN env var missing")
+}
+
+func TestReconcile_StaleOperatorMintedTokenIsReminted(t *testing.T) {
+	// Simulates the failure mode from the minikube integration test: a pod
+	// replacement drops the persisted credential in the agent's emptyDir
+	// volume, so the new pod tries to use a single-use enrollment token that
+	// was already consumed. The operator should detect the stale token (via
+	// the kaiad.dev/minted-at annotation older than staleAfter) and re-mint.
+	scheme := newTestScheme(t)
+	agent := newAgentCR()
+
+	// Pre-existing operator-minted Secret whose annotation says it was minted
+	// well past staleAfter. The token bytes are what the original (now-spent)
+	// pod was using.
+	staleSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      defaultEnrollmentSecretName(agent),
+			Namespace: agent.Namespace,
+			Annotations: map[string]string{
+				mintedAtAnnotation: "2026-05-08T05:00:00Z", // 12+ hours ago, far past staleAfter
+			},
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kaiad-operator",
+				"kaiad.dev/agent":              agent.Name,
+			},
+		},
+		Data: map[string][]byte{"token": []byte("spent-token-from-earlier")},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(agent, staleSecret).
+		WithStatusSubresource(&kaiadv1alpha1.KaiadAgent{}).
+		Build()
+
+	srv, kClient := mintingKaiadServer(t)
+	defer srv.Close()
+	r := &KaiadAgentReconciler{Client: c, Scheme: scheme, KaiadClient: kClient}
+
+	reconcileOnce(t, r, agent.Namespace, agent.Name)
+
+	// The Secret should now hold the freshly-minted token, not the spent one,
+	// and the annotation should be updated.
+	final := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: staleSecret.Name, Namespace: staleSecret.Namespace}, final); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if string(final.Data["token"]) != "secret-token" {
+		t.Errorf("expected fresh token from mint server, got %q", string(final.Data["token"]))
+	}
+	if final.Annotations[mintedAtAnnotation] == "2026-05-08T05:00:00Z" {
+		t.Errorf("annotation was not refreshed; still says %q", final.Annotations[mintedAtAnnotation])
+	}
+}
+
+func TestReconcile_FreshOperatorMintedTokenIsReused(t *testing.T) {
+	// Counterpoint: a Secret minted by the operator but still within staleAfter
+	// must NOT be re-minted on reconcile. Otherwise we'd churn through tokens
+	// every loop.
+	scheme := newTestScheme(t)
+	agent := newAgentCR()
+
+	freshSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      defaultEnrollmentSecretName(agent),
+			Namespace: agent.Namespace,
+			Annotations: map[string]string{
+				mintedAtAnnotation: time.Now().UTC().Format(time.RFC3339),
+			},
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kaiad-operator",
+				"kaiad.dev/agent":              agent.Name,
+			},
+		},
+		Data: map[string][]byte{"token": []byte("still-valid")},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(agent, freshSecret).
+		WithStatusSubresource(&kaiadv1alpha1.KaiadAgent{}).
+		Build()
+
+	// Mint server panics on call — proves we never hit it for fresh tokens.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected mint call for fresh secret: %s", r.URL.Path)
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	r := &KaiadAgentReconciler{Client: c, Scheme: scheme, KaiadClient: kaiad.NewClient(srv.URL, "x", kaiad.WithMaxRetries(0))}
+
+	reconcileOnce(t, r, agent.Namespace, agent.Name)
+
+	final := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: freshSecret.Name, Namespace: freshSecret.Namespace}, final); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if string(final.Data["token"]) != "still-valid" {
+		t.Errorf("token was unnecessarily re-minted; got %q", string(final.Data["token"]))
+	}
+}
+
+func TestMaybeForceRemintIfStuck_CoolsDownOnFreshSecret(t *testing.T) {
+	// The reconciler may run while Ready is still False — the cooldown
+	// guard prevents a tight loop where each pass clears the just-minted
+	// Secret. Build a CR whose Ready has been False for a long time, plus
+	// a Secret freshly minted within stuckBeforeForceRemint, and confirm
+	// the helper does NOT clear.
+	scheme := newTestScheme(t)
+	agent := newAgentCR()
+	now := time.Now()
+	agent.Status.Conditions = []metav1.Condition{{
+		Type:               conditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             reasonAgentNotOnline,
+		LastTransitionTime: metav1.Time{Time: now.Add(-1 * time.Hour)}, // very old
+		Message:            "stuck for an hour",
+	}}
+	freshSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        defaultEnrollmentSecretName(agent),
+			Namespace:   agent.Namespace,
+			Annotations: map[string]string{mintedAtAnnotation: now.UTC().Format(time.RFC3339)},
+		},
+		Data: map[string][]byte{"token": []byte("fresh-mint-just-now")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, freshSecret).Build()
+	r := &KaiadAgentReconciler{Client: c, Scheme: scheme}
+
+	r.maybeForceRemintIfStuck(context.Background(), agent, &EnrollmentResolution{
+		SecretName: freshSecret.Name,
+		SecretKey:  "token",
+	})
+
+	final := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: freshSecret.Name, Namespace: freshSecret.Namespace}, final); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if string(final.Data["token"]) != "fresh-mint-just-now" {
+		t.Errorf("cooldown should have prevented clearing; got token=%q", string(final.Data["token"]))
+	}
+}
+
+func TestMaybeForceRemintIfStuck_ClearsOnLongStuckOldSecret(t *testing.T) {
+	// Inverse: Ready has been False long enough AND the Secret's annotation
+	// is also old. Helper should clear, leaving an empty token field for the
+	// next reconcile pass to re-mint.
+	scheme := newTestScheme(t)
+	agent := newAgentCR()
+	now := time.Now()
+	agent.Status.Conditions = []metav1.Condition{{
+		Type:               conditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             reasonDeploymentPending,
+		LastTransitionTime: metav1.Time{Time: now.Add(-1 * time.Hour)},
+	}}
+	staleSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        defaultEnrollmentSecretName(agent),
+			Namespace:   agent.Namespace,
+			Annotations: map[string]string{mintedAtAnnotation: now.Add(-1 * time.Hour).UTC().Format(time.RFC3339)},
+		},
+		Data: map[string][]byte{"token": []byte("spent-token-from-earlier")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, staleSecret).Build()
+	r := &KaiadAgentReconciler{Client: c, Scheme: scheme}
+
+	r.maybeForceRemintIfStuck(context.Background(), agent, &EnrollmentResolution{
+		SecretName: staleSecret.Name,
+		SecretKey:  "token",
+	})
+
+	final := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: staleSecret.Name, Namespace: staleSecret.Namespace}, final); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if len(final.Data["token"]) != 0 {
+		t.Errorf("expected token cleared after stuck-detection; got %q", string(final.Data["token"]))
+	}
+}
+
+func TestMaybeForceRemintIfStuck_DeletesAgentPodsWithStaleEnv(t *testing.T) {
+	// env vars from `valueFrom.secretKeyRef` are snapshotted at pod creation;
+	// container restarts re-read the env from the snapshot, not the live
+	// Secret. So when the operator force-re-mints, it must also delete the
+	// pod so the ReplicaSet creates a fresh one with up-to-date env.
+	scheme := newTestScheme(t)
+	agent := newAgentCR()
+	now := time.Now()
+	agent.Status.Conditions = []metav1.Condition{{
+		Type:               conditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             reasonDeploymentPending,
+		LastTransitionTime: metav1.Time{Time: now.Add(-1 * time.Hour)},
+	}}
+	staleSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        defaultEnrollmentSecretName(agent),
+			Namespace:   agent.Namespace,
+			Annotations: map[string]string{mintedAtAnnotation: now.Add(-1 * time.Hour).UTC().Format(time.RFC3339)},
+		},
+		Data: map[string][]byte{"token": []byte("spent")},
+	}
+	stuckPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "minikube-agent-deadbeef",
+			Namespace: agent.Namespace,
+			Labels:    map[string]string{"kaiad.dev/agent": agent.Name},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(agent, staleSecret, stuckPod).
+		Build()
+	r := &KaiadAgentReconciler{Client: c, Scheme: scheme}
+
+	r.maybeForceRemintIfStuck(context.Background(), agent, &EnrollmentResolution{
+		SecretName: staleSecret.Name,
+		SecretKey:  "token",
+	})
+
+	final := &corev1.Pod{}
+	err := c.Get(context.Background(), types.NamespacedName{Name: stuckPod.Name, Namespace: stuckPod.Namespace}, final)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected stuck pod to be deleted (NotFound on Get), got err=%v", err)
+	}
+}
+
+func TestMaybeForceRemintIfStuck_DoesNothingForNonAutoMint(t *testing.T) {
+	scheme := newTestScheme(t)
+	agent := newAgentCR()
+	agent.Spec.Enrollment = kaiadv1alpha1.EnrollmentSpec{AutoMint: false, SecretRef: &kaiadv1alpha1.SecretKeyRef{Name: "user-secret", Key: "token"}}
+	now := time.Now()
+	agent.Status.Conditions = []metav1.Condition{{
+		Type:               conditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             reasonAgentNotOnline,
+		LastTransitionTime: metav1.Time{Time: now.Add(-1 * time.Hour)},
+	}}
+	userSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "user-secret", Namespace: agent.Namespace},
+		Data:       map[string][]byte{"token": []byte("user-provided")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, userSecret).Build()
+	r := &KaiadAgentReconciler{Client: c, Scheme: scheme}
+
+	r.maybeForceRemintIfStuck(context.Background(), agent, &EnrollmentResolution{
+		SecretName: userSecret.Name,
+		SecretKey:  "token",
+	})
+
+	final := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: userSecret.Name, Namespace: userSecret.Namespace}, final); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if string(final.Data["token"]) != "user-provided" {
+		t.Error("operator should not touch user-provided Secrets")
+	}
 }
 
 func TestReconcile_NotFoundIsNoOp(t *testing.T) {

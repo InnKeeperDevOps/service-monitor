@@ -73,7 +73,7 @@ func TestExecuteSyncDesiredState(t *testing.T) {
 	if !result.Success {
 		t.Fatalf("expected success: %s", result.Output)
 	}
-	if !strings.Contains(result.Output, "1 entries") {
+	if !strings.Contains(result.Output, "1 containers") {
 		t.Fatalf("output: %s", result.Output)
 	}
 }

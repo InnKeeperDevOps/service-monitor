@@ -35,6 +35,12 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Pods: list to find agent replicas, delete to force-recreate when an
+  # enrollment Secret needs to be picked up by a pod that snapshots
+  # SM_ENROLLMENT_TOKEN at creation time.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "delete"]
 
   # --- Allow-list union (must mirror internal/controller/allowlist.go) ---
   - apiGroups: ["apps"]

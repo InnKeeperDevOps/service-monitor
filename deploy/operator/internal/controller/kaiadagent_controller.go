@@ -51,6 +51,14 @@ const (
 	reasonAgentNotOnline    = "AgentNotOnline"
 )
 
+// stuckBeforeForceRemint is how long the operator waits before assuming a
+// "pod ready but agent not online" state is caused by a spent enrollment
+// token (rather than a slow first connect). Should be longer than:
+//   - normal pod boot + agent's first heartbeat ack (a few seconds), and
+//   - a brief control-plane blip,
+// but short enough that recovery is automatic for human-attention scales.
+var stuckBeforeForceRemint = 2 * time.Minute
+
 // KaiadAgentReconciler reconciles a KaiadAgent object.
 type KaiadAgentReconciler struct {
 	client.Client
@@ -138,6 +146,12 @@ func (r *KaiadAgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Status: pod ready + agent online check (Task 7).
 	deploymentReady := dep.Status.ReadyReplicas >= 1
 	if !deploymentReady {
+		// Same stuck-detection as the AgentNotOnline branch below: if Ready
+		// has been False for > stuckBeforeForceRemint, the agent is likely
+		// in CrashLoopBackOff because the enrollment token in env was spent
+		// by an earlier pod. Clear the Secret so the next reconcile mints
+		// fresh; subsequent kubelet retries pick up the new env.
+		r.maybeForceRemintIfStuck(ctx, agent, enroll)
 		setCondition(agent, conditionReady, metav1.ConditionFalse, reasonDeploymentPending, "Deployment has no ready replicas yet")
 		setCondition(agent, conditionReconciling, metav1.ConditionFalse, "Reconciled", "Reconciliation complete; awaiting pod readiness")
 		return r.commitStatus(ctx, agent, ctrl.Result{RequeueAfter: 15 * time.Second})
@@ -146,6 +160,7 @@ func (r *KaiadAgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	online, agentInfo := r.checkAgentOnline(ctx, agent)
 	switch {
 	case !online:
+		r.maybeForceRemintIfStuck(ctx, agent, enroll)
 		setCondition(agent, conditionReady, metav1.ConditionFalse, reasonAgentNotOnline, "Pod ready but control plane has not seen the agent yet")
 		setCondition(agent, conditionReconciling, metav1.ConditionFalse, "Reconciled", "Awaiting first agent check-in")
 		return r.commitStatus(ctx, agent, ctrl.Result{RequeueAfter: 15 * time.Second})
@@ -161,6 +176,81 @@ func (r *KaiadAgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			logger.Error(err, "failed to clear bootstrap secret; will retry next loop")
 		}
 		return r.commitStatus(ctx, agent, ctrl.Result{RequeueAfter: 5 * time.Minute})
+	}
+}
+
+// maybeForceRemintIfStuck clears the operator-managed enrollment Secret when
+// Ready has been False for longer than stuckBeforeForceRemint. The signal
+// covers the two production failure modes that produce the same root cause:
+// (a) DeploymentPending — agent in CrashLoopBackOff because its env-loaded
+// token was rejected, and (b) AgentNotOnline — pod is up but never reaches
+// the control plane. Both mean the token in env is spent; the next
+// reconcile will mint fresh, kubelet's retry will read the new env on
+// pod restart, and the system recovers without manual intervention.
+//
+// Cooldown: the Secret's `kaiad.dev/minted-at` annotation guards against a
+// tight loop where Ready stays False (not transitioning) and we'd otherwise
+// re-mint on every reconcile. We require the current Secret to be older
+// than stuckBeforeForceRemint before clearing it again, giving the agent's
+// CrashLoopBackOff retry window enough time to use a freshly-minted token.
+//
+// Only fires for autoMint paths — we don't touch user-provided Secrets.
+// Logs every fire so the recovery is visible in operator logs.
+func (r *KaiadAgentReconciler) maybeForceRemintIfStuck(ctx context.Context, agent *kaiadv1alpha1.KaiadAgent, enroll *EnrollmentResolution) {
+	if !agent.Spec.Enrollment.AutoMint || enroll == nil {
+		return
+	}
+	priorReady := meta.FindStatusCondition(agent.Status.Conditions, conditionReady)
+	if priorReady == nil || priorReady.Status != metav1.ConditionFalse {
+		return
+	}
+	if time.Since(priorReady.LastTransitionTime.Time) <= stuckBeforeForceRemint {
+		return
+	}
+	logger := ctrl.LoggerFrom(ctx)
+
+	// Cooldown check: don't clear a Secret we minted recently. The agent
+	// pod may be in CrashLoopBackOff and hasn't tried the new token yet.
+	current := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: enroll.SecretName, Namespace: agent.Namespace}, current); err == nil {
+		if raw, ok := current.Annotations[mintedAtAnnotation]; ok {
+			if mintedAt, err := time.Parse(time.RFC3339, raw); err == nil {
+				if time.Since(mintedAt) <= stuckBeforeForceRemint {
+					return // freshly-minted; let the agent try it before clearing
+				}
+			}
+		}
+	}
+
+	if err := clearBootstrapSecret(ctx, r.Client, agent, enroll.SecretName, enroll.SecretKey); err != nil {
+		logger.Error(err, "force re-mint: failed to clear stuck enrollment secret")
+		return
+	}
+	logger.Info("force re-minting stuck enrollment secret",
+		"reason", priorReady.Reason,
+		"stuckFor", time.Since(priorReady.LastTransitionTime.Time).String())
+
+	// Container restarts via kubelet's CrashLoopBackOff DON'T re-read env
+	// vars sourced from `valueFrom.secretKeyRef` — those are snapshotted
+	// when the pod is *created*. Deleting the pod here forces the
+	// ReplicaSet to create a new pod, which reads the (about-to-be-
+	// re-minted) Secret value. Without this delete, the agent stays
+	// stuck on the spent token across every container restart.
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods,
+		client.InNamespace(agent.Namespace),
+		client.MatchingLabels{"kaiad.dev/agent": agent.Name}); err != nil {
+		logger.Error(err, "force re-mint: failed to list agent pods to delete")
+		return
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			logger.Error(err, "force re-mint: failed to delete pod", "pod", pod.Name)
+			continue
+		}
+		logger.Info("force re-mint: deleted agent pod for fresh env",
+			"pod", pod.Name)
 	}
 }
 
