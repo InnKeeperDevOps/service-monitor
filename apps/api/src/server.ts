@@ -36,6 +36,10 @@ import {
   upsertTenantSettingsRequestSchema,
   agentCommandDispatchResponseSchema,
   platformToAgentMessageSchema,
+  apiCredentialMetadataSchema,
+  createApiCredentialRequestSchema,
+  createApiCredentialResponseSchema,
+  listApiCredentialsResponseSchema,
   type AgentToPlatformMessage,
   type AgentCommandJob,
   type LogIngestionJob,
@@ -47,10 +51,16 @@ import {
   resolveSession,
   generateSessionToken,
   hashToken,
+  hasScope,
   type AuthStore,
   type LoginTraceStep,
   type SessionInfo
 } from "./auth.js";
+import {
+  createApiCredentialForTenant,
+  listApiCredentialsForTenant,
+  revokeApiCredentialForTenant
+} from "./apiCredentialsStore.js";
 import {
   addOAuthProvider,
   buildAuthorizeUrl,
@@ -1336,6 +1346,60 @@ export function buildServer(opts: BuildServerOptions = {}) {
     return await upsertTenantSettings(payload);
   });
 
+  // --- Admin API credentials (long-lived bearer tokens with explicit scopes,
+  // used by the Kaiad operator and similar machine integrations). Owner/admin
+  // only; api-credential bearers cannot create or revoke other credentials. ---
+
+  app.post("/api/v1/admin/api-credentials", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    if (session.kind === "apiCredential" || (session.role !== "owner" && session.role !== "admin")) {
+      return reply.status(403).send(apiErrorSchema.parse({ code: "FORBIDDEN", message: "Owner or admin session required", correlationId: (req as any).correlationId }));
+    }
+    const parsed = createApiCredentialRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send(apiErrorSchema.parse({ code: "BAD_REQUEST", message: parsed.error.issues[0]?.message ?? "Invalid request", correlationId: (req as any).correlationId }));
+    }
+    const { metadata, token } = await createApiCredentialForTenant({
+      tenantId: session.tenantId,
+      name: parsed.data.name,
+      scopes: parsed.data.scopes,
+      createdBy: session.id
+    });
+    return createApiCredentialResponseSchema.parse({ ...metadata, token });
+  });
+
+  app.get("/api/v1/admin/api-credentials", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    if (session.kind === "apiCredential" || (session.role !== "owner" && session.role !== "admin")) {
+      return reply.status(403).send(apiErrorSchema.parse({ code: "FORBIDDEN", message: "Owner or admin session required", correlationId: (req as any).correlationId }));
+    }
+    const credentials = await listApiCredentialsForTenant(session.tenantId);
+    return listApiCredentialsResponseSchema.parse({
+      credentials: credentials.map((c) => apiCredentialMetadataSchema.parse(c))
+    });
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/v1/admin/api-credentials/:id", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    if (session.kind === "apiCredential" || (session.role !== "owner" && session.role !== "admin")) {
+      return reply.status(403).send(apiErrorSchema.parse({ code: "FORBIDDEN", message: "Owner or admin session required", correlationId: (req as any).correlationId }));
+    }
+    const ok = await revokeApiCredentialForTenant(session.tenantId, req.params.id);
+    if (!ok) {
+      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Credential not found or already revoked", correlationId: (req as any).correlationId }));
+    }
+    return reply.status(204).send();
+  });
+
   app.post("/api/v1/agents/enrollment-tokens", async (req, reply) => {
     const session = await resolveSession(authStore, req.headers.authorization);
     if (!session) {
@@ -1343,6 +1407,15 @@ export function buildServer(opts: BuildServerOptions = {}) {
         apiErrorSchema.parse({
           code: "UNAUTHORIZED",
           message: "Missing or invalid bearer token",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    if (session.kind === "apiCredential" && !hasScope(session, "enrollment-tokens.create")) {
+      return reply.status(403).send(
+        apiErrorSchema.parse({
+          code: "FORBIDDEN",
+          message: "API credential lacks scope 'enrollment-tokens.create'",
           correlationId: (req as any).correlationId
         })
       );
@@ -1759,8 +1832,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
         ?? (typeof raw.dockerImage === "string" && raw.dockerImage.trim().length > 0 ? raw.dockerImage : undefined),
       composePath:
         body.composePath
-        ?? (typeof raw.composePath === "string" && raw.composePath.trim().length > 0 ? raw.composePath : undefined),
-      agentRuntimeBackend: body.agentRuntimeBackend
+        ?? (typeof raw.composePath === "string" && raw.composePath.trim().length > 0 ? raw.composePath : undefined)
     });
     return reply.status(201).send(svc);
   });

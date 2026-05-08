@@ -193,7 +193,6 @@ export type MonitoredService = {
   agentId: string | null;
   dockerImage?: string | null;
   composePath?: string | null;
-  agentRuntimeBackend?: string | null;
 };
 
 /** Matches server OAuth provider registration (POST /api/v1/settings/oauth-providers). */
@@ -287,7 +286,6 @@ export const api = {
     branch: string;
     dockerImage?: string;
     composePath?: string;
-    agentRuntimeBackend?: string;
   }) =>
     apiFetch<MonitoredService>("/api/v1/services", {
       method: "POST",
@@ -301,7 +299,6 @@ export const api = {
     branch?: string;
     dockerImage?: string;
     composePath?: string;
-    agentRuntimeBackend?: string;
   }) =>
     apiFetch<MonitoredService>(`/api/v1/services/${encodeURIComponent(id)}`, {
       method: "PATCH",

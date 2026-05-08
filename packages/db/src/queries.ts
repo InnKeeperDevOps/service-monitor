@@ -338,7 +338,6 @@ export interface ServiceRow {
   branch: string;
   dockerImage?: string | null;
   composePath?: string | null;
-  agentRuntimeBackend?: string | null;
 }
 
 function mapService(r: Record<string, unknown>): ServiceRow {
@@ -352,7 +351,6 @@ function mapService(r: Record<string, unknown>): ServiceRow {
     branch: r.branch as string,
     dockerImage: r.docker_image == null ? null : String(r.docker_image),
     composePath: r.compose_path == null ? null : String(r.compose_path),
-    agentRuntimeBackend: r.agent_runtime_backend == null ? null : String(r.agent_runtime_backend),
   };
 }
 
@@ -393,15 +391,92 @@ export async function createService(
     agentId?: string | null;
     dockerImage?: string;
     composePath?: string;
-    agentRuntimeBackend?: string;
   },
 ): Promise<ServiceRow> {
   const id = crypto.randomUUID();
   const { rows } = await query(
-    `INSERT INTO monitored_services (id, tenant_id, agent_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path, agent_runtime_backend)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO monitored_services (id, tenant_id, agent_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
-    [id, tenantId, data.agentId ?? null, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null, data.agentRuntimeBackend ?? null],
+    [id, tenantId, data.agentId ?? null, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null],
   );
   return mapService(rows[0]);
+}
+
+export interface ApiCredentialRow {
+  id: string;
+  tenantId: string;
+  name: string;
+  tokenHash: string;
+  scopes: string[];
+  createdAt: string;
+  createdBy: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+function mapApiCredential(r: Record<string, unknown>): ApiCredentialRow {
+  return {
+    id: r.id as string,
+    tenantId: r.tenant_id as string,
+    name: r.name as string,
+    tokenHash: r.token_hash as string,
+    scopes: Array.isArray(r.scopes) ? (r.scopes as string[]) : [],
+    createdAt: (r.created_at as Date | string).toString(),
+    createdBy: (r.created_by as string | null) ?? null,
+    lastUsedAt: r.last_used_at == null ? null : (r.last_used_at as Date | string).toString(),
+    revokedAt: r.revoked_at == null ? null : (r.revoked_at as Date | string).toString(),
+  };
+}
+
+export async function createApiCredential(
+  query: QueryFn,
+  data: { tenantId: string; name: string; tokenHash: string; scopes: string[]; createdBy?: string | null }
+): Promise<ApiCredentialRow> {
+  const id = `apicred-${crypto.randomUUID()}`;
+  const { rows } = await query(
+    `INSERT INTO api_credentials (id, tenant_id, name, token_hash, scopes, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [id, data.tenantId, data.name, data.tokenHash, data.scopes, data.createdBy ?? null]
+  );
+  return mapApiCredential(rows[0]);
+}
+
+export async function listApiCredentials(query: QueryFn, tenantId: string): Promise<ApiCredentialRow[]> {
+  const { rows } = await query(
+    `SELECT * FROM api_credentials WHERE tenant_id = $1 ORDER BY created_at DESC`,
+    [tenantId]
+  );
+  return rows.map(mapApiCredential);
+}
+
+export async function findApiCredentialByTokenHash(
+  query: QueryFn,
+  tokenHash: string
+): Promise<ApiCredentialRow | undefined> {
+  const { rows } = await query(
+    `SELECT * FROM api_credentials WHERE token_hash = $1 LIMIT 1`,
+    [tokenHash]
+  );
+  return rows.length === 0 ? undefined : mapApiCredential(rows[0]);
+}
+
+export async function revokeApiCredential(
+  query: QueryFn,
+  tenantId: string,
+  id: string
+): Promise<boolean> {
+  const { rows } = await query(
+    `UPDATE api_credentials SET revoked_at = now() WHERE id = $1 AND tenant_id = $2 AND revoked_at IS NULL RETURNING id`,
+    [id, tenantId]
+  );
+  return rows.length > 0;
+}
+
+export async function touchApiCredentialLastUsed(
+  query: QueryFn,
+  id: string
+): Promise<void> {
+  await query(`UPDATE api_credentials SET last_used_at = now() WHERE id = $1`, [id]);
 }

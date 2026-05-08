@@ -1,9 +1,10 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listAgents, listServices } = vi.hoisted(() => ({
+const { listAgents, listServices, listEnrollmentTokens } = vi.hoisted(() => ({
   listAgents: vi.fn(),
-  listServices: vi.fn()
+  listServices: vi.fn(),
+  listEnrollmentTokens: vi.fn()
 }));
 
 const adminAuthState = {
@@ -43,7 +44,8 @@ vi.mock("../src/lib/useAuth.js", () => ({
 vi.mock("../src/lib/api.js", () => ({
   api: {
     listAgents,
-    listServices
+    listServices,
+    listEnrollmentTokens
   }
 }));
 
@@ -58,11 +60,13 @@ describe("AgentsPage", () => {
     mockUseAuth = adminAuthState;
     listAgents.mockReset();
     listServices.mockReset();
+    listEnrollmentTokens.mockReset();
     listAgents.mockResolvedValue({ agents: [] });
     listServices.mockResolvedValue({ services: [] });
+    listEnrollmentTokens.mockResolvedValue({ tokens: [] });
   });
 
-  it("shows loading then empty copy for admin with link to Settings", async () => {
+  it("shows loading then empty copy for admin pointing to inline enrollment panel", async () => {
     listAgents.mockImplementation(
       () => new Promise((resolve) => setTimeout(() => resolve({ agents: [] }), 30))
     );
@@ -75,8 +79,9 @@ describe("AgentsPage", () => {
       expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });
     expect(screen.getByRole("heading", { name: "Connected Agents" })).toBeInTheDocument();
-    expect(screen.getByText(/Create an enrollment token in/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "#settings");
+    expect(screen.getByText(/Use the panel below to create an enrollment token/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Settings" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Enrollment Tokens/ })).toBeInTheDocument();
   });
 
   it("empty state for viewer asks to contact an administrator", async () => {

@@ -126,7 +126,6 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
       if (patch.agentId !== undefined) push("agent_id", patch.agentId);
       if (patch.dockerImage !== undefined) push("docker_image", patch.dockerImage);
       if (patch.composePath !== undefined) push("compose_path", patch.composePath);
-      if (patch.agentRuntimeBackend !== undefined) push("agent_runtime_backend", patch.agentRuntimeBackend);
       if (assignments.length === 0) {
         return queries.getService(queryFn, tenantId, id);
       }

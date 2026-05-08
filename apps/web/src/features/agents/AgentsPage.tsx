@@ -6,6 +6,7 @@ import { Badge } from "../../components/Badge.js";
 import { Button } from "../../components/Button.js";
 import { useTelemetryStream } from "./useTelemetryStream.js";
 import { ErrorGroupsSection } from "./ErrorGroupsSection.js";
+import { EnrollmentTokensPanel } from "./EnrollmentTokensPanel.js";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -352,17 +353,9 @@ export function AgentsPage() {
       {!loading && !error && displayedAgents.length === 0 ? (
         <p style={{ color: "var(--color-text-secondary)", margin: 0 }}>
           No agents connected.{" "}
-          {isViewer ? (
-            <>Ask an administrator to create an enrollment token.</>
-          ) : (
-            <>
-              Create an enrollment token in{" "}
-              <a href="#settings" style={{ color: "var(--color-primary)" }}>
-                Settings
-              </a>{" "}
-              to register an agent.
-            </>
-          )}
+          {isViewer
+            ? "Ask an administrator to create an enrollment token."
+            : "Use the panel below to create an enrollment token and register an agent."}
         </p>
       ) : null}
 
@@ -640,6 +633,8 @@ export function AgentsPage() {
           </table>
         </div>
       ) : null}
+
+      <EnrollmentTokensPanel />
     </section>
   );
 }

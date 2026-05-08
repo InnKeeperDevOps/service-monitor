@@ -18,7 +18,6 @@ COPY packages/domain/package.json packages/domain/
 COPY packages/github/package.json packages/github/
 COPY packages/queue/package.json packages/queue/
 COPY packages/config/package.json packages/config/
-COPY packages/workflow-engine/package.json packages/workflow-engine/
 COPY packages/tsconfig/package.json packages/tsconfig/
 COPY packages/eslint-config/package.json packages/eslint-config/
 COPY e2e/acceptance/package.json e2e/acceptance/

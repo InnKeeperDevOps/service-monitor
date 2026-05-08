@@ -80,12 +80,11 @@ create table if not exists monitored_services (
   ssh_key_id text references ssh_keys(id) on delete set null,
   branch text not null,
   docker_image text,
-  compose_path text,
-  agent_runtime_backend text
+  compose_path text
 );
 
 alter table monitored_services drop column if exists workflow_graph_id cascade;
-alter table monitored_services add column if not exists agent_runtime_backend text;
+alter table monitored_services drop column if exists agent_runtime_backend cascade;
 
 drop table if exists workflow_graphs cascade;
 
@@ -145,6 +144,20 @@ create table if not exists sessions (
   expires_at timestamptz not null,
   created_at timestamptz not null default now()
 );
+
+create table if not exists api_credentials (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  name text not null,
+  token_hash text not null unique,
+  scopes text[] not null default '{}',
+  created_at timestamptz not null default now(),
+  created_by text,
+  last_used_at timestamptz,
+  revoked_at timestamptz
+);
+
+create index if not exists api_credentials_tenant_id_idx on api_credentials(tenant_id);
 
 create table if not exists error_events (
   id text primary key,

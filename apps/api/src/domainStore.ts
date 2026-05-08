@@ -61,7 +61,6 @@ export type DomainStore = {
       agentId?: string | null;
       dockerImage?: string;
       composePath?: string;
-      agentRuntimeBackend?: "docker" | "kubernetes" | "shell";
     }
   ): Promise<MonitoredService>;
   updateService(
@@ -75,7 +74,6 @@ export type DomainStore = {
       agentId?: string | null;
       dockerImage?: string;
       composePath?: string;
-      agentRuntimeBackend?: "docker" | "kubernetes" | "shell";
     }
   ): Promise<MonitoredService | undefined>;
   deleteService(tenantId: string, id: string): Promise<boolean>;
@@ -246,8 +244,7 @@ export function createMemoryDomainStore(): DomainStore {
         sshKeyId: data.sshKeyId ?? null,
         branch: data.branch,
         dockerImage: data.dockerImage ?? null,
-        composePath: data.composePath ?? null,
-        agentRuntimeBackend: data.agentRuntimeBackend
+        composePath: data.composePath ?? null
       };
       services.set(svc.id, svc);
       return svc;
@@ -262,7 +259,6 @@ export function createMemoryDomainStore(): DomainStore {
       if (patch.agentId !== undefined) svc.agentId = patch.agentId;
       if (patch.dockerImage !== undefined) svc.dockerImage = patch.dockerImage;
       if (patch.composePath !== undefined) svc.composePath = patch.composePath;
-      if (patch.agentRuntimeBackend !== undefined) svc.agentRuntimeBackend = patch.agentRuntimeBackend;
       return svc;
     },
     async deleteService(tenantId, id) {

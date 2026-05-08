@@ -22,6 +22,15 @@ describe("db schema", () => {
       expect(coreSchemaSql).toContain("allowed_capabilities text[]");
     });
 
+    it("defines api_credentials with tenant, token_hash, scopes, and revocation columns", () => {
+      expect(coreSchemaSql).toContain("create table if not exists api_credentials");
+      expect(coreSchemaSql).toMatch(/api_credentials[\s\S]*?token_hash text not null unique/);
+      expect(coreSchemaSql).toMatch(/api_credentials[\s\S]*?scopes text\[\] not null default '\{\}'/);
+      expect(coreSchemaSql).toMatch(/api_credentials[\s\S]*?last_used_at timestamptz/);
+      expect(coreSchemaSql).toMatch(/api_credentials[\s\S]*?revoked_at timestamptz/);
+      expect(coreSchemaSql).toContain("api_credentials_tenant_id_idx");
+    });
+
     it("defines ssh_keys with tenant, name, type, private_key_encrypted, local_path", () => {
       expect(coreSchemaSql).toContain("create table if not exists ssh_keys");
       expect(coreSchemaSql).toMatch(/tenant_id text not null references tenants\(id\)/);

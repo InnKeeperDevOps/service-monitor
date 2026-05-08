@@ -1,14 +1,32 @@
 import crypto from "node:crypto";
+import {
+  findApiCredentialByPlainToken,
+  touchApiCredential
+} from "./apiCredentialsStore.js";
 
 export type SessionInfo = {
-  /** User id (matches `/me` and OAuth user.id). */
+  /** User id (matches `/me` and OAuth user.id). For api credentials: synthetic `apicred-<id>`. */
   id: string;
-  /** Session row id; used to update active tenant. */
+  /** Session row id; used to update active tenant. For api credentials: synthetic. */
   sessionId: string;
   email: string;
   role: "owner" | "admin" | "operator" | "viewer";
   tenantId: string;
+  /** Distinguishes user/oauth sessions from machine api-credential bearers. */
+  kind?: "session" | "apiCredential";
+  /** Explicit scopes attached to api credentials. Owner/admin sessions implicitly hold all scopes. */
+  scopes?: string[];
 };
+
+/**
+ * True when the caller may invoke an action that requires `scope`.
+ * Owners and admins implicitly hold every scope. API credentials require the
+ * scope to be present on the credential row.
+ */
+export function hasScope(session: SessionInfo, scope: string): boolean {
+  if (session.role === "owner" || session.role === "admin") return true;
+  return session.scopes?.includes(scope) ?? false;
+}
 
 export type AuthStore = {
   findUserByEmail(email: string): Promise<{ id: string; email: string; passwordHash: string | null } | null>;
@@ -157,21 +175,41 @@ export async function resolveSession(
 
   const tokenHash = hashToken(token);
   const session = await store.findSessionByTokenHash(tokenHash);
-  if (!session) return null;
-  if (session.expiresAt.getTime() <= Date.now()) return null;
+  if (session && session.expiresAt.getTime() > Date.now()) {
+    const user = await store.findUserById(session.userId);
+    if (user) {
+      const memberships = await store.findMemberships(user.id);
+      const membership = memberships.find((m) => m.tenantId === session.tenantId);
+      if (membership) {
+        return {
+          id: user.id,
+          sessionId: session.id,
+          email: user.email,
+          role: membership.role as SessionInfo["role"],
+          tenantId: membership.tenantId,
+          kind: "session"
+        };
+      }
+    }
+  }
 
-  const user = await store.findUserById(session.userId);
-  if (!user) return null;
+  // Fall through to api_credentials. Operator-style bearer tokens never appear
+  // in the sessions table — they're long-lived machine credentials with explicit
+  // scopes. Role is pinned to "operator" so admin-only role gates don't accept
+  // them; scope-gated routes use `hasScope`.
+  const cred = await findApiCredentialByPlainToken(token);
+  if (cred) {
+    void touchApiCredential(cred.id).catch(() => {});
+    return {
+      id: `apicred-${cred.id}`,
+      sessionId: `apicred-${cred.id}`,
+      email: `${cred.name}@apicred.kaiad.local`,
+      role: "operator",
+      tenantId: cred.tenantId,
+      kind: "apiCredential",
+      scopes: cred.scopes
+    };
+  }
 
-  const memberships = await store.findMemberships(user.id);
-  const membership = memberships.find((m) => m.tenantId === session.tenantId);
-  if (!membership) return null;
-
-  return {
-    id: user.id,
-    sessionId: session.id,
-    email: user.email,
-    role: membership.role as SessionInfo["role"],
-    tenantId: membership.tenantId,
-  };
+  return null;
 }

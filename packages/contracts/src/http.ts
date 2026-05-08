@@ -38,8 +38,6 @@ export const createTenantResponseSchema = meResponseSchema;
 
 export type CreateTenantRequest = z.infer<typeof createTenantRequestSchema>;
 
-export const agentRuntimeBackendSchema = z.enum(["docker", "kubernetes", "shell"]);
-
 export const tenantSettingsSchema = z.object({
   tenantId: z.string(),
   docsUrl: z.string().url().optional(),
@@ -128,8 +126,7 @@ export const monitoredServiceSchema = z.object({
   sshKeyId: z.string().nullable().optional(),
   branch: z.string(),
   dockerImage: z.string().nullable().optional(),
-  composePath: z.string().nullable().optional(),
-  agentRuntimeBackend: agentRuntimeBackendSchema.optional()
+  composePath: z.string().nullable().optional()
 });
 
 export const createMonitoredServiceRequestSchema = z.object({
@@ -139,8 +136,7 @@ export const createMonitoredServiceRequestSchema = z.object({
   branch: z.string().min(1),
   agentId: z.string().nullable().optional(),
   dockerImage: z.string().min(1).optional(),
-  composePath: z.string().min(1).optional(),
-  agentRuntimeBackend: agentRuntimeBackendSchema.optional()
+  composePath: z.string().min(1).optional()
 });
 
 export const updateMonitoredServiceRequestSchema = z.object({
@@ -150,8 +146,7 @@ export const updateMonitoredServiceRequestSchema = z.object({
   branch: z.string().min(1).optional(),
   agentId: z.string().nullable().optional(),
   dockerImage: z.string().min(1).optional(),
-  composePath: z.string().min(1).optional(),
-  agentRuntimeBackend: agentRuntimeBackendSchema.optional()
+  composePath: z.string().min(1).optional()
 });
 
 export const listMonitoredServicesResponseSchema = z.object({
@@ -259,3 +254,35 @@ export type OAuthAuthorizeResponse = z.infer<typeof oauthAuthorizeResponseSchema
 export type OAuthCallbackResponse = z.infer<typeof oauthCallbackResponseSchema>;
 export type AuthProviderEntry = z.infer<typeof authProviderEntrySchema>;
 export type ListAuthProvidersResponse = z.infer<typeof listAuthProvidersResponseSchema>;
+
+export const apiCredentialScopeSchema = z.enum(["enrollment-tokens.create", "agents.read"]);
+
+export const apiCredentialMetadataSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  name: z.string(),
+  scopes: z.array(z.string()),
+  createdAt: z.string().datetime(),
+  createdBy: z.string().nullable(),
+  lastUsedAt: z.string().datetime().nullable(),
+  revokedAt: z.string().datetime().nullable()
+});
+
+export const createApiCredentialRequestSchema = z.object({
+  name: z.string().min(1),
+  scopes: z.array(apiCredentialScopeSchema).min(1)
+});
+
+export const createApiCredentialResponseSchema = apiCredentialMetadataSchema.extend({
+  token: z.string().min(1)
+});
+
+export const listApiCredentialsResponseSchema = z.object({
+  credentials: z.array(apiCredentialMetadataSchema)
+});
+
+export type ApiCredentialScope = z.infer<typeof apiCredentialScopeSchema>;
+export type ApiCredentialMetadata = z.infer<typeof apiCredentialMetadataSchema>;
+export type CreateApiCredentialRequest = z.infer<typeof createApiCredentialRequestSchema>;
+export type CreateApiCredentialResponse = z.infer<typeof createApiCredentialResponseSchema>;
+export type ListApiCredentialsResponse = z.infer<typeof listApiCredentialsResponseSchema>;

@@ -17,6 +17,11 @@ import {
   deleteSshKey,
   updateAgent,
   deleteAgent,
+  createApiCredential,
+  listApiCredentials,
+  findApiCredentialByTokenHash,
+  revokeApiCredential,
+  touchApiCredentialLastUsed,
   type QueryFn,
 } from "../src/queries.js";
 
@@ -370,8 +375,7 @@ describe("listServices", () => {
         sshKeyId: "k1",
         branch: "main",
         dockerImage: "acme/web:latest",
-        composePath: "compose.yml",
-        agentRuntimeBackend: null
+        composePath: "compose.yml"
       },
     ]);
   });
@@ -389,8 +393,7 @@ describe("createService", () => {
         ssh_key_id: null,
         branch: "main",
         docker_image: "acme/api:1.0",
-        compose_path: "deploy/compose.yml",
-        agent_runtime_backend: null
+        compose_path: "deploy/compose.yml"
       },
     ]);
     const result = await createService(query, "t1", {
@@ -399,17 +402,15 @@ describe("createService", () => {
       sshKeyId: null,
       branch: "main",
       dockerImage: "acme/api:1.0",
-      composePath: "deploy/compose.yml",
-      agentRuntimeBackend: undefined
+      composePath: "deploy/compose.yml"
     });
     expect(result.name).toBe("api");
     expect(result.agentId).toBeNull();
     expect(result.dockerImage).toBe("acme/api:1.0");
     expect(result.composePath).toBe("deploy/compose.yml");
-    expect(result.agentRuntimeBackend).toBeNull();
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO monitored_services"),
-      expect.arrayContaining(["t1", null, "api", "r", null, "main", "acme/api:1.0", "deploy/compose.yml", null]),
+      expect.arrayContaining(["t1", null, "api", "r", null, "main", "acme/api:1.0", "deploy/compose.yml"]),
     );
   });
 });
@@ -477,5 +478,91 @@ describe("deleteAgent", () => {
     const query = mockQuery([]);
     const result = await deleteAgent(query, "t1", "missing");
     expect(result).toBe(false);
+  });
+});
+
+describe("api_credentials queries", () => {
+  it("createApiCredential inserts and returns row", async () => {
+    const query = mockQuery([
+      {
+        id: "apicred-1",
+        tenant_id: "t1",
+        name: "operator",
+        token_hash: "hash-abc",
+        scopes: ["enrollment-tokens.create"],
+        created_at: new Date().toISOString(),
+        created_by: "user-1",
+        last_used_at: null,
+        revoked_at: null
+      }
+    ]);
+    const row = await createApiCredential(query, {
+      tenantId: "t1",
+      name: "operator",
+      tokenHash: "hash-abc",
+      scopes: ["enrollment-tokens.create"],
+      createdBy: "user-1"
+    });
+    expect(row.id).toBe("apicred-1");
+    expect(row.scopes).toEqual(["enrollment-tokens.create"]);
+    expect(row.revokedAt).toBeNull();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO api_credentials"),
+      expect.arrayContaining(["t1", "operator", "hash-abc", ["enrollment-tokens.create"], "user-1"])
+    );
+  });
+
+  it("listApiCredentials returns rows ordered by created_at desc", async () => {
+    const query = mockQuery([
+      { id: "c2", tenant_id: "t1", name: "b", token_hash: "h2", scopes: [], created_at: "2026-05-08", created_by: null, last_used_at: null, revoked_at: null },
+      { id: "c1", tenant_id: "t1", name: "a", token_hash: "h1", scopes: [], created_at: "2026-05-07", created_by: null, last_used_at: null, revoked_at: null }
+    ]);
+    const rows = await listApiCredentials(query, "t1");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].id).toBe("c2");
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("ORDER BY created_at DESC"),
+      ["t1"]
+    );
+  });
+
+  it("findApiCredentialByTokenHash returns the row when present", async () => {
+    const query = mockQuery([
+      { id: "c1", tenant_id: "t1", name: "a", token_hash: "h", scopes: ["x"], created_at: "now", created_by: null, last_used_at: null, revoked_at: null }
+    ]);
+    const row = await findApiCredentialByTokenHash(query, "h");
+    expect(row?.id).toBe("c1");
+    expect(row?.scopes).toEqual(["x"]);
+  });
+
+  it("findApiCredentialByTokenHash returns undefined when missing", async () => {
+    const query = mockQuery([]);
+    const row = await findApiCredentialByTokenHash(query, "nope");
+    expect(row).toBeUndefined();
+  });
+
+  it("revokeApiCredential returns true when row updated", async () => {
+    const query = mockQuery([{ id: "c1" }]);
+    const ok = await revokeApiCredential(query, "t1", "c1");
+    expect(ok).toBe(true);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE api_credentials SET revoked_at = now()"),
+      ["c1", "t1"]
+    );
+  });
+
+  it("revokeApiCredential returns false when no row matched", async () => {
+    const query = mockQuery([]);
+    const ok = await revokeApiCredential(query, "t1", "missing");
+    expect(ok).toBe(false);
+  });
+
+  it("touchApiCredentialLastUsed runs update", async () => {
+    const query = mockQuery([]);
+    await touchApiCredentialLastUsed(query, "c1");
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("SET last_used_at = now()"),
+      ["c1"]
+    );
   });
 });

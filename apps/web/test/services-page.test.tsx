@@ -98,8 +98,7 @@ describe("ServicesPage", () => {
       branch: "develop",
       agentId: null,
       dockerImage: null,
-      composePath: null,
-      agentRuntimeBackend: "shell"
+      composePath: null
     });
 
     const submitBtn = screen.getByRole("button", { name: "Create" });
@@ -112,8 +111,7 @@ describe("ServicesPage", () => {
         sshKeyId: "key-1",
         branch: "develop",
         dockerImage: undefined,
-        composePath: undefined,
-        agentRuntimeBackend: undefined
+        composePath: undefined
       });
       expect(screen.getByText("test-svc")).toBeInTheDocument();
       expect(screen.getByText("git@github.com:acme/test-svc.git")).toBeInTheDocument();
@@ -132,8 +130,7 @@ describe("ServicesPage", () => {
           branch: "develop",
           agentId: null,
           dockerImage: null,
-          composePath: null,
-          agentRuntimeBackend: "shell"
+          composePath: null
         }
       ]
     });
@@ -163,8 +160,7 @@ describe("ServicesPage", () => {
       branch: "main",
       agentId: null,
       dockerImage: null,
-      composePath: null,
-      agentRuntimeBackend: "shell"
+      composePath: null
     });
 
     const submitBtn = screen.getByRole("button", { name: "Save Changes" });
@@ -177,8 +173,7 @@ describe("ServicesPage", () => {
         sshKeyId: "key-1",
         branch: "main",
         dockerImage: undefined,
-        composePath: undefined,
-        agentRuntimeBackend: "shell"
+        composePath: undefined
       });
     });
   });
@@ -195,8 +190,7 @@ describe("ServicesPage", () => {
           branch: "develop",
           agentId: null,
           dockerImage: null,
-          composePath: null,
-          agentRuntimeBackend: "shell"
+          composePath: null
         }
       ]
     });
@@ -231,8 +225,7 @@ describe("ServicesPage", () => {
           branch: "develop",
           agentId: null,
           dockerImage: null,
-          composePath: null,
-          agentRuntimeBackend: "shell"
+          composePath: null
         }
       ]
     });

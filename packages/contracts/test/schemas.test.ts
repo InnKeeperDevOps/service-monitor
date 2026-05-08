@@ -357,33 +357,6 @@ describe("http.ts", () => {
       ).not.toThrow();
     });
 
-    it("accepts agentRuntimeBackend", () => {
-      expect(() =>
-        monitoredServiceSchema.parse({
-          id: "svc-1",
-          tenantId: "t-1",
-          agentId: null,
-          name: "api",
-          gitRepoUrl: "o/r",
-          branch: "main",
-          agentRuntimeBackend: "shell"
-        })
-      ).not.toThrow();
-    });
-
-    it("rejects invalid agentRuntimeBackend", () => {
-      expect(() =>
-        monitoredServiceSchema.parse({
-          id: "svc-1",
-          tenantId: "t-1",
-          agentId: null,
-          name: "api",
-          gitRepoUrl: "o/r",
-          branch: "main",
-          agentRuntimeBackend: "podman"
-        })
-      ).toThrow();
-    });
   });
 
   describe("createMonitoredServiceRequestSchema", () => {
