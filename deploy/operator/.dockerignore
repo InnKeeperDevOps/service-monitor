@@ -1,0 +1,5 @@
+bin/
+test/
+charts/
+config/
+*.md

@@ -1,0 +1,446 @@
+// Package controller hosts the KaiadAgent reconciler.
+//
+// One reconcile pass:
+//   1. Validate spec.manages against the allow-list.
+//   2. Resolve / mint the enrollment Secret.
+//   3. Generate scoped RBAC (ServiceAccount + Role/ClusterRole + bindings).
+//   4. Apply the agent Deployment (server-side via CreateOrUpdate).
+//   5. Update status conditions: EnrollmentValid, Reconciling, Ready.
+//
+// Status: Ready flips to True only when (a) the Deployment reports a ready
+// replica AND (b) the Kaiad API confirms the agent is online (Task 7). The
+// loop requeues every 30s while not Ready, every 5min once Ready.
+package controller
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	kaiadv1alpha1 "github.com/innkeeperdevops/kaiad/operator/api/v1alpha1"
+	"github.com/innkeeperdevops/kaiad/operator/internal/kaiad"
+)
+
+const (
+	conditionReady          = "Ready"
+	conditionEnrollment     = "EnrollmentValid"
+	conditionReconciling    = "Reconciling"
+	reasonInvalidSpec       = "InvalidSpec"
+	reasonEnrollmentFailed  = "EnrollmentFailed"
+	reasonEnrollmentReady   = "EnrollmentReady"
+	reasonDeploymentPending = "DeploymentPending"
+	reasonAgentOnline       = "AgentOnline"
+	reasonAgentNotOnline    = "AgentNotOnline"
+)
+
+// KaiadAgentReconciler reconciles a KaiadAgent object.
+type KaiadAgentReconciler struct {
+	client.Client
+	Scheme      *runtime.Scheme
+	KaiadClient *kaiad.Client
+}
+
+// +kubebuilder:rbac:groups=kaiad.dev,resources=kaiadagents,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kaiad.dev,resources=kaiadagents/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=kaiad.dev,resources=kaiadagents/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts;secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+
+// Reconcile is the main entry point.
+func (r *KaiadAgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := ctrl.LoggerFrom(ctx).WithValues("kaiadagent", req.NamespacedName)
+
+	agent := &kaiadv1alpha1.KaiadAgent{}
+	if err := r.Get(ctx, req.NamespacedName, agent); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Validate manages first — failing here means we never create RBAC.
+	if err := validateManages(agent.Spec.Manages); err != nil {
+		setCondition(agent, conditionReady, metav1.ConditionFalse, reasonInvalidSpec, err.Error())
+		setCondition(agent, conditionReconciling, metav1.ConditionFalse, reasonInvalidSpec, "spec invalid; not reconciling")
+		return r.commitStatus(ctx, agent)
+	}
+	setCondition(agent, conditionReconciling, metav1.ConditionTrue, "Reconciling", "Applying desired state")
+
+	// Resolve enrollment Secret (creating + minting via the API if needed).
+	enroll, err := resolveEnrollment(ctx, r.Client, r.KaiadClient, agent)
+	if err != nil {
+		logger.Error(err, "enrollment resolution failed")
+		setCondition(agent, conditionEnrollment, metav1.ConditionFalse, reasonEnrollmentFailed, err.Error())
+		setCondition(agent, conditionReady, metav1.ConditionFalse, reasonEnrollmentFailed, "Enrollment token unavailable")
+		// Requeue with backoff — minting failures are often transient (network, control plane down).
+		return r.commitStatus(ctx, agent, ctrl.Result{RequeueAfter: 30 * time.Second})
+	}
+	setCondition(agent, conditionEnrollment, metav1.ConditionTrue, reasonEnrollmentReady, "Enrollment token available")
+	if enroll.FutureAgentID != "" && agent.Status.EnrolledAgentID == "" {
+		agent.Status.EnrolledAgentID = enroll.FutureAgentID
+	}
+
+	// ServiceAccount — base identity.
+	saName := serviceAccountName(agent)
+	if err := r.applyServiceAccount(ctx, agent, saName); err != nil {
+		return ctrl.Result{}, fmt.Errorf("apply service account: %w", err)
+	}
+
+	// RBAC objects (ClusterRole/ClusterRoleBinding always; Role/RoleBinding per
+	// matching namespace).
+	rbac, err := generateRBAC(agent, saName, agent.Namespace)
+	if err != nil {
+		setCondition(agent, conditionReady, metav1.ConditionFalse, reasonInvalidSpec, err.Error())
+		return r.commitStatus(ctx, agent)
+	}
+	if err := r.applyClusterRBAC(ctx, agent, rbac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("apply cluster RBAC: %w", err)
+	}
+	if err := r.applyNamespacedRBAC(ctx, agent, rbac); err != nil {
+		return ctrl.Result{}, fmt.Errorf("apply namespaced RBAC: %w", err)
+	}
+
+	// Deployment.
+	dep, err := r.applyDeployment(ctx, agent, saName, enroll)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("apply deployment: %w", err)
+	}
+	agent.Status.DeploymentName = dep.Name
+	agent.Status.ObservedGeneration = agent.Generation
+
+	// Status: pod ready + agent online check (Task 7).
+	deploymentReady := dep.Status.ReadyReplicas >= 1
+	if !deploymentReady {
+		setCondition(agent, conditionReady, metav1.ConditionFalse, reasonDeploymentPending, "Deployment has no ready replicas yet")
+		setCondition(agent, conditionReconciling, metav1.ConditionFalse, "Reconciled", "Reconciliation complete; awaiting pod readiness")
+		return r.commitStatus(ctx, agent, ctrl.Result{RequeueAfter: 15 * time.Second})
+	}
+
+	online, agentInfo := r.checkAgentOnline(ctx, agent)
+	switch {
+	case !online:
+		setCondition(agent, conditionReady, metav1.ConditionFalse, reasonAgentNotOnline, "Pod ready but control plane has not seen the agent yet")
+		setCondition(agent, conditionReconciling, metav1.ConditionFalse, "Reconciled", "Awaiting first agent check-in")
+		return r.commitStatus(ctx, agent, ctrl.Result{RequeueAfter: 15 * time.Second})
+	default:
+		if agentInfo != nil && agentInfo.ID != "" {
+			agent.Status.EnrolledAgentID = agentInfo.ID
+		}
+		setCondition(agent, conditionReady, metav1.ConditionTrue, reasonAgentOnline, "Agent connected to the control plane")
+		setCondition(agent, conditionReconciling, metav1.ConditionFalse, "Reconciled", "Reconciliation complete")
+		// Once Ready, the bootstrap token is no longer needed for that pod (the
+		// agent persists its credential). Clear it to limit blast radius.
+		if err := clearBootstrapSecret(ctx, r.Client, agent, enroll.SecretName, enroll.SecretKey); err != nil {
+			logger.Error(err, "failed to clear bootstrap secret; will retry next loop")
+		}
+		return r.commitStatus(ctx, agent, ctrl.Result{RequeueAfter: 5 * time.Minute})
+	}
+}
+
+// commitStatus writes status changes and returns the requested Result.
+func (r *KaiadAgentReconciler) commitStatus(ctx context.Context, agent *kaiadv1alpha1.KaiadAgent, opt ...ctrl.Result) (ctrl.Result, error) {
+	if err := r.Status().Update(ctx, agent); err != nil {
+		return ctrl.Result{}, fmt.Errorf("update status: %w", err)
+	}
+	if len(opt) > 0 {
+		return opt[0], nil
+	}
+	return ctrl.Result{}, nil
+}
+
+// checkAgentOnline asks the Kaiad API whether the enrolled agent is online.
+// Returns (false, nil) if the API reports 404 (not yet enrolled) or any error.
+func (r *KaiadAgentReconciler) checkAgentOnline(ctx context.Context, agent *kaiadv1alpha1.KaiadAgent) (bool, *kaiad.AgentInfo) {
+	if agent.Status.EnrolledAgentID == "" || r.KaiadClient == nil {
+		return false, nil
+	}
+	info, err := r.KaiadClient.GetAgent(ctx, agent.Status.EnrolledAgentID)
+	if err != nil {
+		return false, nil
+	}
+	return info.Status == "online" || info.WebsocketConnected, &info
+}
+
+// --- Apply helpers ---
+
+func (r *KaiadAgentReconciler) applyServiceAccount(ctx context.Context, agent *kaiadv1alpha1.KaiadAgent, name string) error {
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agent.Namespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		if sa.Labels == nil {
+			sa.Labels = map[string]string{}
+		}
+		sa.Labels["app.kubernetes.io/managed-by"] = "kaiad-operator"
+		sa.Labels["kaiad.dev/agent"] = agent.Name
+		return controllerutil.SetControllerReference(agent, sa, r.Scheme)
+	})
+	return err
+}
+
+func (r *KaiadAgentReconciler) applyClusterRBAC(ctx context.Context, agent *kaiadv1alpha1.KaiadAgent, rbac *rbacObjects) error {
+	if rbac.ClusterRole == nil {
+		// If a previous reconcile created a ClusterRole and the spec has changed
+		// to namespace-only, garbage-collect via owner ref deletion. Owner refs
+		// across namespaces aren't allowed for cluster-scoped objects, so we
+		// label-select and delete explicitly.
+		return r.deleteClusterRBACForAgent(ctx, agent)
+	}
+	cr := rbac.ClusterRole
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
+		cr.Rules = rbac.ClusterRole.Rules
+		// ClusterRoles cannot have namespaced owner refs; we rely on label-based
+		// cleanup in the agent's finalizer (out of MVP scope) or explicit delete.
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	crb := rbac.ClusterRoleBinding
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
+		crb.RoleRef = rbac.ClusterRoleBinding.RoleRef
+		crb.Subjects = rbac.ClusterRoleBinding.Subjects
+		return nil
+	})
+	return err
+}
+
+func (r *KaiadAgentReconciler) deleteClusterRBACForAgent(ctx context.Context, agent *kaiadv1alpha1.KaiadAgent) error {
+	cr := &rbacv1.ClusterRole{}
+	if err := r.Get(ctx, types.NamespacedName{Name: clusterRoleName(agent)}, cr); err == nil {
+		_ = r.Delete(ctx, cr)
+	}
+	crb := &rbacv1.ClusterRoleBinding{}
+	if err := r.Get(ctx, types.NamespacedName{Name: clusterRoleName(agent)}, crb); err == nil {
+		_ = r.Delete(ctx, crb)
+	}
+	return nil
+}
+
+// applyNamespacedRBAC instantiates one Role + RoleBinding per namespace
+// matching any selector in `spec.manages`. We resolve selectors against the
+// live namespace list in the cluster.
+func (r *KaiadAgentReconciler) applyNamespacedRBAC(ctx context.Context, agent *kaiadv1alpha1.KaiadAgent, rbac *rbacObjects) error {
+	if rbac.Role == nil {
+		return nil
+	}
+	matchedNamespaces, err := r.resolveSelectorNamespaces(ctx, rbac.NamespaceSelectors)
+	if err != nil {
+		return err
+	}
+	for _, ns := range matchedNamespaces {
+		role := rbac.Role.DeepCopy()
+		role.Namespace = ns
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
+			role.Rules = rbac.Role.Rules
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		binding := rbac.RoleBinding.DeepCopy()
+		binding.Namespace = ns
+		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
+			binding.RoleRef = rbac.RoleBinding.RoleRef
+			binding.Subjects = rbac.RoleBinding.Subjects
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveSelectorNamespaces lists all namespaces matching any selector. An
+// empty selector list means no namespace-scoped RBAC.
+func (r *KaiadAgentReconciler) resolveSelectorNamespaces(ctx context.Context, selectors []metav1.LabelSelector) ([]string, error) {
+	out := map[string]struct{}{}
+	for _, sel := range selectors {
+		labelSel, err := metav1.LabelSelectorAsSelector(&sel)
+		if err != nil {
+			return nil, fmt.Errorf("invalid namespaceSelector: %w", err)
+		}
+		nsList := &corev1.NamespaceList{}
+		if err := r.List(ctx, nsList); err != nil {
+			return nil, fmt.Errorf("list namespaces: %w", err)
+		}
+		for _, ns := range nsList.Items {
+			if labelSel.Matches(labels.Set(ns.Labels)) {
+				out[ns.Name] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(out))
+	for n := range out {
+		names = append(names, n)
+	}
+	return names, nil
+}
+
+func (r *KaiadAgentReconciler) applyDeployment(ctx context.Context, agent *kaiadv1alpha1.KaiadAgent, saName string, enroll *EnrollmentResolution) (*appsv1.Deployment, error) {
+	name := agent.Name
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agent.Namespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+		labels := map[string]string{
+			"app.kubernetes.io/name":       "kaiad-agent",
+			"app.kubernetes.io/instance":   agent.Name,
+			"app.kubernetes.io/managed-by": "kaiad-operator",
+			"kaiad.dev/agent":              agent.Name,
+		}
+		dep.Labels = labels
+		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		dep.Spec.Replicas = ptr(int32(1))
+		dep.Spec.Strategy = appsv1.DeploymentStrategy{
+			Type: appsv1.RollingUpdateDeploymentStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateDeployment{
+				MaxSurge:       intStrPtr(1),
+				MaxUnavailable: intStrPtr(0),
+			},
+		}
+		dep.Spec.Template.Labels = labels
+		dep.Spec.Template.Spec.ServiceAccountName = saName
+		dep.Spec.Template.Spec.Containers = []corev1.Container{
+			{
+				Name:            "agent",
+				Image:           agent.Spec.Image,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Env:             buildAgentEnv(agent, enroll),
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "creds", MountPath: "/var/lib/kaiad-agent"},
+				},
+			},
+		}
+		dep.Spec.Template.Spec.Volumes = []corev1.Volume{
+			{
+				Name:         "creds",
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			},
+		}
+		dep.Spec.Template.Spec.NodeSelector = agent.Spec.NodeSelector
+		dep.Spec.Template.Spec.Tolerations = agent.Spec.Tolerations
+		if agent.Spec.Resources != nil {
+			dep.Spec.Template.Spec.Containers[0].Resources = *agent.Spec.Resources
+		} else {
+			dep.Spec.Template.Spec.Containers[0].Resources = defaultResources()
+		}
+		return controllerutil.SetControllerReference(agent, dep, r.Scheme)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dep, nil
+}
+
+func buildAgentEnv(agent *kaiadv1alpha1.KaiadAgent, enroll *EnrollmentResolution) []corev1.EnvVar {
+	envs := []corev1.EnvVar{
+		{Name: "SM_REALTIME_URL", Value: agent.Spec.ControlPlane.RealtimeURL},
+		{Name: "NODE_ENV", Value: "production"},
+		{Name: "SM_AGENT_RUNTIME_OVERRIDE", Value: "kubernetes"},
+		{Name: "SM_AGENT_PERSIST_CREDENTIALS", Value: "1"},
+		{
+			Name: "SM_ENROLLMENT_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: enroll.SecretName},
+					Key:                  enroll.SecretKey,
+					Optional:             ptr(true),
+				},
+			},
+		},
+	}
+	if agent.Spec.ServiceID != "" {
+		envs = append(envs, corev1.EnvVar{Name: "SM_SERVICE_ID", Value: agent.Spec.ServiceID})
+	}
+	return envs
+}
+
+func defaultResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("50m"),
+			corev1.ResourceMemory: resource.MustParse("64Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+		},
+	}
+}
+
+func serviceAccountName(agent *kaiadv1alpha1.KaiadAgent) string {
+	return fmt.Sprintf("%s-agent", agent.Name)
+}
+
+func setCondition(agent *kaiadv1alpha1.KaiadAgent, condType string, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		ObservedGeneration: agent.Generation,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Time{Time: time.Now()},
+	})
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func intStrPtr(i int) *intstr.IntOrString {
+	v := intstr.FromInt(i)
+	return &v
+}
+
+// SetupWithManager registers the controller with the manager and arranges
+// reconciliation triggers from owned and watched resources.
+func (r *KaiadAgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&kaiadv1alpha1.KaiadAgent{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.ServiceAccount{}).
+		Owns(&corev1.Secret{}).
+		// Re-reconcile every KaiadAgent when a namespace's labels change so
+		// namespace-scoped RBAC follows the selectors.
+		Watches(
+			&corev1.Namespace{},
+			handler.EnqueueRequestsFromMapFunc(r.namespaceToAgents),
+			builder.WithPredicates(),
+		).
+		Complete(r)
+}
+
+// namespaceToAgents maps a Namespace event to all KaiadAgents whose selectors
+// might match the namespace. For correctness the simplest thing is to enqueue
+// every agent — selector evaluation is cheap relative to apiserver round-trips.
+func (r *KaiadAgentReconciler) namespaceToAgents(ctx context.Context, _ client.Object) []reconcile.Request {
+	list := &kaiadv1alpha1.KaiadAgentList{}
+	if err := r.List(ctx, list); err != nil {
+		return nil
+	}
+	out := make([]reconcile.Request, 0, len(list.Items))
+	for _, a := range list.Items {
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: a.Name, Namespace: a.Namespace}})
+	}
+	return out
+}

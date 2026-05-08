@@ -1,0 +1,62 @@
+name: operator-e2e
+
+on:
+  pull_request:
+    paths:
+      - "deploy/operator/**"
+      - "apps/api/src/apiCredentialsStore.ts"
+      - "apps/api/src/auth.ts"
+      - "apps/api/src/server.ts"
+      - "packages/db/src/schema.ts"
+      - ".github/workflows/operator-e2e.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/operator/**"
+      - ".github/workflows/operator-e2e.yml"
+
+jobs:
+  unit:
+    name: operator unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/operator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+          cache-dependency-path: deploy/operator/go.sum
+      - run: go vet ./...
+      - run: go test ./... -count=1
+
+  e2e:
+    name: e2e on kind
+    runs-on: ubuntu-latest
+    needs: unit
+    # The Kaiad API is not stood up in this MVP CI job — the test depends on a
+    # reachable control plane. Once the API is bootable from CI we'll flip this
+    # gate to `if: always()` and provision the API as a service container.
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+          cache-dependency-path: deploy/operator/go.sum
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: kaiad-op-e2e
+          wait: 60s
+      - name: Install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+      - name: Run e2e
+        env:
+          KAIAD_API_BASE_URL: ${{ secrets.KAIAD_API_BASE_URL }}
+          KAIAD_API_CREDENTIAL: ${{ secrets.KAIAD_API_CREDENTIAL }}
+        run: ./deploy/operator/test/e2e/install_test.sh

@@ -1,0 +1,18 @@
+apiVersion: v2
+name: kaiad-operator
+description: |
+  Kubernetes operator for the Kaiad agent. Reconciles KaiadAgent custom
+  resources into agent Deployments, ServiceAccounts, and scoped RBAC.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kaiad
+  - operator
+  - agent
+  - observability
+maintainers:
+  - name: InnKeeperDevOps
+    url: https://github.com/InnKeeperDevOps/kaiad
+sources:
+  - https://github.com/InnKeeperDevOps/kaiad

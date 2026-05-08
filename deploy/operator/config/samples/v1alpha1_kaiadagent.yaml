@@ -1,0 +1,41 @@
+# Sample KaiadAgent CR. Apply with:
+#   kubectl create namespace kaiad-system   # if it doesn't exist
+#   kubectl apply -f deploy/operator/config/samples/v1alpha1_kaiadagent.yaml
+#
+# Pre-requisite: a Secret in the same namespace named `kaiad-enrollment` with
+# a `token` key holding a valid bootstrap enrollment token, OR set
+# enrollment.autoMint=true and configure the operator with an admin API
+# credential (see deploy/operator/charts/kaiad-operator/values.yaml).
+apiVersion: kaiad.dev/v1alpha1
+kind: KaiadAgent
+metadata:
+  name: edge-agent
+  namespace: kaiad-system
+spec:
+  controlPlane:
+    realtimeUrl: wss://panel.example.com/realtime
+  enrollment:
+    secretRef:
+      name: kaiad-enrollment
+      key: token
+  image: ghcr.io/innkeeperdevops/kaiad-agent:v1.2.3
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  manages:
+    - apiGroups: ["apps"]
+      resources: ["deployments", "statefulsets"]
+      verbs: ["get", "list", "watch", "patch", "update"]
+      namespaceSelector:
+        matchLabels:
+          kaiad.dev/managed: "true"
+    - apiGroups: [""]
+      resources: ["pods", "pods/log"]
+      verbs: ["get", "list", "watch"]
+      namespaceSelector:
+        matchLabels:
+          kaiad.dev/managed: "true"

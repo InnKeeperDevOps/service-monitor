@@ -1,0 +1,65 @@
+# Default values for kaiad-operator.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/innkeeperdevops/kaiad-operator
+  pullPolicy: IfNotPresent
+  # Defaults to .Chart.AppVersion when omitted.
+  tag: ""
+
+imagePullSecrets: []
+
+serviceAccount:
+  # Operator's own SA (separate from any KaiadAgent ServiceAccounts the operator generates).
+  create: true
+  name: ""
+
+# Kaiad control-plane integration. Required.
+kaiad:
+  # API base URL (no trailing slash) — e.g. https://panel.example.com
+  apiBaseURL: ""
+  # The bearer token must be created via:
+  #   POST /api/v1/admin/api-credentials  with scopes: ["enrollment-tokens.create", "agents.read"]
+  apiCredentialSecret:
+    # If true, the chart creates a Secret with the token from `value` below.
+    # If false, supply `name` pointing at a pre-provisioned Secret with key
+    # `token` holding the bearer.
+    create: false
+    name: kaiad-operator-credentials
+    # Only used when `create: true`.
+    value: ""
+
+# Operator pod knobs.
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Leader election. Default on; turn off for single-replica dev.
+leaderElection:
+  enabled: true
+
+# Where the operator listens for metrics and probes.
+metrics:
+  bindAddress: ":8080"
+healthProbe:
+  bindAddress: ":8081"

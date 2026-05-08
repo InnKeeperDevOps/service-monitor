@@ -5,6 +5,8 @@ nav_order: 2
 
 # Install Agent
 
+> **On Kubernetes?** Use the Kaiad operator — see [Install on Kubernetes]({% link agent/kubernetes.md %}). The flow on this page targets VMs, bare metal, and dev laptops.
+
 The **Kaiad agent** is a small **Go** process that runs on infrastructure you control (bare metal, VM, or container host). It maintains an **outbound** WebSocket connection to the control plane **realtime** endpoint, receives **AgentCommand** messages, and can run shell steps, Docker operations, and plan executors (Cursor / Claude) against a workspace.
 
 You do **not** open an inbound port from the internet for the SaaS path: the agent only **dials out**. See [Agent networking]({% link security/agent-networking.md %}) for firewall and TLS expectations.
