@@ -7,7 +7,6 @@ import { Button } from "../../components/Button.js";
 import { useTelemetryStream } from "./useTelemetryStream.js";
 import { ErrorGroupsSection } from "./ErrorGroupsSection.js";
 import { EnrollmentTokensPanel } from "./EnrollmentTokensPanel.js";
-import { ServicesForAgentSection } from "./ServicesForAgentSection.js";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -619,12 +618,14 @@ export function AgentsPage() {
                     <tr>
                       <td colSpan={14} style={{ ...tdStyle, padding: "0.25rem 0.5rem 1rem 2rem", background: "var(--color-surface-muted, transparent)" }}>
                         <AppsTelemetryTable apps={appsList} />
-                        <ServicesForAgentSection
-                          agentId={a.id}
-                          allServices={services}
-                          onChange={() => void fetchData()}
-                          disabled={isViewer}
-                        />
+                        {/*
+                          ServicesForAgentSection caused a Chrome lock-up when the agent
+                          had any bound service (reproduced via Playwright; browser_evaluate
+                          timed out after expanding the row). Root cause TBD — temporarily
+                          gating to off so the panel stays usable. Bindings remain editable
+                          from the Services page (multi-select fieldset on the edit form).
+                          Re-enable by removing this comment block once the cause is fixed.
+                        */}
                         <div style={{ marginTop: "1rem" }}>
                           <h3 style={{ margin: "0 0 0.5rem", fontSize: "0.9rem", color: "var(--color-text-secondary)" }}>
                             Error groups (auto-fix)

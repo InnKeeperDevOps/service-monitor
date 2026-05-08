@@ -161,54 +161,10 @@ describe("AgentsPage", () => {
     expect(screen.getByRole("link", { name: "1" })).toHaveAttribute("href", "#services");
   });
 
-  it("attaches an unbound service to an agent from the expanded row", async () => {
-    listAgents.mockResolvedValue({
-      agents: [
-        {
-          id: "agent-1",
-          tenantId: "t1",
-          name: "Edge",
-          version: "2.1.0",
-          status: "online",
-          lastSeenAt: new Date().toISOString(),
-          allowedCapabilities: [],
-          websocketConnected: true
-        }
-      ]
-    });
-    listServices.mockResolvedValue({
-      services: [
-        {
-          id: "svc-1",
-          tenantId: "t1",
-          name: "app-a",
-          gitRepoUrl: "o/r",
-          branch: "main",
-          agents: [],
-          dockerImage: null,
-          composePath: null
-        }
-      ]
-    });
-    attachServiceToAgent.mockResolvedValue({ bound: true, agentId: "agent-1", serviceId: "svc-1" });
-
-    render(<AgentsPage />);
-    await waitFor(() => {
-      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
-    });
-
-    // Expand the agent row.
-    const expandBtn = screen.getByRole("button", { name: "Expand apps" });
-    expandBtn.click();
-
-    // The unbound service should appear in the picker.
-    const picker = await screen.findByLabelText("Pick a service to bind to this agent");
-    fireEvent.change(picker, { target: { value: "svc-1" } });
-
-    fireEvent.click(screen.getByRole("button", { name: "+ Bind" }));
-
-    await waitFor(() => {
-      expect(attachServiceToAgent).toHaveBeenCalledWith("agent-1", "svc-1");
-    });
-  });
+  // The "attaches an unbound service to an agent from the expanded row"
+  // test was removed alongside the temporary recovery that gates
+  // ServicesForAgentSection off (it caused a Chrome lock-up when bound
+  // services were rendered). Bindings are still editable from the
+  // ServicesPage form — see services-page.test.tsx for that flow.
+  // Restore this test when ServicesForAgentSection is re-enabled.
 });
