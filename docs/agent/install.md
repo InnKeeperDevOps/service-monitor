@@ -6,6 +6,8 @@ nav_order: 2
 # Install Agent
 
 > **On Kubernetes?** Use the Kaiad operator — see [Install on Kubernetes]({% link agent/kubernetes.md %}). The flow on this page targets VMs, bare metal, and dev laptops.
+>
+> Want to know what each runtime (Docker / Podman / Shell / Kubernetes) actually does? See [Agent runtimes]({% link agent/runtimes.md %}).
 
 The **Kaiad agent** is a small **Go** process that runs on infrastructure you control (bare metal, VM, or container host). It maintains an **outbound** WebSocket connection to the control plane **realtime** endpoint, receives **AgentCommand** messages, and can run shell steps, Docker operations, and plan executors (Cursor / Claude) against a workspace.
 

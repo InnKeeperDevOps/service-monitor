@@ -183,6 +183,7 @@ processing.
 ## See also
 
 - [Install Agent (Linux/VM)]({% link agent/install.md %}) — manual flow for non-k8s.
+- [Agent runtimes]({% link agent/runtimes.md %}) — what `docker` / `podman` / `shell` / `kubernetes` actually do.
 - [Agent networking]({% link security/agent-networking.md %}) — egress and TLS.
 - Design doc: `docs/superpowers/specs/2026-05-08-kaiad-agent-operator-design.md`.
 - Operator repo: `deploy/operator/`.
