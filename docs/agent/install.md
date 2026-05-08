@@ -94,7 +94,7 @@ For `run_cursor_plan` / `run_claude_plan` and related behavior, the agent reads 
 
 ## Enrollment and credentials
 
-1. **Create an enrollment token** in the Kaiad UI (Settings) or via the API (`POST /api/v1/agents/enrollment-tokens`) with a valid tenant session.
+1. **Create an enrollment token** in the Kaiad UI under **Agents → Enrollment Tokens** (the panel includes a runtime selector that bakes the right `SM_AGENT_RUNTIME_OVERRIDE` / `SM_DOCKER_SOCKET` env into the start command — see [Agent runtimes]({% link agent/runtimes.md %})) or via the API (`POST /api/v1/agents/enrollment-tokens`) with a valid tenant session.
 2. Set `SM_ENROLLMENT_TOKEN` and `SM_REALTIME_URL` (and usually `SM_AGENT_ID`) via your orchestrator’s secrets or `EnvironmentFile`.
 
 **Stateless (default):** the agent does not persist enrollment material. Every pod or process restart must receive the same env-configured secrets (or a new token if you rotate).

@@ -35,7 +35,8 @@ workloads.
 
 The operator needs a long-lived bearer token to call the Kaiad API on your
 behalf (for minting short-TTL enrollment tokens). Create one once per
-cluster.
+cluster. See the [API Credentials reference]({% link admin/api-credentials.md %})
+for the full lifecycle (rotation, revocation, scopes).
 
 ```bash
 curl -X POST https://panel.example.com/api/v1/admin/api-credentials \
