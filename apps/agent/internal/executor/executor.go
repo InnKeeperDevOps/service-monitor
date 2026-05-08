@@ -15,6 +15,7 @@ import (
 
 	"github.com/service-monitor/agent/internal/agentdebug"
 	"github.com/service-monitor/agent/internal/docker"
+	"github.com/service-monitor/agent/internal/managed"
 )
 
 type CommandResult struct {
@@ -31,16 +32,42 @@ const (
 	RuntimeShell        RuntimeBackend = "shell"
 )
 
+// ProcessReconciler is the surface the executor needs from a shell-runtime
+// process supervisor. Decoupled via interface so the executor doesn't depend
+// on the supervisor package directly (and tests can pass a fake).
+type ProcessReconciler interface {
+	Reconcile(desired []managed.DesiredProcess)
+}
+
 type Executor struct {
-	mu               sync.RWMutex
-	docker           *docker.Client
-	backend          RuntimeBackend
+	mu        sync.RWMutex
+	docker    *docker.Client
+	backend   RuntimeBackend
+	inventory *managed.Inventory
+	procSup   ProcessReconciler
 }
 
 const defaultPlanTimeout = 5 * time.Minute
 
 func NewExecutor(dc *docker.Client) *Executor {
 	return &Executor{docker: dc, backend: RuntimeDocker}
+}
+
+// SetInventory wires a managed-workload store that sync_desired_state updates.
+// Optional — when nil, sync_desired_state is a no-op beyond validation.
+func (e *Executor) SetInventory(inv *managed.Inventory) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.inventory = inv
+}
+
+// SetProcessReconciler wires a shell-runtime process supervisor. When set,
+// `sync_desired_state` reconciles desired processes against running ones
+// after updating the inventory.
+func (e *Executor) SetProcessReconciler(sup ProcessReconciler) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.procSup = sup
 }
 
 // Configure updates Docker handle, runtime mode, and Kaiad tenant policy after the realtime hello.
@@ -82,6 +109,8 @@ func (e *Executor) Execute(ctx context.Context, cmdType string, payload map[stri
 		return e.executePlanRunner(ctx, "cursor", backend, payload)
 	case "run_claude_plan":
 		return e.executePlanRunner(ctx, "claude", backend, payload)
+	case "run_fix_plan":
+		return e.executeRunFixPlan(ctx, payload)
 	case "docker_op":
 		return e.executeDockerOp(ctx, backend, dc, payload)
 	case "cancel_run":
@@ -128,7 +157,56 @@ func (e *Executor) executeSyncDesiredState(payload map[string]interface{}) Comma
 	if !ok {
 		return CommandResult{Success: false, Output: "desiredContainers must be an array"}
 	}
-	return CommandResult{Success: true, Output: fmt.Sprintf("sync_desired_state: %d entries", len(list))}
+	parsed := make([]managed.DesiredContainer, 0, len(list))
+	for _, entry := range list {
+		m, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		sid, _ := m["serviceId"].(string)
+		img, _ := m["image"].(string)
+		state, _ := m["state"].(string)
+		parsed = append(parsed, managed.DesiredContainer{ServiceID: sid, Image: img, State: state})
+	}
+
+	var processes []managed.DesiredProcess
+	if rawProcs, ok := payload["desiredProcesses"].([]interface{}); ok {
+		processes = make([]managed.DesiredProcess, 0, len(rawProcs))
+		for _, entry := range rawProcs {
+			m, ok := entry.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			sid, _ := m["serviceId"].(string)
+			pattern, _ := m["commandPattern"].(string)
+			state, _ := m["state"].(string)
+			command, _ := m["command"].(string)
+			logPath, _ := m["logPath"].(string)
+			cwd, _ := m["cwd"].(string)
+			processes = append(processes, managed.DesiredProcess{
+				ServiceID:      sid,
+				CommandPattern: pattern,
+				State:          state,
+				Command:        command,
+				LogPath:        logPath,
+				Cwd:            cwd,
+			})
+		}
+	}
+
+	e.mu.RLock()
+	inv := e.inventory
+	sup := e.procSup
+	e.mu.RUnlock()
+	if inv != nil {
+		inv.ReplaceDesired(parsed)
+		inv.ReplaceDesiredProcesses(processes)
+	}
+	log.Printf("executor.sync_desired_state: parsed %d containers, %d processes; sup=%v", len(parsed), len(processes), sup != nil)
+	if sup != nil {
+		sup.Reconcile(processes)
+	}
+	return CommandResult{Success: true, Output: fmt.Sprintf("sync_desired_state: %d containers, %d processes", len(parsed), len(processes))}
 }
 
 func (e *Executor) executeDockerOp(ctx context.Context, backend RuntimeBackend, dc *docker.Client, payload map[string]interface{}) CommandResult {

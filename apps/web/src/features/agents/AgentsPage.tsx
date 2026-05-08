@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Cpu, Pencil, RefreshCw, Trash2, X, Check } from "lucide-react";
-import { api, type Agent, type MonitoredService } from "../../lib/api.js";
+import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Check, ChevronDown, ChevronRight, Cpu, Pencil, RefreshCw, Trash2, X } from "lucide-react";
+import { api, type Agent, type AgentAppTelemetry, type AgentTelemetry, type MonitoredService } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
 import { Badge } from "../../components/Badge.js";
 import { Button } from "../../components/Button.js";
+import { useTelemetryStream } from "./useTelemetryStream.js";
+import { ErrorGroupsSection } from "./ErrorGroupsSection.js";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -44,6 +46,104 @@ function truncateFingerprint(fp: string | null | undefined, max = 18): string {
   return `${fp.slice(0, max)}…`;
 }
 
+function formatBytes(n: number | undefined): string {
+  if (n === undefined || Number.isNaN(n)) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  const precision = v >= 100 || i === 0 ? 0 : 1;
+  return `${v.toFixed(precision)} ${units[i]}`;
+}
+
+function formatBytesPerSec(n: number | undefined): string {
+  if (n === undefined || Number.isNaN(n)) return "—";
+  return `${formatBytes(n)}/s`;
+}
+
+function formatPercent(n: number | undefined): string {
+  if (n === undefined || Number.isNaN(n)) return "—";
+  return `${n.toFixed(n >= 10 ? 0 : 1)}%`;
+}
+
+function AppsTelemetryTable({ apps }: { apps: AgentAppTelemetry[] }) {
+  if (apps.length === 0) {
+    return (
+      <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+        No managed apps yet. Telemetry is only reported for apps the agent manages
+        (Docker containers from sync_desired_state). Attach services to this agent
+        or push a desired-state update to populate this table.
+      </p>
+    );
+  }
+  const sorted = [...apps].sort((a, b) => {
+    const nameA = a.name ?? a.containerId;
+    const nameB = b.name ?? b.containerId;
+    return nameA.localeCompare(nameB);
+  });
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem", minWidth: 800 }}>
+        <thead>
+          <tr>
+            <th style={thStyle}>Container</th>
+            <th style={thStyle}>Image</th>
+            <th style={thStyle}>State</th>
+            <th style={thStyle}>CPU</th>
+            <th style={thStyle}>Memory</th>
+            <th style={thStyle}>Net RX</th>
+            <th style={thStyle}>Net TX</th>
+            <th style={thStyle}>Sampled</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((app) => (
+            <tr key={app.containerId}>
+              <td style={tdStyle}>
+                <div style={{ fontWeight: 600 }}>{app.name ?? app.containerId.slice(0, 12)}</div>
+                <div style={{ fontSize: "0.7rem", color: "var(--color-text-secondary)", fontFamily: "ui-monospace, monospace" }}>
+                  {app.containerId.slice(0, 12)}
+                </div>
+              </td>
+              <td style={{ ...tdStyle, fontSize: "0.75rem" }} title={app.image}>
+                {app.image ? app.image.split("@")[0] : "—"}
+              </td>
+              <td style={tdStyle}>
+                <Badge variant={app.state === "running" ? "success" : "muted"}>{app.state ?? "—"}</Badge>
+              </td>
+              <td style={tdStyle}>{formatPercent(app.cpuPercent)}</td>
+              <td style={tdStyle}>
+                {app.memPercent !== undefined ? (
+                  <>
+                    <div>{formatPercent(app.memPercent)}</div>
+                    {app.memUsedBytes !== undefined && app.memLimitBytes !== undefined ? (
+                      <div style={{ fontSize: "0.7rem", color: "var(--color-text-secondary)" }}>
+                        {formatBytes(app.memUsedBytes)} / {formatBytes(app.memLimitBytes)}
+                      </div>
+                    ) : null}
+                  </>
+                ) : app.memUsedBytes !== undefined ? (
+                  formatBytes(app.memUsedBytes)
+                ) : (
+                  "—"
+                )}
+              </td>
+              <td style={tdStyle}>{formatBytesPerSec(app.netRxBytesPerSec)}</td>
+              <td style={tdStyle}>{formatBytesPerSec(app.netTxBytesPerSec)}</td>
+              <td style={{ ...tdStyle, fontSize: "0.7rem", color: "var(--color-text-secondary)" }}>
+                {new Date(app.ts).toLocaleTimeString()}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function buildServiceCounts(services: MonitoredService[]): Map<string, { count: number; names: string[] }> {
   const m = new Map<string, { count: number; names: string[] }>();
   for (const s of services) {
@@ -68,6 +168,8 @@ export function AgentsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const live = useTelemetryStream(true);
 
   const fetchData = useCallback(() => {
     setError(null);
@@ -104,16 +206,36 @@ export function AgentsPage() {
 
   const serviceInfoByAgent = useMemo(() => buildServiceCounts(services), [services]);
 
+  /** Merge REST snapshot with live WS updates so telemetry stays fresh between polls. */
+  const displayedAgents = useMemo<Agent[]>(() => {
+    return agents.map((a) => {
+      const liveHost = live.host[a.id];
+      const liveApps = live.apps[a.id];
+      const livePresence = live.presence[a.id];
+      const apps: AgentAppTelemetry[] = liveApps
+        ? Object.values(liveApps)
+        : a.apps ?? [];
+      const telemetry: AgentTelemetry | undefined = liveHost ?? a.telemetry;
+      return {
+        ...a,
+        ...(telemetry ? { telemetry } : {}),
+        ...(apps.length > 0 ? { apps } : {}),
+        websocketConnected:
+          livePresence !== undefined ? livePresence : a.websocketConnected
+      };
+    });
+  }, [agents, live]);
+
   const summary = useMemo(() => {
     let liveWs = 0;
     const byStatus: Record<string, number> = { online: 0, degraded: 0, offline: 0, unknown: 0 };
-    for (const a of agents) {
+    for (const a of displayedAgents) {
       if (a.websocketConnected) liveWs += 1;
       const k = a.status in byStatus ? a.status : "unknown";
       byStatus[k] = (byStatus[k] ?? 0) + 1;
     }
     return { liveWs, byStatus };
-  }, [agents]);
+  }, [displayedAgents]);
 
   const startEdit = useCallback((a: Agent) => {
     setEditingId(a.id);
@@ -169,6 +291,9 @@ export function AgentsPage() {
       <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem", flexWrap: "wrap" }}>
         <h2 style={{ margin: 0 }}>Connected Agents</h2>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <Badge variant={live.connected ? "success" : "muted"}>
+            {live.connected ? "Live stream" : "Reconnecting…"}
+          </Badge>
           {lastUpdated && (
             <span style={{ fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
               Last updated: {secondsAgo}s ago
@@ -195,7 +320,7 @@ export function AgentsPage() {
         <p style={{ color: "var(--color-text-secondary)", margin: "0 0 1rem" }}>Loading…</p>
       )}
 
-      {!loading && !error && agents.length > 0 && (
+      {!loading && !error && displayedAgents.length > 0 && (
         <div
           style={{
             display: "flex",
@@ -208,7 +333,7 @@ export function AgentsPage() {
           }}
         >
           <span>
-            <strong style={{ color: "var(--color-text-primary)" }}>{agents.length}</strong> agent{agents.length === 1 ? "" : "s"}
+            <strong style={{ color: "var(--color-text-primary)" }}>{displayedAgents.length}</strong> agent{displayedAgents.length === 1 ? "" : "s"}
           </span>
           <span aria-hidden="true">·</span>
           <span>
@@ -224,7 +349,7 @@ export function AgentsPage() {
         </div>
       )}
 
-      {!loading && !error && agents.length === 0 ? (
+      {!loading && !error && displayedAgents.length === 0 ? (
         <p style={{ color: "var(--color-text-secondary)", margin: 0 }}>
           No agents connected.{" "}
           {isViewer ? (
@@ -241,9 +366,9 @@ export function AgentsPage() {
         </p>
       ) : null}
 
-      {!loading && !error && agents.length > 0 ? (
+      {!loading && !error && displayedAgents.length > 0 ? (
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1200 }}>
             <thead>
               <tr>
                 <th scope="col" style={thStyle}>
@@ -262,6 +387,24 @@ export function AgentsPage() {
                   Last seen
                 </th>
                 <th scope="col" style={thStyle}>
+                  CPU
+                </th>
+                <th scope="col" style={thStyle}>
+                  Memory
+                </th>
+                <th scope="col" style={thStyle}>
+                  Disk
+                </th>
+                <th scope="col" style={thStyle}>
+                  Net RX
+                </th>
+                <th scope="col" style={thStyle}>
+                  Net TX
+                </th>
+                <th scope="col" style={thStyle}>
+                  Process RSS
+                </th>
+                <th scope="col" style={thStyle}>
                   Capabilities
                 </th>
                 <th scope="col" style={thStyle}>
@@ -278,18 +421,39 @@ export function AgentsPage() {
               </tr>
             </thead>
             <tbody>
-              {agents.map((a) => {
+              {displayedAgents.map((a) => {
                 const svc = serviceInfoByAgent.get(a.id);
                 const svcCount = svc?.count ?? 0;
                 const displayName = a.name?.trim() || a.id;
                 const badgeVariant = AGENT_STATUS_BADGE[a.status] ?? "muted";
-                const live = a.websocketConnected === true;
+                const isLive = a.websocketConnected === true;
                 const isEditing = editingId === a.id;
                 const isSaving = savingId === a.id;
+                const appsList = a.apps ?? [];
+                const isExpanded = expanded[a.id] === true;
+                const toggleExpanded = () =>
+                  setExpanded((prev) => ({ ...prev, [a.id]: !prev[a.id] }));
                 return (
-                  <tr key={a.id}>
+                  <Fragment key={a.id}>
+                  <tr>
                     <td style={tdStyle}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                        <button
+                          type="button"
+                          onClick={toggleExpanded}
+                          aria-label={isExpanded ? "Collapse apps" : "Expand apps"}
+                          aria-expanded={isExpanded}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                            padding: 0,
+                            color: "var(--color-text-secondary)",
+                            display: "inline-flex"
+                          }}
+                        >
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </button>
                         <Cpu size={14} aria-hidden />
                         {isEditing ? (
                           <input
@@ -313,12 +477,17 @@ export function AgentsPage() {
                             {a.name?.trim() ? (
                               <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)" }}>{a.id}</div>
                             ) : null}
+                            {appsList.length > 0 ? (
+                              <div style={{ fontSize: "0.72rem", color: "var(--color-text-secondary)" }}>
+                                {appsList.length} app{appsList.length === 1 ? "" : "s"}
+                              </div>
+                            ) : null}
                           </span>
                         )}
                       </span>
                     </td>
                     <td style={tdStyle}>
-                      <Badge variant={live ? "success" : "muted"}>{live ? "Yes" : "No"}</Badge>
+                      <Badge variant={isLive ? "success" : "muted"}>{isLive ? "Yes" : "No"}</Badge>
                     </td>
                     <td style={tdStyle}>
                       <Badge variant={badgeVariant}>{a.status}</Badge>
@@ -333,6 +502,52 @@ export function AgentsPage() {
                           {new Date(a.lastSeenAt).toLocaleString()}
                         </div>
                       ) : null}
+                    </td>
+                    <td
+                      style={{ ...tdStyle, fontSize: "0.85rem" }}
+                      title={a.telemetry ? `Sampled ${new Date(a.telemetry.ts).toLocaleString()}` : undefined}
+                    >
+                      {formatPercent(a.telemetry?.cpuPercent)}
+                    </td>
+                    <td style={{ ...tdStyle, fontSize: "0.85rem" }}>
+                      {a.telemetry?.memPercent !== undefined ? (
+                        <>
+                          <div>{formatPercent(a.telemetry.memPercent)}</div>
+                          {a.telemetry.memUsedBytes !== undefined && a.telemetry.memTotalBytes !== undefined ? (
+                            <div style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}>
+                              {formatBytes(a.telemetry.memUsedBytes)} / {formatBytes(a.telemetry.memTotalBytes)}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td
+                      style={{ ...tdStyle, fontSize: "0.85rem" }}
+                      title={a.telemetry?.diskPath}
+                    >
+                      {a.telemetry?.diskUsedBytes !== undefined && a.telemetry?.diskTotalBytes !== undefined ? (
+                        <>
+                          <div>
+                            {formatPercent((a.telemetry.diskUsedBytes / a.telemetry.diskTotalBytes) * 100)}
+                          </div>
+                          <div style={{ fontSize: "0.75rem", color: "var(--color-text-secondary)" }}>
+                            {formatBytes(a.telemetry.diskUsedBytes)} / {formatBytes(a.telemetry.diskTotalBytes)}
+                          </div>
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td style={{ ...tdStyle, fontSize: "0.85rem" }}>
+                      {formatBytesPerSec(a.telemetry?.netRxBytesPerSec)}
+                    </td>
+                    <td style={{ ...tdStyle, fontSize: "0.85rem" }}>
+                      {formatBytesPerSec(a.telemetry?.netTxBytesPerSec)}
+                    </td>
+                    <td style={{ ...tdStyle, fontSize: "0.85rem" }}>
+                      {formatBytes(a.telemetry?.processRSSBytes)}
                     </td>
                     <td style={{ ...tdStyle, fontSize: "0.8rem", maxWidth: 200 }}>
                       {a.allowedCapabilities && a.allowedCapabilities.length > 0 ? (
@@ -405,6 +620,20 @@ export function AgentsPage() {
                       </td>
                     )}
                   </tr>
+                  {isExpanded ? (
+                    <tr>
+                      <td colSpan={14} style={{ ...tdStyle, padding: "0.25rem 0.5rem 1rem 2rem", background: "var(--color-surface-muted, transparent)" }}>
+                        <AppsTelemetryTable apps={appsList} />
+                        <div style={{ marginTop: "1rem" }}>
+                          <h3 style={{ margin: "0 0 0.5rem", fontSize: "0.9rem", color: "var(--color-text-secondary)" }}>
+                            Error groups (auto-fix)
+                          </h3>
+                          <ErrorGroupsSection agentId={a.id} liveGroups={live.errorGroups} />
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 );
               })}
             </tbody>

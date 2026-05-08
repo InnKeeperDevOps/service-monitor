@@ -341,6 +341,59 @@ describe("api", () => {
       expect(listed.tokens[0]?.usedAt).not.toBeNull();
     });
 
+    it("allows reconnect with the same plaintext token while it is not revoked or expired", async () => {
+      const createdResponse = await app.inject({
+        method: "POST",
+        url: "/api/v1/agents/enrollment-tokens",
+        headers: { authorization: "Bearer dev-token" },
+        payload: { ttlSeconds: 3600 }
+      });
+      const created = createdResponse.json() as { token: string; id: string };
+
+      const firstWs = await app.injectWS(`/realtime?token=${encodeURIComponent(created.token)}`);
+      firstWs.close();
+      await new Promise<void>((resolve) => firstWs.once("close", resolve));
+
+      // Same plaintext token used again — must still resolve (not receive INVALID_TOKEN).
+      let resolveFrame!: (v: string) => void;
+      const framePromise = new Promise<string>((res) => {
+        resolveFrame = res;
+      });
+      const secondWs = await app.injectWS(
+        `/realtime?token=${encodeURIComponent(created.token)}`,
+        {},
+        {
+          onInit: (sock) => {
+            sock.once("message", (d) => resolveFrame(d.toString()));
+          }
+        }
+      );
+      const firstFrame = JSON.parse(await framePromise);
+      expect(firstFrame.type).toBe("hello");
+      secondWs.close();
+    });
+
+    it("closes the socket with INVALID_TOKEN when the token does not exist", async () => {
+      let resolveFrame!: (v: string) => void;
+      const framePromise = new Promise<string>((res) => {
+        resolveFrame = res;
+      });
+      const ws = await app.injectWS(
+        `/realtime?token=${encodeURIComponent("not-a-real-token")}`,
+        {},
+        {
+          onInit: (sock) => {
+            sock.once("message", (d) => resolveFrame(d.toString()));
+          }
+        }
+      );
+      const frame = JSON.parse(await framePromise);
+      expect(frame).toEqual(
+        expect.objectContaining({ code: "INVALID_TOKEN" })
+      );
+      await new Promise<void>((resolve) => ws.once("close", resolve));
+    });
+
     it("deactivates an active enrollment token", async () => {
       const createdResponse = await app.inject({
         method: "POST",
@@ -504,6 +557,186 @@ describe("api", () => {
       const ackRaw = await ackPromise;
       expect(JSON.parse(ackRaw)).toEqual({ type: "ack", accepted: true });
       ws.close();
+    });
+
+    it("surfaces latest host_stats as telemetry on GET /api/v1/agents", async () => {
+      let resolveHello!: (v: string) => void;
+      const helloPromise = new Promise<string>((res) => {
+        resolveHello = res;
+      });
+      const ws = await app.injectWS("/realtime", {}, {
+        onInit: (sock) => {
+          sock.once("message", (d) => resolveHello(d.toString()));
+        }
+      });
+      await helloPromise;
+
+      const ackPromise = new Promise<string>((resolve, reject) => {
+        ws.once("message", (d) => resolve(d.toString()));
+        ws.once("error", reject);
+      });
+      const sampleTs = new Date().toISOString();
+      ws.send(
+        JSON.stringify({
+          type: "host_stats",
+          agentId: "a-telemetry",
+          ts: sampleTs,
+          cpuPercent: 42.5,
+          memUsedBytes: 2_000_000,
+          memTotalBytes: 8_000_000,
+          memPercent: 25,
+          netRxBytesPerSec: 1024,
+          netTxBytesPerSec: 2048,
+          processRSSBytes: 512_000
+        })
+      );
+      await ackPromise;
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/agents",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as { agents: Array<{ id: string; telemetry?: Record<string, unknown> }> };
+      const row = body.agents.find((a) => a.id === "a-telemetry");
+      expect(row?.telemetry).toEqual(
+        expect.objectContaining({
+          ts: sampleTs,
+          cpuPercent: 42.5,
+          memUsedBytes: 2_000_000,
+          memTotalBytes: 8_000_000,
+          memPercent: 25,
+          netRxBytesPerSec: 1024,
+          netTxBytesPerSec: 2048,
+          processRSSBytes: 512_000
+        })
+      );
+      ws.close();
+    });
+
+    it("surfaces app_stats frames as apps on GET /api/v1/agents", async () => {
+      let resolveHello!: (v: string) => void;
+      const helloPromise = new Promise<string>((res) => {
+        resolveHello = res;
+      });
+      const ws = await app.injectWS("/realtime", {}, {
+        onInit: (sock) => {
+          sock.once("message", (d) => resolveHello(d.toString()));
+        }
+      });
+      await helloPromise;
+
+      const ackPromise = new Promise<string>((resolve, reject) => {
+        ws.once("message", (d) => resolve(d.toString()));
+        ws.once("error", reject);
+      });
+      const ts = new Date().toISOString();
+      ws.send(
+        JSON.stringify({
+          type: "app_stats",
+          agentId: "a-app-telemetry",
+          ts,
+          containerId: "deadbeef1234",
+          name: "dev-kaiad-1",
+          image: "dev-kaiad:latest",
+          state: "running",
+          cpuPercent: 12.3,
+          memUsedBytes: 50_000_000,
+          memLimitBytes: 200_000_000,
+          memPercent: 25,
+          netRxBytesPerSec: 100,
+          netTxBytesPerSec: 200
+        })
+      );
+      await ackPromise;
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/agents",
+        headers: { authorization: "Bearer dev-token" }
+      });
+      expect(response.statusCode).toBe(200);
+      const body = response.json() as {
+        agents: Array<{ id: string; apps?: Array<Record<string, unknown>> }>;
+      };
+      const row = body.agents.find((a) => a.id === "a-app-telemetry");
+      expect(row?.apps).toHaveLength(1);
+      expect(row?.apps?.[0]).toEqual(
+        expect.objectContaining({
+          containerId: "deadbeef1234",
+          name: "dev-kaiad-1",
+          cpuPercent: 12.3,
+          memPercent: 25,
+          netRxBytesPerSec: 100,
+          netTxBytesPerSec: 200
+        })
+      );
+      ws.close();
+    });
+
+    it("broadcasts host_stats and app_stats to UI telemetry subscribers", async () => {
+      const uiMessages: string[] = [];
+      let uiOpened!: () => void;
+      const openPromise = new Promise<void>((res) => {
+        uiOpened = res;
+      });
+      const uiWs = await app.injectWS("/api/v1/realtime/ui?token=dev-token", {}, {
+        onInit: (sock) => {
+          sock.on("message", (d) => {
+            uiMessages.push(d.toString());
+          });
+        }
+      });
+      // Give the UI WS a moment to register.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      uiOpened();
+      await openPromise;
+
+      const agentWs = await app.injectWS("/realtime");
+      // Wait for hello.
+      await new Promise<void>((resolve) => agentWs.once("message", () => resolve()));
+
+      const hostAck = new Promise<void>((resolve) => agentWs.once("message", () => resolve()));
+      agentWs.send(
+        JSON.stringify({
+          type: "host_stats",
+          agentId: "a-bcast",
+          ts: new Date().toISOString(),
+          cpuPercent: 4.2
+        })
+      );
+      await hostAck;
+
+      const appAck = new Promise<void>((resolve) => agentWs.once("message", () => resolve()));
+      agentWs.send(
+        JSON.stringify({
+          type: "app_stats",
+          agentId: "a-bcast",
+          ts: new Date().toISOString(),
+          containerId: "c-123",
+          name: "svc",
+          state: "running",
+          cpuPercent: 8.8
+        })
+      );
+      await appAck;
+
+      // Give fanout a moment to land on the UI socket.
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      const events = uiMessages.map((m) => JSON.parse(m));
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "host_stats", agentId: "a-bcast" }),
+          expect.objectContaining({
+            type: "app_stats",
+            agentId: "a-bcast",
+            containerId: "c-123"
+          })
+        ])
+      );
+      agentWs.close();
+      uiWs.close();
     });
 
     it("sends apiError-like frame and closes on invalid JSON", async () => {

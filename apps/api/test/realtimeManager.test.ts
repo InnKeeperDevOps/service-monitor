@@ -88,6 +88,54 @@ describe("RealtimeManager", () => {
       mgr.unregisterAgent("a-1");
       expect(mgr.getConnectedAgentIds()).toEqual([]);
     });
+
+    it("setAppStats and getAppStats round-trip by containerId", () => {
+      const mgr = new RealtimeManager();
+      mgr.setAppStats("a-1", "c-1", { cpuPercent: 10 });
+      mgr.setAppStats("a-1", "c-2", { cpuPercent: 20 });
+      const apps = mgr.getAppStats("a-1");
+      expect(apps).toHaveLength(2);
+      expect(apps).toEqual(
+        expect.arrayContaining([{ cpuPercent: 10 }, { cpuPercent: 20 }])
+      );
+      mgr.deleteAppStats("a-1", "c-1");
+      expect(mgr.getAppStats("a-1")).toEqual([{ cpuPercent: 20 }]);
+    });
+
+    it("broadcastToTenant fans out to every UI subscriber for that tenant", () => {
+      const mgr = new RealtimeManager();
+      const sockA = createMockSocket();
+      const sockB = createMockSocket();
+      const otherTenant = createMockSocket();
+      const subA = { tenantId: "t-1", socket: sockA };
+      const subB = { tenantId: "t-1", socket: sockB };
+      const subOther = { tenantId: "t-2", socket: otherTenant };
+      mgr.addUiSubscriber(subA);
+      mgr.addUiSubscriber(subB);
+      mgr.addUiSubscriber(subOther);
+      expect(mgr.countUiSubscribers("t-1")).toBe(2);
+
+      mgr.broadcastToTenant("t-1", '{"hello":"world"}');
+      expect(sockA.send).toHaveBeenCalledWith('{"hello":"world"}');
+      expect(sockB.send).toHaveBeenCalledWith('{"hello":"world"}');
+      expect(otherTenant.send).not.toHaveBeenCalled();
+
+      mgr.removeUiSubscriber(subA);
+      expect(mgr.countUiSubscribers("t-1")).toBe(1);
+    });
+
+    it("unregisterAgent clears host + app stats and tenant binding", async () => {
+      const mgr = new RealtimeManager();
+      const socket = createMockSocket();
+      await mgr.registerAgent({ agentId: "a-x", socket });
+      mgr.bindAgentTenant("a-x", "t-1");
+      mgr.setHostStats("a-x", { cpuPercent: 5 });
+      mgr.setAppStats("a-x", "c-1", { cpuPercent: 1 });
+      mgr.unregisterAgent("a-x");
+      expect(mgr.getHostStats("a-x")).toBeUndefined();
+      expect(mgr.getAppStats("a-x")).toEqual([]);
+      expect(mgr.getAgentTenant("a-x")).toBeUndefined();
+    });
   });
 
   describe("with redis", () => {

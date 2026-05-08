@@ -158,6 +158,42 @@ export const listMonitoredServicesResponseSchema = z.object({
   services: z.array(monitoredServiceSchema)
 });
 
+/** Latest host_stats payload merged into the agent list response. */
+export const agentTelemetrySchema = z.object({
+  /** Timestamp of the most recent host_stats frame (ISO). */
+  ts: z.string(),
+  cpuPercent: z.number().min(0).max(100).optional(),
+  memUsedBytes: z.number().int().nonnegative().optional(),
+  memTotalBytes: z.number().int().positive().optional(),
+  memPercent: z.number().min(0).max(100).optional(),
+  diskUsedBytes: z.number().int().nonnegative().optional(),
+  diskTotalBytes: z.number().int().positive().optional(),
+  diskPath: z.string().optional(),
+  netRxBytesPerSec: z.number().nonnegative().optional(),
+  netTxBytesPerSec: z.number().nonnegative().optional(),
+  processRSSBytes: z.number().int().nonnegative().optional()
+});
+
+export type AgentTelemetry = z.infer<typeof agentTelemetrySchema>;
+
+/** Latest app_stats payload (per-container) merged into the agent list response. */
+export const agentAppTelemetrySchema = z.object({
+  ts: z.string(),
+  containerId: z.string(),
+  name: z.string().optional(),
+  image: z.string().optional(),
+  serviceId: z.string().optional(),
+  state: z.string().optional(),
+  cpuPercent: z.number().min(0).optional(),
+  memUsedBytes: z.number().int().nonnegative().optional(),
+  memLimitBytes: z.number().int().positive().optional(),
+  memPercent: z.number().min(0).max(100).optional(),
+  netRxBytesPerSec: z.number().nonnegative().optional(),
+  netTxBytesPerSec: z.number().nonnegative().optional()
+});
+
+export type AgentAppTelemetry = z.infer<typeof agentAppTelemetrySchema>;
+
 /** Server may merge RealtimeManager session state into list responses. */
 export const agentSchema = z.object({
   id: z.string(),
@@ -168,7 +204,9 @@ export const agentSchema = z.object({
   lastSeenAt: z.string().datetime().nullable(),
   certFingerprint: z.string().nullable().optional(),
   allowedCapabilities: z.array(z.string()).optional(),
-  websocketConnected: z.boolean().optional()
+  websocketConnected: z.boolean().optional(),
+  telemetry: agentTelemetrySchema.optional(),
+  apps: z.array(agentAppTelemetrySchema).optional()
 });
 
 export const listAgentsResponseSchema = z.object({

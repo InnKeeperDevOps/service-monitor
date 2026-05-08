@@ -5,20 +5,40 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"sync/atomic"
+
 	"github.com/service-monitor/agent/internal/agentdebug"
+	"github.com/service-monitor/agent/internal/appstats"
 	"github.com/service-monitor/agent/internal/credentials"
 	"github.com/service-monitor/agent/internal/docker"
 	"github.com/service-monitor/agent/internal/executor"
 	"github.com/service-monitor/agent/internal/hoststats"
+	"github.com/service-monitor/agent/internal/logfile"
+	"github.com/service-monitor/agent/internal/logship"
+	"github.com/service-monitor/agent/internal/managed"
+	"github.com/service-monitor/agent/internal/processstats"
+	"github.com/service-monitor/agent/internal/processsup"
 	"github.com/service-monitor/agent/internal/transport"
 )
 
 func isProduction() bool {
 	return strings.EqualFold(os.Getenv("NODE_ENV"), "production")
+}
+
+// logShipBufferSize is the number of recent log lines kept per service for
+// app_log_error context. Defaults to 50, override with SM_LOGSHIP_BUFFER.
+func logShipBufferSize() int {
+	if raw := os.Getenv("SM_LOGSHIP_BUFFER"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 50
 }
 
 // serviceIDForContainer chooses a service id for log frames emitted from a
@@ -95,7 +115,15 @@ func main() {
 
 	socketPath := os.Getenv("SM_DOCKER_SOCKET")
 	dc := docker.NewClient(socketPath)
+	inventory := managed.New()
 	exec := executor.NewExecutor(dc)
+	exec.SetInventory(inventory)
+	var backendAtomic atomic.Value
+	backendAtomic.Store("docker")
+	getBackend := func() string {
+		v, _ := backendAtomic.Load().(string)
+		return v
+	}
 
 	pinnedServiceID := strings.TrimSpace(os.Getenv("SM_SERVICE_ID"))
 	if pinnedServiceID != "" {
@@ -121,6 +149,13 @@ func main() {
 			if b == "" {
 				b = "docker"
 			}
+			// Local override for hosts without a kaiad UI to set runtime
+			// (tenant settings don't carry agentRuntimeBackend yet). Useful
+			// for shell-runtime smoke tests on a docker-default panel.
+			if override := strings.ToLower(strings.TrimSpace(os.Getenv("SM_AGENT_RUNTIME_OVERRIDE"))); override != "" {
+				b = override
+			}
+			backendAtomic.Store(b)
 			switch b {
 			case "shell":
 				exec.Configure(nil, executor.RuntimeShell)
@@ -132,16 +167,31 @@ func main() {
 			log.Printf("kaiad hello: agent runtime backend=%s", b)
 
 			logStreamOnce.Do(func() {
-				if b != "docker" {
-					return
-				}
 				if os.Getenv("SM_ENABLE_LOG_STREAMING") == "0" {
 					return
 				}
 				if client == nil {
 					return
 				}
-				streamExistingContainerLogs(ctx, dc, agentID, client)
+				// Wrap the transport client with a buffering log-shipper so that
+				// every error-level line is also emitted as an app_log_error
+				// frame carrying the last 50 context lines for the same service.
+				bufferSize := logShipBufferSize()
+				logSender := logship.NewSender(client, client, bufferSize)
+
+				if b == "docker" {
+					streamExistingContainerLogs(ctx, dc, agentID, logSender)
+					return
+				}
+				if b == "shell" {
+					// For shell-runtime, log streaming happens via file tailing
+					// driven by sync_desired_state. The supervisor (re)starts
+					// processes and registers their log files with the tailer.
+					tailer := logfile.New(logSender)
+					sup := processsup.New(tailer, agentID)
+					exec.SetProcessReconciler(sup)
+					log.Printf("shell-runtime supervisor + tailer wired (agent=%s)", agentID)
+				}
 			})
 		}),
 	}
@@ -168,6 +218,25 @@ func main() {
 	if runtime.GOOS == "linux" && os.Getenv("SM_DISABLE_HOST_STATS") != "1" {
 		hs := hoststats.NewSampler()
 		opts = append(opts, transport.WithHostStatsCollector(hs.Build))
+	}
+	if os.Getenv("SM_DISABLE_APP_STATS") != "1" {
+		as := appstats.NewSampler(dc, appstats.Options{
+			GetBackend: getBackend,
+			Inventory:  inventory,
+		})
+		ps := processstats.NewSampler(inventory)
+		combined := func(agentID string) ([][]byte, error) {
+			frames, err := as.Build(agentID)
+			if err != nil {
+				return nil, err
+			}
+			procFrames, _ := ps.Build(agentID)
+			if len(procFrames) > 0 {
+				frames = append(frames, procFrames...)
+			}
+			return frames, nil
+		}
+		opts = append(opts, transport.WithAppStatsCollector(combined))
 	}
 
 	client = transport.NewClient(baseURL, agentID, opts...)

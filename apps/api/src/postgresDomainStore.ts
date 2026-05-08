@@ -26,6 +26,23 @@ function encryptSshKey(plaintext: string): string {
   return `${iv.toString("base64")}:${encrypted.toString("base64")}:${tag.toString("base64")}`;
 }
 
+function decryptSshKey(stored: string): string | null {
+  const parts = stored.split(":");
+  if (parts.length !== 3) return null;
+  try {
+    const keyBytes = getEncryptionKey();
+    const iv = Buffer.from(parts[0], "base64");
+    const encrypted = Buffer.from(parts[1], "base64");
+    const tag = Buffer.from(parts[2], "base64");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", keyBytes, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return decrypted.toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
 export function createPostgresDomainStore(pool: Pool): DomainStore {
   const queryFn = async (sql: string, params: unknown[]) => {
     const result = await pool.query(sql, params);
@@ -73,6 +90,17 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
       };
     },
     deleteSshKey: (tenantId, id) => queries.deleteSshKey(queryFn, tenantId, id),
+    getSshKeyMaterial: async (tenantId, id) => {
+      const row = await queries.getSshKey(queryFn, tenantId, id);
+      if (!row) return null;
+      const type = row.type as "uploaded" | "local_path";
+      if (type === "uploaded") {
+        const enc = (row as unknown as { privateKeyEncrypted: string | null }).privateKeyEncrypted;
+        if (!enc) return { type: "uploaded", privateKey: null, localPath: null };
+        return { type: "uploaded", privateKey: decryptSshKey(enc), localPath: null };
+      }
+      return { type: "local_path", privateKey: null, localPath: row.localPath ?? null };
+    },
 
     listAgents: (tenantId) => queries.listAgents(queryFn, tenantId),
     getAgent: (tenantId, id) => queries.getAgent(queryFn, tenantId, id),
@@ -84,6 +112,32 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
     listServices: (tenantId) => queries.listServices(queryFn, tenantId),
     getService: (tenantId, id) => queries.getService(queryFn, tenantId, id),
     createService: (tenantId, data) => queries.createService(queryFn, tenantId, data),
+    updateService: async (tenantId, id, patch) => {
+      const assignments: string[] = [];
+      const values: unknown[] = [];
+      const push = (column: string, value: unknown) => {
+        values.push(value);
+        assignments.push(`${column} = $${values.length}`);
+      };
+      if (patch.name !== undefined) push("name", patch.name);
+      if (patch.gitRepoUrl !== undefined) push("git_repo_url", patch.gitRepoUrl);
+      if (patch.sshKeyId !== undefined) push("ssh_key_id", patch.sshKeyId);
+      if (patch.branch !== undefined) push("branch", patch.branch);
+      if (patch.agentId !== undefined) push("agent_id", patch.agentId);
+      if (patch.dockerImage !== undefined) push("docker_image", patch.dockerImage);
+      if (patch.composePath !== undefined) push("compose_path", patch.composePath);
+      if (patch.agentRuntimeBackend !== undefined) push("agent_runtime_backend", patch.agentRuntimeBackend);
+      if (assignments.length === 0) {
+        return queries.getService(queryFn, tenantId, id);
+      }
+      values.push(id, tenantId);
+      const { rows } = await queryFn(
+        `UPDATE monitored_services SET ${assignments.join(", ")} WHERE id = $${values.length - 1} AND tenant_id = $${values.length} RETURNING id`,
+        values
+      );
+      if (rows.length === 0) return undefined;
+      return queries.getService(queryFn, tenantId, id);
+    },
     deleteService: async (tenantId, id) => {
       const { rows } = await queryFn(
         "DELETE FROM monitored_services WHERE id = $1 AND tenant_id = $2 RETURNING id",

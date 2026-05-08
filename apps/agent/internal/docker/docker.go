@@ -108,6 +108,58 @@ func (c *Client) StopContainer(ctx context.Context, id string) error {
 	return nil
 }
 
+type ContainerStatsNetwork struct {
+	RxBytes uint64 `json:"rx_bytes"`
+	TxBytes uint64 `json:"tx_bytes"`
+}
+
+type ContainerStatsCPU struct {
+	CPUUsage struct {
+		TotalUsage uint64 `json:"total_usage"`
+	} `json:"cpu_usage"`
+	SystemCPUUsage uint64 `json:"system_cpu_usage"`
+	OnlineCPUs     uint64 `json:"online_cpus"`
+}
+
+type ContainerStats struct {
+	Read        string                           `json:"read"`
+	Name        string                           `json:"name"`
+	ID          string                           `json:"id"`
+	CPUStats    ContainerStatsCPU                `json:"cpu_stats"`
+	PreCPUStats ContainerStatsCPU                `json:"precpu_stats"`
+	MemoryStats struct {
+		Usage uint64 `json:"usage"`
+		Limit uint64 `json:"limit"`
+		Stats struct {
+			Cache uint64 `json:"cache"`
+		} `json:"stats"`
+	} `json:"memory_stats"`
+	Networks map[string]ContainerStatsNetwork `json:"networks"`
+}
+
+// ContainerStats returns a single stats snapshot for a container (Docker /containers/{id}/stats?stream=false).
+func (c *Client) ContainerStats(ctx context.Context, id string) (*ContainerStats, error) {
+	url := fmt.Sprintf("http://localhost/containers/%s/stats?stream=false", id)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("container stats %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("container stats %s: status %d: %s", id, resp.StatusCode, body)
+	}
+	var s ContainerStats
+	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+		return nil, fmt.Errorf("decode container stats %s: %w", id, err)
+	}
+	return &s, nil
+}
+
 func (c *Client) StreamLogs(ctx context.Context, id string, since string) (io.ReadCloser, error) {
 	url := fmt.Sprintf(
 		"http://localhost/containers/%s/logs?follow=true&stdout=true&stderr=true&since=%s",

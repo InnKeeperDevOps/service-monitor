@@ -34,6 +34,25 @@ export function meResponseToAuthUser(m: MeResponse): AuthUser {
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://localhost:3001" : "");
 
+/** Derive the WebSocket base URL from API_BASE, falling back to current window origin. */
+export function wsBaseUrl(): string {
+  if (API_BASE) {
+    if (API_BASE.startsWith("http://")) return `ws://${API_BASE.slice("http://".length)}`;
+    if (API_BASE.startsWith("https://")) return `wss://${API_BASE.slice("https://".length)}`;
+  }
+  if (typeof window !== "undefined") {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}`;
+  }
+  return "";
+}
+
+/** Open the UI telemetry WebSocket, passing the session token in the query string. */
+export function openTelemetryStream(): WebSocket {
+  const token = encodeURIComponent(getAuthToken());
+  return new WebSocket(`${wsBaseUrl()}/api/v1/realtime/ui?token=${token}`);
+}
+
 function getAuthToken(): string {
   return localStorage.getItem("sm_token") ?? import.meta.env.VITE_AUTH_TOKEN ?? "dev-token";
 }
@@ -87,6 +106,66 @@ export type Incident = {
   eventCount: number;
 };
 
+export type AgentTelemetry = {
+  ts: string;
+  cpuPercent?: number;
+  memUsedBytes?: number;
+  memTotalBytes?: number;
+  memPercent?: number;
+  diskUsedBytes?: number;
+  diskTotalBytes?: number;
+  diskPath?: string;
+  netRxBytesPerSec?: number;
+  netTxBytesPerSec?: number;
+  processRSSBytes?: number;
+};
+
+export type AgentAppTelemetry = {
+  ts: string;
+  containerId: string;
+  name?: string;
+  image?: string;
+  serviceId?: string;
+  state?: string;
+  cpuPercent?: number;
+  memUsedBytes?: number;
+  memLimitBytes?: number;
+  memPercent?: number;
+  netRxBytesPerSec?: number;
+  netTxBytesPerSec?: number;
+};
+
+export type ErrorGroupStatus = "open" | "fixing" | "fixed" | "paused" | "missing_auth";
+
+export type ErrorGroup = {
+  id: string;
+  tenantId: string;
+  agentId: string;
+  serviceId: string;
+  fingerprint: string;
+  normalizedMessage: string;
+  sampleMessage: string;
+  status: ErrorGroupStatus;
+  count: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastFixAt?: string | null;
+  lastFixCommit?: string | null;
+  contextLines?: string[];
+};
+
+export type UiTelemetryEvent =
+  | { type: "host_stats"; agentId: string; stats: Omit<AgentTelemetry, never> }
+  | {
+      type: "app_stats";
+      agentId: string;
+      containerId: string;
+      stats: Omit<AgentAppTelemetry, "containerId">;
+    }
+  | { type: "agent_presence"; agentId: string; websocketConnected: boolean }
+  | { type: "app_gone"; agentId: string; containerId: string }
+  | { type: "error_group_updated"; group: ErrorGroup };
+
 export type Agent = {
   id: string;
   tenantId: string;
@@ -98,6 +177,10 @@ export type Agent = {
   allowedCapabilities?: string[];
   /** Present when API merges RealtimeManager session state. */
   websocketConnected?: boolean;
+  /** Latest host_stats merged from RealtimeManager. */
+  telemetry?: AgentTelemetry;
+  /** Latest app_stats per container, merged from RealtimeManager. */
+  apps?: AgentAppTelemetry[];
 };
 
 export type MonitoredService = {
@@ -192,6 +275,11 @@ export const api = {
       method: "DELETE"
     }),
   listServices: () => apiFetch<{ services: MonitoredService[] }>("/api/v1/services"),
+  listErrorGroups: () => apiFetch<{ groups: ErrorGroup[] }>("/api/v1/error-groups"),
+  listErrorGroupsForAgent: (agentId: string) =>
+    apiFetch<{ groups: ErrorGroup[] }>(`/api/v1/agents/${encodeURIComponent(agentId)}/error-groups`),
+  listErrorGroupsForService: (serviceId: string) =>
+    apiFetch<{ groups: ErrorGroup[] }>(`/api/v1/services/${encodeURIComponent(serviceId)}/error-groups`),
   createService: (data: {
     name: string;
     gitRepoUrl: string;
@@ -218,6 +306,11 @@ export const api = {
     apiFetch<MonitoredService>(`/api/v1/services/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(data)
+    }),
+
+  deleteService: (id: string) =>
+    apiFetch<void>(`/api/v1/services/${encodeURIComponent(id)}`, {
+      method: "DELETE"
     }),
 
   getSettings: () => getTenantSettings(),

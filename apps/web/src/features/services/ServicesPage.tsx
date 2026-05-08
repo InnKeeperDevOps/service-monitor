@@ -66,6 +66,23 @@ export function ServicesPage() {
     setShowForm(true);
   }
 
+  async function handleDelete(svc: MonitoredService) {
+    if (!window.confirm(`Delete service "${svc.name}"? This will also remove its runs and incidents.`)) {
+      return;
+    }
+    try {
+      await api.deleteService(svc.id);
+      setServices((prev) => prev.filter((s) => s.id !== svc.id));
+      if (editingId === svc.id) {
+        setEditingId(null);
+        setShowForm(false);
+        setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "", agentRuntimeBackend: "" });
+      }
+    } catch (e: unknown) {
+      setError((e as Error).message);
+    }
+  }
+
   return (
     <section>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
@@ -75,6 +92,25 @@ export function ServicesPage() {
         )}
       </div>
       {error && <div style={{ color: "var(--color-danger)", marginBottom: "0.5rem" }}>{error}</div>}
+
+      {services.some((s) => !s.sshKeyId) && (
+        <div
+          role="status"
+          style={{
+            background: "color-mix(in srgb, var(--color-warning) 12%, var(--color-surface))",
+            border: "1px solid var(--color-warning)",
+            borderRadius: 8,
+            padding: "0.6rem 0.75rem",
+            marginBottom: "1rem",
+            fontSize: "0.85rem",
+            color: "var(--color-text-primary)"
+          }}
+        >
+          <strong>Auto-fix is disabled for some services.</strong> Services without an SSH key can still be
+          monitored, but Kaiad cannot push fix commits to their repos. Edit the service and assign an SSH key
+          to enable the automated error → fix loop.
+        </div>
+      )}
 
       {canManage && showForm && (
         <form onSubmit={handleCreate} style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: 10, padding: "1rem", marginBottom: "1rem", display: "grid", gap: "0.5rem" }}>
@@ -149,20 +185,36 @@ export function ServicesPage() {
                 </td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>
                   {canManage && (
-                    <button
-                      onClick={() => handleEdit(svc)}
-                      style={{
-                        background: "var(--color-surface)",
-                        border: "1px solid var(--color-border)",
-                        padding: "0.2rem 0.5rem",
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        fontSize: "0.8rem",
-                        color: "var(--color-text-primary)"
-                      }}
-                    >
-                      Edit
-                    </button>
+                    <div style={{ display: "inline-flex", gap: "0.3rem" }}>
+                      <button
+                        onClick={() => handleEdit(svc)}
+                        style={{
+                          background: "var(--color-surface)",
+                          border: "1px solid var(--color-border)",
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                          fontSize: "0.8rem",
+                          color: "var(--color-text-primary)"
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDelete(svc)}
+                        style={{
+                          background: "var(--color-surface)",
+                          border: "1px solid var(--color-border)",
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                          fontSize: "0.8rem",
+                          color: "var(--color-danger)"
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   )}
                 </td>
               </tr>

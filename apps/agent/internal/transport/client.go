@@ -55,6 +55,18 @@ type logEventMessage struct {
 	Ts        string `json:"ts"`
 }
 
+// appLogErrorMessage carries an error log line plus the buffered context lines
+// the agent saw immediately before it. See packages/contracts/src/realtime.ts
+// `appLogErrorSchema` for the receiving end.
+type appLogErrorMessage struct {
+	Type         string   `json:"type"`
+	AgentID      string   `json:"agentId"`
+	ServiceID    string   `json:"serviceId"`
+	Ts           string   `json:"ts"`
+	Message      string   `json:"message"`
+	ContextLines []string `json:"contextLines"`
+}
+
 type Client struct {
 	url               string
 	agentID           string
@@ -82,6 +94,9 @@ type Client struct {
 
 	// hostStats, when set, runs after each heartbeat to send optional host_stats JSON (see packages/contracts).
 	hostStats func(agentID string) ([]byte, error)
+
+	// appStats, when set, runs after hostStats each tick to send zero or more app_stats frames (per container).
+	appStats func(agentID string) ([][]byte, error)
 }
 
 type ClientOption func(*Client)
@@ -155,6 +170,14 @@ func WithProtocolDebugLog(fn func(format string, args ...interface{})) ClientOpt
 func WithHostStatsCollector(fn func(agentID string) ([]byte, error)) ClientOption {
 	return func(c *Client) {
 		c.hostStats = fn
+	}
+}
+
+// WithAppStatsCollector sets a callback that returns zero or more JSON app_stats frames per tick
+// (one per container). Collector errors are logged (debug) and do not end the session.
+func WithAppStatsCollector(fn func(agentID string) ([][]byte, error)) ClientOption {
+	return func(c *Client) {
+		c.appStats = fn
 	}
 }
 
@@ -297,6 +320,9 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn) error {
 	if err := c.sendHostStats(); err != nil {
 		return err
 	}
+	if err := c.sendAppStats(); err != nil {
+		return err
+	}
 
 	for {
 		select {
@@ -309,6 +335,9 @@ func (c *Client) runSession(ctx context.Context, conn *websocket.Conn) error {
 				return err
 			}
 			if err := c.sendHostStats(); err != nil {
+				return err
+			}
+			if err := c.sendAppStats(); err != nil {
 				return err
 			}
 		}
@@ -361,6 +390,71 @@ func (c *Client) sendHostStats() error {
 		return fmt.Errorf("send host_stats: %w", err)
 	}
 	c.protoDebug("outbound host_stats bytes=%d", len(payload))
+	return nil
+}
+
+func (c *Client) sendAppStats() error {
+	if c.appStats == nil {
+		return nil
+	}
+	frames, err := c.appStats(c.agentID)
+	if err != nil {
+		c.protoDebug("app_stats collect: %v", err)
+		return nil
+	}
+	if len(frames) == 0 {
+		return nil
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.activeConn == nil {
+		return fmt.Errorf("not connected")
+	}
+	totalBytes := 0
+	for _, f := range frames {
+		if len(f) == 0 {
+			continue
+		}
+		if err := c.activeConn.WriteMessage(websocket.TextMessage, f); err != nil {
+			return fmt.Errorf("send app_stats: %w", err)
+		}
+		totalBytes += len(f)
+	}
+	c.protoDebug("outbound app_stats frames=%d bytes=%d", len(frames), totalBytes)
+	return nil
+}
+
+// SendAppLogError emits an `app_log_error` frame with the buffered context
+// lines that preceded `message`. Best-effort: a missing connection returns
+// an error but does not interrupt the surrounding log_event flow.
+func (c *Client) SendAppLogError(_, serviceID, message string, contextLines []string, ts string) error {
+	if ts == "" {
+		ts = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	if contextLines == nil {
+		contextLines = []string{}
+	}
+	msg := appLogErrorMessage{
+		Type:         "app_log_error",
+		AgentID:      c.agentID,
+		ServiceID:    serviceID,
+		Ts:           ts,
+		Message:      message,
+		ContextLines: contextLines,
+	}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.activeConn == nil {
+		return fmt.Errorf("not connected")
+	}
+	if err := c.activeConn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		return fmt.Errorf("send app_log_error: %w", err)
+	}
+	c.protoDebug("outbound app_log_error service=%s ctxLines=%d bytes=%d", serviceID, len(contextLines), len(payload))
 	return nil
 }
 
@@ -440,7 +534,7 @@ func (c *Client) handleIncoming(ctx context.Context, errCh chan<- error, data []
 		return
 	}
 	switch envelope.Type {
-	case "run_step", "docker_op", "cancel_run", "sync_desired_state", "run_cursor_plan", "run_claude_plan", "run_toolchain", "receive_source_archive":
+	case "run_step", "docker_op", "cancel_run", "sync_desired_state", "run_cursor_plan", "run_claude_plan", "run_toolchain", "receive_source_archive", "run_fix_plan":
 	default:
 		c.protoDebug("inbound ignored unknown command type=%s", envelope.Type)
 		return

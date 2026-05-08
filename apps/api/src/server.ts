@@ -18,6 +18,11 @@ import {
   listSshKeysResponseSchema,
   healthResponseSchema,
   listAgentsResponseSchema,
+  hostStatsSchema,
+  appStatsSchema,
+  uiTelemetryEventSchema,
+  type AgentTelemetry,
+  type AgentAppTelemetry,
   listEnrollmentTokensResponseSchema,
   listIncidentsResponseSchema,
   listAuthProvidersResponseSchema,
@@ -27,6 +32,7 @@ import {
   oauthAuthorizeResponseSchema,
   oauthCallbackResponseSchema,
   updateIncidentStatusRequestSchema,
+  updateMonitoredServiceRequestSchema,
   upsertTenantSettingsRequestSchema,
   agentCommandDispatchResponseSchema,
   platformToAgentMessageSchema,
@@ -73,6 +79,8 @@ import { readConfig, writeConfig, type KaiadConfig } from "./configPersistence.j
 import { enforcePolicy } from "./policy.js";
 import { createReadinessCheckersFromEnv, type ReadinessChecker } from "./readyChecks.js";
 import { RealtimeManager, type PendingCommandRedis } from "./realtimeManager.js";
+import { ErrorGroupStore, isProbablyUserInputError } from "./errorGrouping.js";
+import { dispatchAutoFix } from "./autoFixDispatcher.js";
 import {
   getTenantSettings,
   upsertTenantSettings
@@ -185,6 +193,13 @@ export type RuntimeQueueWiring = {
 
 export type { ReadinessChecker } from "./readyChecks.js";
 
+/** Best-effort extraction of a 7+ char hex SHA from agent run_fix_plan output.
+ *  The agent prints `commit=<sha>` on a successful push; if absent, return null. */
+function extractCommitShaFromOutput(output: string): string | null {
+  const m = output.match(/commit=([0-9a-f]{7,40})/i);
+  return m ? m[1] : null;
+}
+
 const noopLogIngestion = (_job: LogIngestionJob) => Promise.resolve();
 const noopAgentCommandEnqueue = async (_job: AgentCommandJob) => {
   throw new Error("Agent command queue is not configured");
@@ -244,12 +259,14 @@ function createLazyDomainStore(resolve: () => Promise<DomainStore>): DomainStore
     listServices: (tenantId) => get().then((s) => s.listServices(tenantId)),
     getService: (tenantId, id) => get().then((s) => s.getService(tenantId, id)),
     createService: (tenantId, data) => get().then((s) => s.createService(tenantId, data)),
+    updateService: (tenantId, id, patch) => get().then((s) => s.updateService(tenantId, id, patch)),
     deleteService: (tenantId, id) => get().then((s) => s.deleteService(tenantId, id)),
     updateAgent: (tenantId, agentId, data) => get().then((s) => s.updateAgent(tenantId, agentId, data)),
     deleteAgent: (tenantId, agentId) => get().then((s) => s.deleteAgent(tenantId, agentId)),
     listSshKeys: (tenantId) => get().then((s) => s.listSshKeys(tenantId)),
     createSshKey: (tenantId, data) => get().then((s) => s.createSshKey(tenantId, data)),
-    deleteSshKey: (tenantId, id) => get().then((s) => s.deleteSshKey(tenantId, id))
+    deleteSshKey: (tenantId, id) => get().then((s) => s.deleteSshKey(tenantId, id)),
+    getSshKeyMaterial: (tenantId, id) => get().then((s) => s.getSshKeyMaterial(tenantId, id))
   };
 }
 
@@ -295,7 +312,10 @@ export function createRuntimeQueueWiringFromEnv(env: NodeJS.ProcessEnv = process
       }
     },
     close: async () => {
-      await Promise.allSettled([logQueue.close(), agentCommandQueue.close()]);
+      await Promise.allSettled([
+        logQueue.close(),
+        agentCommandQueue.close()
+      ]);
       await redis.quit();
     }
   };
@@ -352,10 +372,15 @@ async function resolveGithubInstallInfo(cfg: KaiadConfig | null): Promise<{
 
 export function buildServer(opts: BuildServerOptions = {}) {
   const enqueueLogIngestion = opts.enqueueLogIngestion ?? noopLogIngestion;
+  const enqueueAgentCommand = opts.enqueueAgentCommand ?? noopAgentCommandEnqueue;
   const readinessCheckers = opts.readinessCheckers ?? createReadinessCheckersFromEnv();
   const domainStore = resolveDomainStore(opts);
   const authStore = opts.authStore ?? createMemoryAuthStore();
   const realtimeManager = new RealtimeManager({ redis: opts.redis });
+  const errorGroups = new ErrorGroupStore();
+  /** Map of in-flight fix command_id → errorGroupId, so the WS command_ack
+   *  handler can mark the right group fixed/open and emit onFixCreated. */
+  const fixCommandToGroup = new Map<string, { tenantId: string; serviceId: string; agentId: string; errorGroupId: string }>();
   const app = Fastify();
   app.register(cors);
   app.register(websocket);
@@ -420,7 +445,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
         }
         if (result) {
           agentTenantId = result.tenantId;
-        } else if (!isDev) {
+        } else {
           socket.send(
             JSON.stringify(
               apiErrorSchema.parse({
@@ -445,7 +470,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
       socket.send(JSON.stringify(buildRealtimeAgentHello(helloSettings)));
       let registeredAgentId: string | undefined;
 
-      socket.on("message", (raw) => {
+      socket.on("message", async (raw) => {
         let parsedJson: unknown;
         try {
           const text = typeof raw === "string" ? raw : raw.toString("utf8");
@@ -479,6 +504,26 @@ export function buildServer(opts: BuildServerOptions = {}) {
 
         const msg: AgentToPlatformMessage = parsed.data;
 
+        const ensureRegistered = (agentId: string) => {
+          if (!registeredAgentId) {
+            registeredAgentId = agentId;
+            realtimeManager.registerAgent({ agentId, socket }).catch(() => {});
+            if (agentTenantId) {
+              realtimeManager.bindAgentTenant(agentId, agentTenantId);
+              realtimeManager.broadcastToTenant(
+                agentTenantId,
+                JSON.stringify(
+                  uiTelemetryEventSchema.parse({
+                    type: "agent_presence",
+                    agentId,
+                    websocketConnected: true
+                  })
+                )
+              );
+            }
+          }
+        };
+
         if (msg.type === "heartbeat") {
           if (msg.tenantId && !agentTenantId) {
             agentTenantId = msg.tenantId;
@@ -495,10 +540,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
               })
               .catch(() => {});
           }
-          if (!registeredAgentId) {
-            registeredAgentId = msg.agentId;
-            realtimeManager.registerAgent({ agentId: msg.agentId, socket }).catch(() => {});
-          }
+          ensureRegistered(msg.agentId);
         }
 
         if (msg.type === "host_stats") {
@@ -510,15 +552,182 @@ export function buildServer(opts: BuildServerOptions = {}) {
               })
               .catch(() => {});
           }
-          if (!registeredAgentId) {
-            registeredAgentId = msg.agentId;
-            realtimeManager.registerAgent({ agentId: msg.agentId, socket }).catch(() => {});
-          }
+          ensureRegistered(msg.agentId);
           realtimeManager.setHostStats(msg.agentId, parsedJson);
+          if (agentTenantId) {
+            const { type: _t, agentId: _a, ...stats } = msg;
+            realtimeManager.broadcastToTenant(
+              agentTenantId,
+              JSON.stringify(
+                uiTelemetryEventSchema.parse({
+                  type: "host_stats",
+                  agentId: msg.agentId,
+                  stats
+                })
+              )
+            );
+          }
+        }
+
+        if (msg.type === "app_stats") {
+          if (agentTenantId) {
+            void domainStore
+              .recordAgentHeartbeat(agentTenantId, {
+                agentId: msg.agentId,
+                version: null
+              })
+              .catch(() => {});
+          }
+          ensureRegistered(msg.agentId);
+          realtimeManager.setAppStats(msg.agentId, msg.containerId, parsedJson);
+          if (agentTenantId) {
+            const { type: _t, agentId: _a, containerId: _c, ...stats } = msg;
+            realtimeManager.broadcastToTenant(
+              agentTenantId,
+              JSON.stringify(
+                uiTelemetryEventSchema.parse({
+                  type: "app_stats",
+                  agentId: msg.agentId,
+                  containerId: msg.containerId,
+                  stats
+                })
+              )
+            );
+          }
         }
 
         if (msg.type === "command_ack" && registeredAgentId) {
-          void realtimeManager.acknowledgeCommand(registeredAgentId, msg.commandId).catch(() => {});
+          void realtimeManager
+            .acknowledgeCommand(registeredAgentId, msg.commandId, { status: msg.status, output: msg.output })
+            .catch(() => {});
+
+          // If this ack belongs to a fix command we dispatched, transition
+          // the error group and (on success) emit onFixCreated.
+          const fixMeta = fixCommandToGroup.get(msg.commandId);
+          if (fixMeta) {
+            fixCommandToGroup.delete(msg.commandId);
+            if (msg.status === "completed") {
+              const commitSha = extractCommitShaFromOutput(msg.output ?? "");
+              const updated = errorGroups.setStatus(fixMeta.errorGroupId, "fixed", commitSha ?? undefined);
+              if (updated) {
+                realtimeManager.broadcastToTenant(
+                  fixMeta.tenantId,
+                  JSON.stringify(
+                    uiTelemetryEventSchema.parse({
+                      type: "error_group_updated",
+                      group: updated
+                    })
+                  )
+                );
+              }
+            } else if (msg.status === "failed" || msg.status === "cancelled") {
+              const updated = errorGroups.setStatus(fixMeta.errorGroupId, "open");
+              if (updated) {
+                realtimeManager.broadcastToTenant(
+                  fixMeta.tenantId,
+                  JSON.stringify(
+                    uiTelemetryEventSchema.parse({
+                      type: "error_group_updated",
+                      group: updated
+                    })
+                  )
+                );
+              }
+            }
+          }
+        }
+
+        if (msg.type === "app_log_error") {
+          const tenantId = agentTenantId ?? (isDev ? "t-1" : null);
+          if (!tenantId) {
+            // No tenant binding yet — drop silently; agent will resend later.
+          } else if (isProbablyUserInputError(msg.message)) {
+            // User-input errors are not auto-fix candidates. We still log
+            // for visibility but do not create an error group.
+            req.log?.info?.({
+              event: "auto_fix.skip_user_input",
+              serviceId: msg.serviceId,
+              message: msg.message
+            });
+          } else {
+            ensureRegistered(msg.agentId);
+            const upsert = errorGroups.upsert({
+              tenantId,
+              agentId: msg.agentId,
+              serviceId: msg.serviceId,
+              message: msg.message,
+              contextLines: msg.contextLines,
+              ts: msg.ts
+            });
+            // Attach context lines for the UI snapshot.
+            const groupForUi = { ...upsert.group, contextLines: msg.contextLines };
+            realtimeManager.broadcastToTenant(
+              tenantId,
+              JSON.stringify(
+                uiTelemetryEventSchema.parse({
+                  type: "error_group_updated",
+                  group: groupForUi
+                })
+              )
+            );
+
+            // Auto-fix dispatch — only on a NEW group or when status was open.
+            // Paused / fixing groups are skipped by the dispatcher itself.
+            if (upsert.isNew || upsert.group.status === "open") {
+              // The agent's log streamer reports `serviceId` as the docker
+              // container name (not the kaiad service UUID). Look up by id
+              // first; on miss, fall back to a name match so this works for
+              // services managed via the panel UI without a sync_desired_state.
+              let service = await domainStore.getService(tenantId, msg.serviceId);
+              if (!service) {
+                const all = await domainStore.listServices(tenantId);
+                service = all.find((s) => s.name === msg.serviceId);
+              }
+              const outcome = await dispatchAutoFix(
+                {
+                  domainStore,
+                  errorGroups,
+                  readSshKeyMaterial: (tid, kid) => domainStore.getSshKeyMaterial(tid, kid),
+                  enqueueAgentCommand
+                },
+                upsert.group,
+                service
+              );
+              if (outcome.kind === "dispatched") {
+                fixCommandToGroup.set(outcome.commandId, {
+                  tenantId,
+                  serviceId: msg.serviceId,
+                  agentId: msg.agentId,
+                  errorGroupId: upsert.group.id
+                });
+                const fixing = errorGroups.get(upsert.group.id);
+                if (fixing) {
+                  realtimeManager.broadcastToTenant(
+                    tenantId,
+                    JSON.stringify(
+                      uiTelemetryEventSchema.parse({
+                        type: "error_group_updated",
+                        group: fixing
+                      })
+                    )
+                  );
+                }
+              } else if (outcome.kind === "skipped_missing_auth") {
+                const updated = errorGroups.get(upsert.group.id);
+                if (updated) {
+                  realtimeManager.broadcastToTenant(
+                    tenantId,
+                    JSON.stringify(
+                      uiTelemetryEventSchema.parse({
+                        type: "error_group_updated",
+                        group: updated
+                      })
+                    )
+                  );
+                }
+              }
+            }
+          }
         }
 
         if (msg.type === "log_event") {
@@ -541,11 +750,49 @@ export function buildServer(opts: BuildServerOptions = {}) {
 
       socket.on("close", () => {
         if (registeredAgentId) {
+          if (agentTenantId) {
+            realtimeManager.broadcastToTenant(
+              agentTenantId,
+              JSON.stringify(
+                uiTelemetryEventSchema.parse({
+                  type: "agent_presence",
+                  agentId: registeredAgentId,
+                  websocketConnected: false
+                })
+              )
+            );
+          }
           realtimeManager.unregisterAgent(registeredAgentId);
           if (agentTenantId) {
             void domainStore.markAgentOffline(agentTenantId, registeredAgentId).catch(() => {});
           }
         }
+      });
+    });
+
+    instance.get("/api/v1/realtime/ui", { websocket: true }, async (socket, req) => {
+      const session = await resolveSession(authStore, req.headers.authorization as string | undefined);
+      const tokenFromQuery = (req.query as Record<string, string | undefined>)?.token;
+      const resolved = session ?? (tokenFromQuery
+        ? await resolveSession(authStore, `Bearer ${tokenFromQuery}`)
+        : null);
+      if (!resolved) {
+        socket.send(
+          JSON.stringify(
+            apiErrorSchema.parse({
+              code: "UNAUTHORIZED",
+              message: "Missing or invalid session for UI telemetry stream"
+            })
+          )
+        );
+        socket.close();
+        return;
+      }
+
+      const subscriber = { tenantId: resolved.tenantId, socket };
+      realtimeManager.addUiSubscriber(subscriber);
+      socket.on("close", () => {
+        realtimeManager.removeUiSubscriber(subscriber);
       });
     });
   });
@@ -1385,10 +1632,31 @@ export function buildServer(opts: BuildServerOptions = {}) {
     }
     const agents = await domainStore.listAgents(session.tenantId);
     const connected = new Set(realtimeManager.getConnectedAgentIds());
-    const agentsWithPresence = agents.map((a) => ({
-      ...a,
-      websocketConnected: connected.has(a.id)
-    }));
+    const agentsWithPresence = agents.map((a) => {
+      const rawStats = realtimeManager.getHostStats(a.id);
+      let telemetry: AgentTelemetry | undefined;
+      if (rawStats !== undefined) {
+        const parsed = hostStatsSchema.safeParse(rawStats);
+        if (parsed.success) {
+          const { type: _type, agentId: _agentId, ...rest } = parsed.data;
+          telemetry = rest;
+        }
+      }
+      const apps: AgentAppTelemetry[] = [];
+      for (const raw of realtimeManager.getAppStats(a.id)) {
+        const parsedApp = appStatsSchema.safeParse(raw);
+        if (parsedApp.success) {
+          const { type: _t, agentId: _a, ...rest } = parsedApp.data;
+          apps.push(rest);
+        }
+      }
+      return {
+        ...a,
+        websocketConnected: connected.has(a.id),
+        ...(telemetry ? { telemetry } : {}),
+        ...(apps.length > 0 ? { apps } : {})
+      };
+    });
     return listAgentsResponseSchema.parse({ agents: agentsWithPresence });
   });
 
@@ -1440,6 +1708,32 @@ export function buildServer(opts: BuildServerOptions = {}) {
     return reply.status(204).send();
   });
 
+  // --- Error groups ---
+
+  app.get("/api/v1/error-groups", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    return { groups: errorGroups.listForTenant(session.tenantId) };
+  });
+
+  app.get<{ Params: { agentId: string } }>("/api/v1/agents/:agentId/error-groups", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    return { groups: errorGroups.listForAgent(session.tenantId, req.params.agentId) };
+  });
+
+  app.get<{ Params: { id: string } }>("/api/v1/services/:id/error-groups", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    return { groups: errorGroups.listForService(session.tenantId, req.params.id) };
+  });
+
   // --- Monitored Services ---
 
   app.get("/api/v1/services", async (req, reply) => {
@@ -1470,6 +1764,29 @@ export function buildServer(opts: BuildServerOptions = {}) {
     });
     return reply.status(201).send(svc);
   });
+
+  app.patch<{ Params: { id: string } }>("/api/v1/services/:id", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    const parsed = updateMonitoredServiceRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: parsed.error.issues[0]?.message ?? "Invalid service update payload",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const updated = await domainStore.updateService(session.tenantId, req.params.id, parsed.data);
+    if (!updated) {
+      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Service not found", correlationId: (req as any).correlationId }));
+    }
+    return updated;
+  });
+
 
   app.delete<{ Params: { id: string } }>("/api/v1/services/:id", async (req, reply) => {
     const session = await resolveSession(authStore, req.headers.authorization);

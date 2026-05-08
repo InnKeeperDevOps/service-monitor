@@ -39,6 +39,15 @@ export type DomainStore = {
     }
   ): Promise<SshKey>;
   deleteSshKey(tenantId: string, id: string): Promise<boolean>;
+  /**
+   * Fetch the actual key material (decrypted private key for `uploaded`,
+   * or the local path for `local_path`). Returns null when the key is
+   * missing or stored in a way the API cannot read.
+   */
+  getSshKeyMaterial(
+    tenantId: string,
+    id: string
+  ): Promise<{ type: "uploaded" | "local_path"; privateKey: string | null; localPath: string | null } | null>;
 
   listServices(tenantId: string): Promise<MonitoredService[]>;
   getService(tenantId: string, id: string): Promise<MonitoredService | undefined>;
@@ -55,6 +64,20 @@ export type DomainStore = {
       agentRuntimeBackend?: "docker" | "kubernetes" | "shell";
     }
   ): Promise<MonitoredService>;
+  updateService(
+    tenantId: string,
+    id: string,
+    patch: {
+      name?: string;
+      gitRepoUrl?: string;
+      sshKeyId?: string | null;
+      branch?: string;
+      agentId?: string | null;
+      dockerImage?: string;
+      composePath?: string;
+      agentRuntimeBackend?: "docker" | "kubernetes" | "shell";
+    }
+  ): Promise<MonitoredService | undefined>;
   deleteService(tenantId: string, id: string): Promise<boolean>;
 };
 
@@ -62,6 +85,10 @@ const incidents = new Map<string, Incident>();
 const agents = new Map<string, Agent>();
 const services = new Map<string, MonitoredService>();
 const sshKeys = new Map<string, SshKey>();
+/** In-memory companion to `sshKeys`: holds the raw private key value (only
+ *  populated when a caller created an `uploaded` key). The value is intentionally
+ *  not on the SshKey type so it never leaks back through API responses. */
+const sshKeyPrivateMaterial = new Map<string, string>();
 
 function uid(): string {
   return crypto.randomUUID();
@@ -180,13 +207,26 @@ export function createMemoryDomainStore(): DomainStore {
         updatedAt: now
       };
       sshKeys.set(key.id, key);
+      if (data.type === "uploaded" && data.privateKey) {
+        sshKeyPrivateMaterial.set(key.id, data.privateKey);
+      }
       return key;
     },
     async deleteSshKey(tenantId, id) {
       const key = sshKeys.get(id);
       if (!key || key.tenantId !== tenantId) return false;
       sshKeys.delete(id);
+      sshKeyPrivateMaterial.delete(id);
       return true;
+    },
+    async getSshKeyMaterial(tenantId, id) {
+      const key = sshKeys.get(id);
+      if (!key || key.tenantId !== tenantId) return null;
+      if (key.type === "uploaded") {
+        const pk = sshKeyPrivateMaterial.get(id);
+        return { type: "uploaded", privateKey: pk ?? null, localPath: null };
+      }
+      return { type: "local_path", privateKey: null, localPath: key.localPath ?? null };
     },
 
     async listServices(tenantId) {
@@ -212,6 +252,19 @@ export function createMemoryDomainStore(): DomainStore {
       services.set(svc.id, svc);
       return svc;
     },
+    async updateService(tenantId, id, patch) {
+      const svc = services.get(id);
+      if (!svc || svc.tenantId !== tenantId) return undefined;
+      if (patch.name !== undefined) svc.name = patch.name;
+      if (patch.gitRepoUrl !== undefined) svc.gitRepoUrl = patch.gitRepoUrl;
+      if (patch.sshKeyId !== undefined) svc.sshKeyId = patch.sshKeyId;
+      if (patch.branch !== undefined) svc.branch = patch.branch;
+      if (patch.agentId !== undefined) svc.agentId = patch.agentId;
+      if (patch.dockerImage !== undefined) svc.dockerImage = patch.dockerImage;
+      if (patch.composePath !== undefined) svc.composePath = patch.composePath;
+      if (patch.agentRuntimeBackend !== undefined) svc.agentRuntimeBackend = patch.agentRuntimeBackend;
+      return svc;
+    },
     async deleteService(tenantId, id) {
       const svc = services.get(id);
       if (!svc || svc.tenantId !== tenantId) return false;
@@ -226,6 +279,7 @@ export function __resetDomainStoreForTests(): void {
   agents.clear();
   services.clear();
   sshKeys.clear();
+  sshKeyPrivateMaterial.clear();
 }
 
 /** Seeds the in-memory agents map (Vitest / domain API tests only). */

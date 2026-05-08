@@ -42,7 +42,7 @@ const commandAckSchema = z.object({
 });
 
 /** Periodic host and agent-process telemetry (CPU, memory, disk, network throughput). */
-const hostStatsSchema = z.object({
+export const hostStatsSchema = z.object({
   type: z.literal("host_stats"),
   agentId: z.string(),
   ts: z.string(),
@@ -63,12 +63,109 @@ const hostStatsSchema = z.object({
   processRSSBytes: z.number().int().nonnegative().optional()
 });
 
+export type HostStatsMessage = z.infer<typeof hostStatsSchema>;
+
+/**
+ * Single error-level log line plus the last N context lines the agent saw
+ * immediately before it. Emitted by the agent's logship wrapper; the API
+ * normalizes the message, fingerprints, dedups into an error_group, and
+ * triggers the auto-fix workflow when the service has git auth configured.
+ */
+export const appLogErrorSchema = z.object({
+  type: z.literal("app_log_error"),
+  agentId: z.string(),
+  serviceId: z.string(),
+  ts: z.string(),
+  message: z.string(),
+  contextLines: z.array(z.string())
+});
+
+export type AppLogErrorMessage = z.infer<typeof appLogErrorSchema>;
+
+/** Periodic per-container telemetry for one app/container on the agent host. */
+export const appStatsSchema = z.object({
+  type: z.literal("app_stats"),
+  agentId: z.string(),
+  ts: z.string(),
+  containerId: z.string(),
+  name: z.string().optional(),
+  image: z.string().optional(),
+  serviceId: z.string().optional(),
+  state: z.string().optional(),
+  cpuPercent: z.number().min(0).optional(),
+  memUsedBytes: z.number().int().nonnegative().optional(),
+  memLimitBytes: z.number().int().positive().optional(),
+  memPercent: z.number().min(0).max(100).optional(),
+  netRxBytesPerSec: z.number().nonnegative().optional(),
+  netTxBytesPerSec: z.number().nonnegative().optional()
+});
+
+export type AppStatsMessage = z.infer<typeof appStatsSchema>;
+
 export const agentToPlatformMessageSchema = z.discriminatedUnion("type", [
   heartbeatSchema,
   logEventSchema,
   commandAckSchema,
-  hostStatsSchema
+  hostStatsSchema,
+  appStatsSchema,
+  appLogErrorSchema
 ]);
+
+/** Snapshot of an error group surfaced to the panel. */
+export const errorGroupSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  agentId: z.string(),
+  serviceId: z.string(),
+  fingerprint: z.string(),
+  normalizedMessage: z.string(),
+  sampleMessage: z.string(),
+  /** open: detected, eligible for fix. fixing: fix workflow in flight.
+   *  fixed: most recent fix push succeeded. paused: same fingerprint reappeared
+   *  shortly after a fix push (loop suspected). missing_auth: service has no
+   *  git ssh key, auto-fix is disabled.
+   */
+  status: z.enum(["open", "fixing", "fixed", "paused", "missing_auth"]),
+  count: z.number().int().nonnegative(),
+  firstSeenAt: z.string(),
+  lastSeenAt: z.string(),
+  lastFixAt: z.string().nullable().optional(),
+  lastFixCommit: z.string().nullable().optional(),
+  contextLines: z.array(z.string()).optional()
+});
+
+export type ErrorGroup = z.infer<typeof errorGroupSchema>;
+
+/** UI telemetry stream events pushed by the API to subscribed panel clients. */
+export const uiTelemetryEventSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("host_stats"),
+    agentId: z.string(),
+    stats: hostStatsSchema.omit({ type: true, agentId: true })
+  }),
+  z.object({
+    type: z.literal("app_stats"),
+    agentId: z.string(),
+    containerId: z.string(),
+    stats: appStatsSchema.omit({ type: true, agentId: true, containerId: true })
+  }),
+  z.object({
+    type: z.literal("agent_presence"),
+    agentId: z.string(),
+    websocketConnected: z.boolean()
+  }),
+  z.object({
+    type: z.literal("app_gone"),
+    agentId: z.string(),
+    containerId: z.string()
+  }),
+  z.object({
+    type: z.literal("error_group_updated"),
+    group: errorGroupSchema
+  })
+]);
+
+export type UiTelemetryEvent = z.infer<typeof uiTelemetryEventSchema>;
 
 const runStepCommandSchema = z.object({
   type: z.literal("run_step"),
@@ -100,7 +197,29 @@ const syncDesiredStateCommandSchema = z.object({
       image: z.string(),
       state: z.enum(["running", "stopped"])
     })
-  )
+  ),
+  /**
+   * Managed host processes (non-container workloads). The agent matches a running process
+   * by substring on its cmdline and reports it as an `app_stats` frame with
+   * `containerId = "proc-<pid>"`.
+   *
+   * When `command` is set + `state: "running"` and no process matches `commandPattern`,
+   * the agent will start the process via `bash -c "nohup <command> >> <logPath> 2>&1 &"`.
+   * `logPath` defaults to `/tmp/sm-agent/<serviceId>.log`. The agent tails that file and
+   * ships error-classified lines as `app_log_error` frames.
+   */
+  desiredProcesses: z
+    .array(
+      z.object({
+        serviceId: z.string(),
+        commandPattern: z.string().min(1),
+        state: z.enum(["running", "stopped"]),
+        command: z.string().optional(),
+        logPath: z.string().optional(),
+        cwd: z.string().optional()
+      })
+    )
+    .optional()
 });
 
 const runCursorPlanCommandSchema = z.object({
@@ -189,6 +308,29 @@ const receiveSourceArchiveCommandSchema = z
     }
   });
 
+/**
+ * Auto-fix dispatch issued by the API when an error_group becomes eligible
+ * for self-healing. The agent clones the service repo, runs the configured
+ * AI CLI (claude/cursor) against it with the error + context as the prompt,
+ * then commits any resulting changes and pushes to `branch`.
+ */
+const runFixPlanCommandSchema = z.object({
+  type: z.literal("run_fix_plan"),
+  commandId: z.string(),
+  errorGroupId: z.string(),
+  errorMessage: z.string(),
+  normalizedMessage: z.string(),
+  fingerprint: z.string(),
+  contextLines: z.array(z.string()),
+  gitRepoUrl: z.string(),
+  branch: z.string().default("main"),
+  sshKeyType: z.enum(["uploaded", "local_path"]),
+  sshKeyValue: z.string().nullable(),
+  workspacePath: z.string().optional(),
+  serviceId: z.string(),
+  agentRuntimeBackend: z.enum(["docker", "kubernetes", "shell"]).optional()
+});
+
 /** Uses `z.union` (not `discriminatedUnion`) so variants may apply `.superRefine` (e.g. receive_source_archive url xor path). */
 export const platformToAgentMessageSchema = z.union([
   runStepCommandSchema,
@@ -198,7 +340,8 @@ export const platformToAgentMessageSchema = z.union([
   runCursorPlanCommandSchema,
   runClaudePlanCommandSchema,
   runToolchainCommandSchema,
-  receiveSourceArchiveCommandSchema
+  receiveSourceArchiveCommandSchema,
+  runFixPlanCommandSchema
 ]);
 
 export type AgentToPlatformMessage = z.infer<typeof agentToPlatformMessageSchema>;

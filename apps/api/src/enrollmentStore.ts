@@ -98,7 +98,7 @@ function createInMemoryEnrollmentStore(): EnrollmentStore {
         return "not_found";
       }
       const now = new Date();
-      if (row.usedAt !== null || row.revokedAt !== null || row.expiresAt.getTime() <= now.getTime()) {
+      if (row.revokedAt !== null || row.expiresAt.getTime() <= now.getTime()) {
         return "not_revocable";
       }
       row.revokedAt = now;
@@ -111,11 +111,12 @@ function createInMemoryEnrollmentStore(): EnrollmentStore {
         for (const row of rows) {
           if (
             row.tokenHash === hash &&
-            row.usedAt === null &&
             row.revokedAt === null &&
             row.expiresAt > now
           ) {
-            row.usedAt = now;
+            if (row.usedAt === null) {
+              row.usedAt = now;
+            }
             return { tenantId: row.tenantId, tokenId: row.id };
           }
         }
@@ -200,7 +201,6 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
               set revoked_at = now()
             where tenant_id = $1
               and id = $2
-              and used_at is null
               and revoked_at is null
               and expires_at > now()
           returning id`,
@@ -218,9 +218,8 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
       async consume(plaintext) {
         const result = await pool.query(
           `update agent_enrollment_tokens
-              set used_at = now()
+              set used_at = coalesce(used_at, now())
             where token_hash = $1
-              and used_at is null
               and revoked_at is null
               and expires_at > now()
           returning tenant_id, id`,

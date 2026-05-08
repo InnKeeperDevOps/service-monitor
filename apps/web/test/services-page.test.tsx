@@ -1,11 +1,12 @@
 import { cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listServices, listSshKeys, createService, updateService } = vi.hoisted(() => ({
+const { listServices, listSshKeys, createService, updateService, deleteService } = vi.hoisted(() => ({
   listServices: vi.fn(),
   listSshKeys: vi.fn(),
   createService: vi.fn(),
-  updateService: vi.fn()
+  updateService: vi.fn(),
+  deleteService: vi.fn()
 }));
 
 const adminAuthState = {
@@ -33,7 +34,8 @@ vi.mock("../src/lib/api.js", () => ({
     listServices,
     listSshKeys,
     createService,
-    updateService
+    updateService,
+    deleteService
   }
 }));
 
@@ -49,7 +51,9 @@ describe("ServicesPage", () => {
     listServices.mockReset();
     listSshKeys.mockReset();
     createService.mockReset();
-    
+    updateService.mockReset();
+    deleteService.mockReset();
+
     listServices.mockResolvedValue({ services: [] });
     listSshKeys.mockResolvedValue({ keys: [] });
   });
@@ -177,5 +181,74 @@ describe("ServicesPage", () => {
         agentRuntimeBackend: "shell"
       });
     });
+  });
+
+  it("allows deleting a service after confirmation", async () => {
+    listServices.mockResolvedValue({
+      services: [
+        {
+          id: "svc-1",
+          tenantId: "t1",
+          name: "test-svc",
+          gitRepoUrl: "git@github.com:acme/test-svc.git",
+          sshKeyId: "key-1",
+          branch: "develop",
+          agentId: null,
+          dockerImage: null,
+          composePath: null,
+          agentRuntimeBackend: "shell"
+        }
+      ]
+    });
+    deleteService.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ServicesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("test-svc")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(deleteService).toHaveBeenCalledWith("svc-1");
+      expect(screen.queryByText("test-svc")).not.toBeInTheDocument();
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("does not delete when confirmation is cancelled", async () => {
+    listServices.mockResolvedValue({
+      services: [
+        {
+          id: "svc-1",
+          tenantId: "t1",
+          name: "test-svc",
+          gitRepoUrl: "git@github.com:acme/test-svc.git",
+          sshKeyId: "key-1",
+          branch: "develop",
+          agentId: null,
+          dockerImage: null,
+          composePath: null,
+          agentRuntimeBackend: "shell"
+        }
+      ]
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<ServicesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("test-svc")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(deleteService).not.toHaveBeenCalled();
+    expect(screen.getByText("test-svc")).toBeInTheDocument();
+
+    confirmSpy.mockRestore();
   });
 });
