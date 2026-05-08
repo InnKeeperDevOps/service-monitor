@@ -1,9 +1,10 @@
 import { cleanup, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listServices, listSshKeys, createService, updateService, deleteService } = vi.hoisted(() => ({
+const { listServices, listSshKeys, listAgents, createService, updateService, deleteService } = vi.hoisted(() => ({
   listServices: vi.fn(),
   listSshKeys: vi.fn(),
+  listAgents: vi.fn(),
   createService: vi.fn(),
   updateService: vi.fn(),
   deleteService: vi.fn()
@@ -33,6 +34,7 @@ vi.mock("../src/lib/api.js", () => ({
   api: {
     listServices,
     listSshKeys,
+    listAgents,
     createService,
     updateService,
     deleteService
@@ -50,12 +52,14 @@ describe("ServicesPage", () => {
     mockUseAuth = adminAuthState;
     listServices.mockReset();
     listSshKeys.mockReset();
+    listAgents.mockReset();
     createService.mockReset();
     updateService.mockReset();
     deleteService.mockReset();
 
     listServices.mockResolvedValue({ services: [] });
     listSshKeys.mockResolvedValue({ keys: [] });
+    listAgents.mockResolvedValue({ agents: [] });
   });
 
   it("renders services and allows creating a new one with gitRepoUrl and sshKeyId", async () => {
@@ -96,7 +100,7 @@ describe("ServicesPage", () => {
       gitRepoUrl: "git@github.com:acme/test-svc.git",
       sshKeyId: "key-1",
       branch: "develop",
-      agentId: null,
+      agents: [],
       dockerImage: null,
       composePath: null
     });
@@ -111,7 +115,8 @@ describe("ServicesPage", () => {
         sshKeyId: "key-1",
         branch: "develop",
         dockerImage: undefined,
-        composePath: undefined
+        composePath: undefined,
+        agentIds: []
       });
       expect(screen.getByText("test-svc")).toBeInTheDocument();
       expect(screen.getByText("git@github.com:acme/test-svc.git")).toBeInTheDocument();
@@ -128,7 +133,7 @@ describe("ServicesPage", () => {
           gitRepoUrl: "git@github.com:acme/test-svc.git",
           sshKeyId: "key-1",
           branch: "develop",
-          agentId: null,
+          agents: [],
           dockerImage: null,
           composePath: null
         }
@@ -158,7 +163,7 @@ describe("ServicesPage", () => {
       gitRepoUrl: "git@github.com:acme/test-svc.git",
       sshKeyId: "key-1",
       branch: "main",
-      agentId: null,
+      agents: [],
       dockerImage: null,
       composePath: null
     });
@@ -173,7 +178,8 @@ describe("ServicesPage", () => {
         sshKeyId: "key-1",
         branch: "main",
         dockerImage: undefined,
-        composePath: undefined
+        composePath: undefined,
+        agentIds: []
       });
     });
   });
@@ -188,7 +194,7 @@ describe("ServicesPage", () => {
           gitRepoUrl: "git@github.com:acme/test-svc.git",
           sshKeyId: "key-1",
           branch: "develop",
-          agentId: null,
+          agents: [],
           dockerImage: null,
           composePath: null
         }
@@ -223,7 +229,7 @@ describe("ServicesPage", () => {
           gitRepoUrl: "git@github.com:acme/test-svc.git",
           sshKeyId: "key-1",
           branch: "develop",
-          agentId: null,
+          agents: [],
           dockerImage: null,
           composePath: null
         }

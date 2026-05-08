@@ -58,7 +58,8 @@ export type DomainStore = {
       gitRepoUrl: string;
       sshKeyId?: string | null;
       branch: string;
-      agentId?: string | null;
+      /** Initial agent bindings (many-to-many). Defaults to empty. */
+      agentIds?: string[];
       dockerImage?: string;
       composePath?: string;
     }
@@ -71,17 +72,48 @@ export type DomainStore = {
       gitRepoUrl?: string;
       sshKeyId?: string | null;
       branch?: string;
-      agentId?: string | null;
+      /**
+       * When defined, replaces the full set of agent bindings (delete-not-in,
+       * insert-missing). Omit to leave bindings unchanged. Pass `[]` to
+       * detach all agents.
+       */
+      agentIds?: string[];
       dockerImage?: string;
       composePath?: string;
     }
   ): Promise<MonitoredService | undefined>;
   deleteService(tenantId: string, id: string): Promise<boolean>;
+
+  // Many-to-many agent ↔ service binding helpers.
+  attachServiceToAgent(tenantId: string, agentId: string, serviceId: string): Promise<boolean>;
+  detachServiceFromAgent(tenantId: string, agentId: string, serviceId: string): Promise<boolean>;
+  listServicesForAgent(tenantId: string, agentId: string): Promise<MonitoredService[]>;
 };
 
 const incidents = new Map<string, Incident>();
 const agents = new Map<string, Agent>();
 const services = new Map<string, MonitoredService>();
+/**
+ * Many-to-many agent ↔ service binding. Keyed by `${agentId}|${serviceId}`
+ * to make membership checks O(1). Tenant-scoping is enforced at the call
+ * site (every helper looks up the service or agent first to confirm
+ * tenancy).
+ */
+const agentServiceBindings = new Set<string>();
+function bindingKey(agentId: string, serviceId: string): string {
+  return `${agentId}|${serviceId}`;
+}
+function bindingsForService(serviceId: string): { agentId: string }[] {
+  const out: { agentId: string }[] = [];
+  for (const k of agentServiceBindings) {
+    const [a, s] = k.split("|");
+    if (s === serviceId) out.push({ agentId: a });
+  }
+  return out;
+}
+function withAgents(svc: MonitoredService): MonitoredService {
+  return { ...svc, agents: bindingsForService(svc.id) };
+}
 const sshKeys = new Map<string, SshKey>();
 /** In-memory companion to `sshKeys`: holds the raw private key value (only
  *  populated when a caller created an `uploaded` key). The value is intentionally
@@ -182,10 +214,11 @@ export function createMemoryDomainStore(): DomainStore {
       const a = agents.get(agentId);
       if (!a || a.tenantId !== tenantId) return false;
       agents.delete(agentId);
-      for (const [svcId, svc] of services.entries()) {
-        if (svc.tenantId === tenantId && svc.agentId === agentId) {
-          services.set(svcId, { ...svc, agentId: null });
-        }
+      // Drop all bindings for this agent (postgres FK cascade does the
+      // equivalent on that side).
+      for (const k of [...agentServiceBindings]) {
+        const [boundAgent] = k.split("|");
+        if (boundAgent === agentId) agentServiceBindings.delete(k);
       }
       return true;
     },
@@ -228,26 +261,32 @@ export function createMemoryDomainStore(): DomainStore {
     },
 
     async listServices(tenantId) {
-      return [...services.values()].filter((s) => s.tenantId === tenantId);
+      return [...services.values()]
+        .filter((s) => s.tenantId === tenantId)
+        .map(withAgents);
     },
     async getService(tenantId, id) {
       const svc = services.get(id);
-      return svc && svc.tenantId === tenantId ? svc : undefined;
+      if (!svc || svc.tenantId !== tenantId) return undefined;
+      return withAgents(svc);
     },
     async createService(tenantId, data) {
       const svc: MonitoredService = {
         id: `svc-${uid()}`,
         tenantId,
-        agentId: data.agentId ?? null,
         name: data.name,
         gitRepoUrl: data.gitRepoUrl,
         sshKeyId: data.sshKeyId ?? null,
         branch: data.branch,
         dockerImage: data.dockerImage ?? null,
-        composePath: data.composePath ?? null
+        composePath: data.composePath ?? null,
+        agents: []
       };
       services.set(svc.id, svc);
-      return svc;
+      for (const agentId of data.agentIds ?? []) {
+        agentServiceBindings.add(bindingKey(agentId, svc.id));
+      }
+      return withAgents(svc);
     },
     async updateService(tenantId, id, patch) {
       const svc = services.get(id);
@@ -256,16 +295,59 @@ export function createMemoryDomainStore(): DomainStore {
       if (patch.gitRepoUrl !== undefined) svc.gitRepoUrl = patch.gitRepoUrl;
       if (patch.sshKeyId !== undefined) svc.sshKeyId = patch.sshKeyId;
       if (patch.branch !== undefined) svc.branch = patch.branch;
-      if (patch.agentId !== undefined) svc.agentId = patch.agentId;
       if (patch.dockerImage !== undefined) svc.dockerImage = patch.dockerImage;
       if (patch.composePath !== undefined) svc.composePath = patch.composePath;
-      return svc;
+      if (patch.agentIds !== undefined) {
+        // Replace the full set: drop bindings for this service that aren't in the
+        // desired list, then add any missing ones.
+        const desired = new Set(patch.agentIds);
+        for (const k of [...agentServiceBindings]) {
+          const [a, s] = k.split("|");
+          if (s === id && !desired.has(a)) agentServiceBindings.delete(k);
+        }
+        for (const a of patch.agentIds) {
+          agentServiceBindings.add(bindingKey(a, id));
+        }
+      }
+      return withAgents(svc);
     },
     async deleteService(tenantId, id) {
       const svc = services.get(id);
       if (!svc || svc.tenantId !== tenantId) return false;
       services.delete(id);
+      // Garbage-collect bindings (the postgres FK does this automatically).
+      for (const k of [...agentServiceBindings]) {
+        const [, s] = k.split("|");
+        if (s === id) agentServiceBindings.delete(k);
+      }
       return true;
+    },
+
+    async attachServiceToAgent(tenantId, agentId, serviceId) {
+      const svc = services.get(serviceId);
+      if (!svc || svc.tenantId !== tenantId) return false;
+      const k = bindingKey(agentId, serviceId);
+      if (agentServiceBindings.has(k)) return false; // Already bound — caller infers idempotency.
+      agentServiceBindings.add(k);
+      return true;
+    },
+    async detachServiceFromAgent(tenantId, agentId, serviceId) {
+      const svc = services.get(serviceId);
+      if (!svc || svc.tenantId !== tenantId) return false;
+      return agentServiceBindings.delete(bindingKey(agentId, serviceId));
+    },
+    async listServicesForAgent(tenantId, agentId) {
+      const ids: string[] = [];
+      for (const k of agentServiceBindings) {
+        const [a, s] = k.split("|");
+        if (a === agentId) ids.push(s);
+      }
+      const out: MonitoredService[] = [];
+      for (const id of ids) {
+        const svc = services.get(id);
+        if (svc && svc.tenantId === tenantId) out.push(withAgents(svc));
+      }
+      return out;
     }
   };
 }
@@ -274,6 +356,7 @@ export function __resetDomainStoreForTests(): void {
   incidents.clear();
   agents.clear();
   services.clear();
+  agentServiceBindings.clear();
   sshKeys.clear();
   sshKeyPrivateMaterial.clear();
 }

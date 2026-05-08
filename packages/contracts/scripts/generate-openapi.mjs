@@ -187,6 +187,66 @@ paths:
           description: Agent list
         '401':
           description: Unauthorized
+  /api/v1/agents/{agentId}/services:
+    get:
+      operationId: listServicesForAgent
+      description: List services currently bound to this agent (many-to-many)
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Service list
+        '401':
+          description: Unauthorized
+        '404':
+          description: Agent not found
+  /api/v1/agents/{agentId}/services/{serviceId}:
+    post:
+      operationId: attachServiceToAgent
+      description: Bind a service to this agent. Idempotent — repeated calls return bound=false.
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Binding result (bound=true on first call, false thereafter)
+        '401':
+          description: Unauthorized
+        '404':
+          description: Agent or service not found in the session's tenant
+    delete:
+      operationId: detachServiceFromAgent
+      description: Remove a service binding from this agent. 404 if the binding does not exist.
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Binding removed
+        '401':
+          description: Unauthorized
+        '404':
+          description: Binding not found
   /api/v1/agents/{id}:
     get:
       operationId: getAgent

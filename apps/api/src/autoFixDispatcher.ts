@@ -4,9 +4,10 @@ import type { DomainStore } from "./domainStore.js";
 import type { ErrorGroupStore } from "./errorGrouping.js";
 
 export type DispatchOutcome =
-  | { kind: "dispatched"; commandId: string }
+  | { kind: "dispatched"; commandId: string; agentId: string }
   | { kind: "skipped_missing_auth" }
   | { kind: "skipped_no_agent" }
+  | { kind: "skipped_no_online_agent" }
   | { kind: "skipped_paused" }
   | { kind: "skipped_in_flight" }
   | { kind: "skipped_no_repo" };
@@ -23,6 +24,13 @@ export interface AutoFixDispatcherDeps {
     localPath: string | null;
   } | null>;
   enqueueAgentCommand: (job: AgentCommandJob) => Promise<void> | void;
+  /**
+   * Returns true if the agent has a live realtime session. Used to pick a
+   * recipient from a service's many bound agents — the first online wins.
+   * If none are online, the dispatcher reports `skipped_no_online_agent`
+   * rather than queueing a command no one will execute.
+   */
+  isAgentOnline: (agentId: string) => boolean;
 }
 
 /**
@@ -46,8 +54,16 @@ export async function dispatchAutoFix(
   if (!service) {
     return { kind: "skipped_no_agent" };
   }
-  if (!service.agentId) {
+  const bindings = service.agents ?? [];
+  if (bindings.length === 0) {
     return { kind: "skipped_no_agent" };
+  }
+  // Pick the first bound agent that's currently online. Round-robin /
+  // load-balanced strategies are a future iteration — see plan
+  // docs/superpowers/plans/2026-05-08-multi-agent-service-binding-plan.md.
+  const targetAgentId = bindings.map((b) => b.agentId).find((id) => deps.isAgentOnline(id));
+  if (!targetAgentId) {
+    return { kind: "skipped_no_online_agent" };
   }
   if (!service.gitRepoUrl) {
     return { kind: "skipped_no_repo" };
@@ -82,9 +98,9 @@ export async function dispatchAutoFix(
 
   deps.errorGroups.setStatus(group.id, "fixing");
   await deps.enqueueAgentCommand({
-    agentId: service.agentId,
+    agentId: targetAgentId,
     commandId,
     payload
   });
-  return { kind: "dispatched", commandId };
+  return { kind: "dispatched", commandId, agentId: targetAgentId };
 }

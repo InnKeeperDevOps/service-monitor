@@ -1,10 +1,12 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { listAgents, listServices, listEnrollmentTokens } = vi.hoisted(() => ({
+const { listAgents, listServices, listEnrollmentTokens, attachServiceToAgent, detachServiceFromAgent } = vi.hoisted(() => ({
   listAgents: vi.fn(),
   listServices: vi.fn(),
-  listEnrollmentTokens: vi.fn()
+  listEnrollmentTokens: vi.fn(),
+  attachServiceToAgent: vi.fn(),
+  detachServiceFromAgent: vi.fn()
 }));
 
 const adminAuthState = {
@@ -45,7 +47,13 @@ vi.mock("../src/lib/api.js", () => ({
   api: {
     listAgents,
     listServices,
-    listEnrollmentTokens
+    listEnrollmentTokens,
+    attachServiceToAgent,
+    detachServiceFromAgent,
+    // Stubbed so ErrorGroupsSection and useTelemetryStream don't throw when
+    // a row is expanded; their behavior is covered by their own tests.
+    listErrorGroupsForAgent: vi.fn().mockResolvedValue({ groups: [] }),
+    openTelemetryStream: vi.fn(() => ({ close: () => {} }))
   }
 }));
 
@@ -61,6 +69,8 @@ describe("AgentsPage", () => {
     listAgents.mockReset();
     listServices.mockReset();
     listEnrollmentTokens.mockReset();
+    attachServiceToAgent.mockReset();
+    detachServiceFromAgent.mockReset();
     listAgents.mockResolvedValue({ agents: [] });
     listServices.mockResolvedValue({ services: [] });
     listEnrollmentTokens.mockResolvedValue({ tokens: [] });
@@ -126,9 +136,9 @@ describe("AgentsPage", () => {
           id: "svc-1",
           tenantId: "t1",
           name: "app-a",
-          repo: "o/r",
+          gitRepoUrl: "o/r",
           branch: "main",
-          agentId: "agent-1",
+          agents: [{ agentId: "agent-1" }],
           dockerImage: null,
           composePath: null
         }
@@ -149,5 +159,56 @@ describe("AgentsPage", () => {
     expect(screen.getByText("Edge")).toBeInTheDocument();
     expect(screen.getByText("agent-2")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "1" })).toHaveAttribute("href", "#services");
+  });
+
+  it("attaches an unbound service to an agent from the expanded row", async () => {
+    listAgents.mockResolvedValue({
+      agents: [
+        {
+          id: "agent-1",
+          tenantId: "t1",
+          name: "Edge",
+          version: "2.1.0",
+          status: "online",
+          lastSeenAt: new Date().toISOString(),
+          allowedCapabilities: [],
+          websocketConnected: true
+        }
+      ]
+    });
+    listServices.mockResolvedValue({
+      services: [
+        {
+          id: "svc-1",
+          tenantId: "t1",
+          name: "app-a",
+          gitRepoUrl: "o/r",
+          branch: "main",
+          agents: [],
+          dockerImage: null,
+          composePath: null
+        }
+      ]
+    });
+    attachServiceToAgent.mockResolvedValue({ bound: true, agentId: "agent-1", serviceId: "svc-1" });
+
+    render(<AgentsPage />);
+    await waitFor(() => {
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    });
+
+    // Expand the agent row.
+    const expandBtn = screen.getByRole("button", { name: "Expand apps" });
+    expandBtn.click();
+
+    // The unbound service should appear in the picker.
+    const picker = await screen.findByLabelText("Pick a service to bind to this agent");
+    fireEvent.change(picker, { target: { value: "svc-1" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "+ Bind" }));
+
+    await waitFor(() => {
+      expect(attachServiceToAgent).toHaveBeenCalledWith("agent-1", "svc-1");
+    });
   });
 });

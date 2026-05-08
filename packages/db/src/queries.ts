@@ -331,7 +331,6 @@ export async function deleteAgent(
 export interface ServiceRow {
   id: string;
   tenantId: string;
-  agentId: string | null;
   name: string;
   gitRepoUrl: string;
   sshKeyId: string | null;
@@ -344,7 +343,6 @@ function mapService(r: Record<string, unknown>): ServiceRow {
   return {
     id: r.id as string,
     tenantId: r.tenant_id as string,
-    agentId: (r.agent_id as string) ?? null,
     name: r.name as string,
     gitRepoUrl: r.git_repo_url as string,
     sshKeyId: (r.ssh_key_id as string) ?? null,
@@ -388,19 +386,119 @@ export async function createService(
     gitRepoUrl: string;
     sshKeyId?: string | null;
     branch: string;
-    agentId?: string | null;
     dockerImage?: string;
     composePath?: string;
   },
 ): Promise<ServiceRow> {
   const id = crypto.randomUUID();
   const { rows } = await query(
-    `INSERT INTO monitored_services (id, tenant_id, agent_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO monitored_services (id, tenant_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [id, tenantId, data.agentId ?? null, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null],
+    [id, tenantId, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null],
   );
   return mapService(rows[0]);
+}
+
+// ---------------------------------------------------------------------------
+// agent_services join queries (many-to-many).
+// ---------------------------------------------------------------------------
+
+export interface AgentBindingRow {
+  agentId: string;
+}
+
+export async function attachServiceToAgent(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string,
+  serviceId: string
+): Promise<boolean> {
+  const { rows } = await query(
+    `INSERT INTO agent_services (tenant_id, agent_id, service_id)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (agent_id, service_id) DO NOTHING
+     RETURNING agent_id`,
+    [tenantId, agentId, serviceId]
+  );
+  return rows.length > 0;
+}
+
+export async function detachServiceFromAgent(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string,
+  serviceId: string
+): Promise<boolean> {
+  const { rows } = await query(
+    `DELETE FROM agent_services
+      WHERE tenant_id = $1 AND agent_id = $2 AND service_id = $3
+     RETURNING agent_id`,
+    [tenantId, agentId, serviceId]
+  );
+  return rows.length > 0;
+}
+
+export async function listAgentsForService(
+  query: QueryFn,
+  tenantId: string,
+  serviceId: string
+): Promise<AgentBindingRow[]> {
+  const { rows } = await query(
+    `SELECT agent_id FROM agent_services
+      WHERE tenant_id = $1 AND service_id = $2
+      ORDER BY created_at`,
+    [tenantId, serviceId]
+  );
+  return rows.map((r) => ({ agentId: r.agent_id as string }));
+}
+
+export async function listServicesForAgent(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string
+): Promise<ServiceRow[]> {
+  const { rows } = await query(
+    `SELECT ms.* FROM monitored_services ms
+       JOIN agent_services j ON j.service_id = ms.id
+      WHERE j.tenant_id = $1 AND j.agent_id = $2
+      ORDER BY j.created_at`,
+    [tenantId, agentId]
+  );
+  return rows.map(mapService);
+}
+
+/**
+ * setAgentBindings replaces the agent set for a service in one tx-friendly
+ * pair of statements: delete bindings not in the desired set, then upsert the
+ * remainder. Designed for `PATCH /api/v1/services/:id { agentIds }`.
+ */
+export async function setAgentBindings(
+  query: QueryFn,
+  tenantId: string,
+  serviceId: string,
+  agentIds: string[]
+): Promise<void> {
+  // Delete bindings whose agent_id is not in the desired list.
+  if (agentIds.length === 0) {
+    await query(
+      `DELETE FROM agent_services WHERE tenant_id = $1 AND service_id = $2`,
+      [tenantId, serviceId]
+    );
+    return;
+  }
+  await query(
+    `DELETE FROM agent_services
+      WHERE tenant_id = $1 AND service_id = $2 AND agent_id <> ALL($3::text[])`,
+    [tenantId, serviceId, agentIds]
+  );
+  for (const agentId of agentIds) {
+    await query(
+      `INSERT INTO agent_services (tenant_id, agent_id, service_id)
+       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      [tenantId, agentId, serviceId]
+    );
+  }
 }
 
 export interface ApiCredentialRow {

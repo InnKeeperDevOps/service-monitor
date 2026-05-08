@@ -21,6 +21,11 @@ vi.mock("@sm/db", () => {
     listServices: vi.fn(),
     getService: vi.fn(),
     createService: vi.fn(),
+    listAgentsForService: vi.fn().mockResolvedValue([]),
+    listServicesForAgent: vi.fn().mockResolvedValue([]),
+    attachServiceToAgent: vi.fn(),
+    detachServiceFromAgent: vi.fn(),
+    setAgentBindings: vi.fn(),
   };
 });
 

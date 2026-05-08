@@ -39,10 +39,29 @@ In **non-production**, a development bearer shortcut may exist—do not rely on 
 
 ## Monitored services
 
+A service can be bound to **zero or more agents**. The response shape carries
+`agents: [{ agentId }, …]`. Create/update accept `agentIds: string[]` to set
+the binding atomically with the service write. Per-binding endpoints below
+let you bind/unbind without touching the service row.
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/v1/services` | Bearer | List monitored services for the tenant. |
-| POST | `/api/v1/services` | Bearer | Create a monitored service (**201**). |
+| GET | `/api/v1/services` | Bearer | List monitored services for the tenant. Each service includes its bound agents. |
+| POST | `/api/v1/services` | Bearer | Create a monitored service (**201**). Optional `agentIds` initial bindings. |
+| PATCH | `/api/v1/services/:id` | Bearer | Update fields. When `agentIds` is provided, replaces the full set of bindings. Pass `[]` to detach all. |
+| DELETE | `/api/v1/services/:id` | Bearer | Delete a service; its bindings are garbage-collected. |
+
+### Per-binding endpoints
+
+These work without rewriting the whole service. Useful from the Agents page
+where you bind one service at a time. See [Agent ↔ service binding]({% link agent/binding-services.md %})
+for the full model.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/v1/agents/:agentId/services` | Bearer | List services currently bound to one agent. |
+| POST | `/api/v1/agents/:agentId/services/:serviceId` | Bearer | Bind a service to an agent. Idempotent: response `bound=false` on repeat. |
+| DELETE | `/api/v1/agents/:agentId/services/:serviceId` | Bearer | Remove a binding (404 if not bound). |
 
 ## Incidents
 

@@ -263,11 +263,17 @@ describe("agents administration API", () => {
       name: "linked",
       gitRepoUrl: "o/r",
       branch: "main",
-      agentId: "a-del"
+      agentIds: ["a-del"]
     });
+    const beforeBindings = await domainStore.getService("t-1", svc.id);
+    expect(beforeBindings?.agents).toEqual([{ agentId: "a-del" }]);
+
     const res = await app.inject({ method: "DELETE", url: "/api/v1/agents/a-del", headers: AUTH });
     expect(res.statusCode).toBe(204);
+
+    // Deleting an agent garbage-collects its bindings; the service is no
+    // longer attached to anything but still exists.
     const detached = await domainStore.getService("t-1", svc.id);
-    expect(detached?.agentId).toBeNull();
+    expect(detached?.agents).toEqual([]);
   });
 });

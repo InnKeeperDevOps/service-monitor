@@ -109,9 +109,36 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
     markAgentOffline: (tenantId, agentId) => queries.markAgentOffline(queryFn, tenantId, agentId),
     updateAgent: (tenantId, agentId, data) => queries.updateAgent(queryFn, tenantId, agentId, data),
     deleteAgent: (tenantId, agentId) => queries.deleteAgent(queryFn, tenantId, agentId),
-    listServices: (tenantId) => queries.listServices(queryFn, tenantId),
-    getService: (tenantId, id) => queries.getService(queryFn, tenantId, id),
-    createService: (tenantId, data) => queries.createService(queryFn, tenantId, data),
+    listServices: async (tenantId) => {
+      const rows = await queries.listServices(queryFn, tenantId);
+      return Promise.all(
+        rows.map(async (svc) => ({
+          ...svc,
+          agents: await queries.listAgentsForService(queryFn, tenantId, svc.id)
+        }))
+      );
+    },
+    getService: async (tenantId, id) => {
+      const row = await queries.getService(queryFn, tenantId, id);
+      if (!row) return undefined;
+      const agents = await queries.listAgentsForService(queryFn, tenantId, id);
+      return { ...row, agents };
+    },
+    createService: async (tenantId, data) => {
+      const row = await queries.createService(queryFn, tenantId, {
+        name: data.name,
+        gitRepoUrl: data.gitRepoUrl,
+        sshKeyId: data.sshKeyId,
+        branch: data.branch,
+        dockerImage: data.dockerImage,
+        composePath: data.composePath
+      });
+      if (data.agentIds && data.agentIds.length > 0) {
+        await queries.setAgentBindings(queryFn, tenantId, row.id, data.agentIds);
+      }
+      const agents = await queries.listAgentsForService(queryFn, tenantId, row.id);
+      return { ...row, agents };
+    },
     updateService: async (tenantId, id, patch) => {
       const assignments: string[] = [];
       const values: unknown[] = [];
@@ -123,26 +150,58 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
       if (patch.gitRepoUrl !== undefined) push("git_repo_url", patch.gitRepoUrl);
       if (patch.sshKeyId !== undefined) push("ssh_key_id", patch.sshKeyId);
       if (patch.branch !== undefined) push("branch", patch.branch);
-      if (patch.agentId !== undefined) push("agent_id", patch.agentId);
       if (patch.dockerImage !== undefined) push("docker_image", patch.dockerImage);
       if (patch.composePath !== undefined) push("compose_path", patch.composePath);
-      if (assignments.length === 0) {
-        return queries.getService(queryFn, tenantId, id);
+      if (assignments.length > 0) {
+        values.push(id, tenantId);
+        const { rows } = await queryFn(
+          `UPDATE monitored_services SET ${assignments.join(", ")} WHERE id = $${values.length - 1} AND tenant_id = $${values.length} RETURNING id`,
+          values
+        );
+        if (rows.length === 0) return undefined;
+      } else {
+        // No column changes, but we still want a 404 if the row is missing
+        // before touching bindings — protects against cross-tenant writes.
+        const existing = await queries.getService(queryFn, tenantId, id);
+        if (!existing) return undefined;
       }
-      values.push(id, tenantId);
-      const { rows } = await queryFn(
-        `UPDATE monitored_services SET ${assignments.join(", ")} WHERE id = $${values.length - 1} AND tenant_id = $${values.length} RETURNING id`,
-        values
-      );
-      if (rows.length === 0) return undefined;
-      return queries.getService(queryFn, tenantId, id);
+      if (patch.agentIds !== undefined) {
+        await queries.setAgentBindings(queryFn, tenantId, id, patch.agentIds);
+      }
+      const fresh = await queries.getService(queryFn, tenantId, id);
+      if (!fresh) return undefined;
+      const agents = await queries.listAgentsForService(queryFn, tenantId, id);
+      return { ...fresh, agents };
     },
     deleteService: async (tenantId, id) => {
+      // FK cascade on agent_services takes care of binding cleanup.
       const { rows } = await queryFn(
         "DELETE FROM monitored_services WHERE id = $1 AND tenant_id = $2 RETURNING id",
         [id, tenantId]
       );
       return rows.length > 0;
+    },
+
+    attachServiceToAgent: async (tenantId, agentId, serviceId) => {
+      // Tenant scoping: confirm both exist in this tenant before attaching.
+      // (The DB FK only enforces existence, not tenant boundaries.)
+      const svc = await queries.getService(queryFn, tenantId, serviceId);
+      if (!svc) return false;
+      const agent = await queries.getAgent(queryFn, tenantId, agentId);
+      if (!agent) return false;
+      return queries.attachServiceToAgent(queryFn, tenantId, agentId, serviceId);
+    },
+    detachServiceFromAgent: async (tenantId, agentId, serviceId) => {
+      return queries.detachServiceFromAgent(queryFn, tenantId, agentId, serviceId);
+    },
+    listServicesForAgent: async (tenantId, agentId) => {
+      const rows = await queries.listServicesForAgent(queryFn, tenantId, agentId);
+      return Promise.all(
+        rows.map(async (svc) => ({
+          ...svc,
+          agents: await queries.listAgentsForService(queryFn, tenantId, svc.id)
+        }))
+      );
     }
   } as DomainStore;
 }

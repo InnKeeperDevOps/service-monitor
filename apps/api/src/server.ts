@@ -40,6 +40,8 @@ import {
   createApiCredentialRequestSchema,
   createApiCredentialResponseSchema,
   listApiCredentialsResponseSchema,
+  attachServiceToAgentResponseSchema,
+  listServicesForAgentResponseSchema,
   type AgentToPlatformMessage,
   type AgentCommandJob,
   type LogIngestionJob,
@@ -271,6 +273,12 @@ function createLazyDomainStore(resolve: () => Promise<DomainStore>): DomainStore
     createService: (tenantId, data) => get().then((s) => s.createService(tenantId, data)),
     updateService: (tenantId, id, patch) => get().then((s) => s.updateService(tenantId, id, patch)),
     deleteService: (tenantId, id) => get().then((s) => s.deleteService(tenantId, id)),
+    attachServiceToAgent: (tenantId, agentId, serviceId) =>
+      get().then((s) => s.attachServiceToAgent(tenantId, agentId, serviceId)),
+    detachServiceFromAgent: (tenantId, agentId, serviceId) =>
+      get().then((s) => s.detachServiceFromAgent(tenantId, agentId, serviceId)),
+    listServicesForAgent: (tenantId, agentId) =>
+      get().then((s) => s.listServicesForAgent(tenantId, agentId)),
     updateAgent: (tenantId, agentId, data) => get().then((s) => s.updateAgent(tenantId, agentId, data)),
     deleteAgent: (tenantId, agentId) => get().then((s) => s.deleteAgent(tenantId, agentId)),
     listSshKeys: (tenantId) => get().then((s) => s.listSshKeys(tenantId)),
@@ -698,7 +706,8 @@ export function buildServer(opts: BuildServerOptions = {}) {
                   domainStore,
                   errorGroups,
                   readSshKeyMaterial: (tid, kid) => domainStore.getSshKeyMaterial(tid, kid),
-                  enqueueAgentCommand
+                  enqueueAgentCommand,
+                  isAgentOnline: (id) => realtimeManager.getConnectedAgentIds().includes(id)
                 },
                 upsert.group,
                 service
@@ -1871,6 +1880,71 @@ export function buildServer(opts: BuildServerOptions = {}) {
     }
     return reply.status(204).send();
   });
+
+  // --- Many-to-many agent ↔ service binding ------------------------------
+  // The data layer keeps these as a join table so a service can run on
+  // multiple agents (HA, multi-cluster) and an agent can be observing many
+  // services. Both directions are editable from the panel.
+
+  app.get<{ Params: { agentId: string } }>("/api/v1/agents/:agentId/services", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    const services = await domainStore.listServicesForAgent(session.tenantId, req.params.agentId);
+    return listServicesForAgentResponseSchema.parse({ services });
+  });
+
+  app.post<{ Params: { agentId: string; serviceId: string } }>(
+    "/api/v1/agents/:agentId/services/:serviceId",
+    async (req, reply) => {
+      const session = await resolveSession(authStore, req.headers.authorization);
+      if (!session) {
+        return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+      }
+      // Cross-tenant guard: both agent and service must live in the
+      // session's tenant. The store helper already checks that, but we
+      // distinguish the 404 (missing) from a validated false (already
+      // bound — idempotent).
+      const agent = await domainStore.getAgent(session.tenantId, req.params.agentId);
+      if (!agent) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Agent not found", correlationId: (req as any).correlationId }));
+      }
+      const service = await domainStore.getService(session.tenantId, req.params.serviceId);
+      if (!service) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Service not found", correlationId: (req as any).correlationId }));
+      }
+      const bound = await domainStore.attachServiceToAgent(
+        session.tenantId,
+        req.params.agentId,
+        req.params.serviceId
+      );
+      return attachServiceToAgentResponseSchema.parse({
+        bound,
+        agentId: req.params.agentId,
+        serviceId: req.params.serviceId
+      });
+    }
+  );
+
+  app.delete<{ Params: { agentId: string; serviceId: string } }>(
+    "/api/v1/agents/:agentId/services/:serviceId",
+    async (req, reply) => {
+      const session = await resolveSession(authStore, req.headers.authorization);
+      if (!session) {
+        return reply.status(401).send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+      }
+      const removed = await domainStore.detachServiceFromAgent(
+        session.tenantId,
+        req.params.agentId,
+        req.params.serviceId
+      );
+      if (!removed) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Binding not found", correlationId: (req as any).correlationId }));
+      }
+      return reply.status(204).send();
+    }
+  );
 
   app.setNotFoundHandler(async (req, reply) => {
     if (

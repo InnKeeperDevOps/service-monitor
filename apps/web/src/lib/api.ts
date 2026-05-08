@@ -183,6 +183,12 @@ export type Agent = {
   apps?: AgentAppTelemetry[];
 };
 
+/**
+ * AgentBinding mirrors the contract type — kept as an object so additional
+ * fields (priority, createdAt) can be added without breaking call sites.
+ */
+export type AgentBinding = { agentId: string };
+
 export type MonitoredService = {
   id: string;
   tenantId: string;
@@ -190,7 +196,8 @@ export type MonitoredService = {
   gitRepoUrl: string;
   sshKeyId?: string | null;
   branch: string;
-  agentId: string | null;
+  /** Agents currently observing this service. Empty until at least one is bound. */
+  agents: AgentBinding[];
   dockerImage?: string | null;
   composePath?: string | null;
 };
@@ -284,6 +291,8 @@ export const api = {
     gitRepoUrl: string;
     sshKeyId?: string;
     branch: string;
+    /** Initial agent bindings (many-to-many). */
+    agentIds?: string[];
     dockerImage?: string;
     composePath?: string;
   }) =>
@@ -297,6 +306,8 @@ export const api = {
     gitRepoUrl?: string;
     sshKeyId?: string | null;
     branch?: string;
+    /** When defined, replaces the full set of agent bindings. Pass [] to detach all. */
+    agentIds?: string[];
     dockerImage?: string;
     composePath?: string;
   }) =>
@@ -304,6 +315,25 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data)
     }),
+
+  // --- Many-to-many agent ↔ service binding helpers ---
+
+  listServicesForAgent: (agentId: string) =>
+    apiFetch<{ services: MonitoredService[] }>(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/services`
+    ),
+
+  attachServiceToAgent: (agentId: string, serviceId: string) =>
+    apiFetch<{ bound: boolean; agentId: string; serviceId: string }>(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/services/${encodeURIComponent(serviceId)}`,
+      { method: "POST" }
+    ),
+
+  detachServiceFromAgent: (agentId: string, serviceId: string) =>
+    apiFetch<void>(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/services/${encodeURIComponent(serviceId)}`,
+      { method: "DELETE" }
+    ),
 
   deleteService: (id: string) =>
     apiFetch<void>(`/api/v1/services/${encodeURIComponent(id)}`, {

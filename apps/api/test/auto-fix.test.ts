@@ -79,7 +79,7 @@ async function createService(opts: { sshKeyId?: string; agentId: string; name: s
       gitRepoUrl: `git@github.com:example/${opts.name}.git`,
       sshKeyId: opts.sshKeyId,
       branch: "main",
-      agentId: opts.agentId
+      agentIds: [opts.agentId]
     }
   });
   expect(res.statusCode).toBe(201);

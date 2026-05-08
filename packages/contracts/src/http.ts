@@ -117,16 +117,27 @@ export const updateIncidentStatusRequestSchema = z.object({
   status: incidentStatusSchema
 });
 
+/**
+ * AgentBinding is the per-row shape of MonitoredService.agents — the list of
+ * agents that observe / can act on this service. Kept as an object (rather
+ * than a bare string) so we can grow `priority`, `createdAt`, etc. without
+ * a breaking contract change.
+ */
+export const agentBindingSchema = z.object({
+  agentId: z.string()
+});
+
 export const monitoredServiceSchema = z.object({
   id: z.string(),
   tenantId: z.string(),
-  agentId: z.string().nullable(),
   name: z.string(),
   gitRepoUrl: z.string(),
   sshKeyId: z.string().nullable().optional(),
   branch: z.string(),
   dockerImage: z.string().nullable().optional(),
-  composePath: z.string().nullable().optional()
+  composePath: z.string().nullable().optional(),
+  /** Agents currently bound to this service. Empty until at least one is attached. */
+  agents: z.array(agentBindingSchema).default([])
 });
 
 export const createMonitoredServiceRequestSchema = z.object({
@@ -134,7 +145,8 @@ export const createMonitoredServiceRequestSchema = z.object({
   gitRepoUrl: z.string().min(1),
   sshKeyId: z.string().nullable().optional(),
   branch: z.string().min(1),
-  agentId: z.string().nullable().optional(),
+  /** Initial agent bindings; safe to omit for unbound services. */
+  agentIds: z.array(z.string()).default([]),
   dockerImage: z.string().min(1).optional(),
   composePath: z.string().min(1).optional()
 });
@@ -144,12 +156,27 @@ export const updateMonitoredServiceRequestSchema = z.object({
   gitRepoUrl: z.string().min(1).optional(),
   sshKeyId: z.string().nullable().optional(),
   branch: z.string().min(1).optional(),
-  agentId: z.string().nullable().optional(),
+  /**
+   * When provided, replaces the full set of agent bindings (delete-not-in,
+   * insert-missing). Omit to leave bindings unchanged. To detach all agents,
+   * pass `[]`.
+   */
+  agentIds: z.array(z.string()).optional(),
   dockerImage: z.string().min(1).optional(),
   composePath: z.string().min(1).optional()
 });
 
 export const listMonitoredServicesResponseSchema = z.object({
+  services: z.array(monitoredServiceSchema)
+});
+
+export const attachServiceToAgentResponseSchema = z.object({
+  bound: z.boolean(),
+  agentId: z.string(),
+  serviceId: z.string()
+});
+
+export const listServicesForAgentResponseSchema = z.object({
   services: z.array(monitoredServiceSchema)
 });
 
@@ -217,9 +244,12 @@ export type CreateSshKeyRequest = z.infer<typeof createSshKeyRequestSchema>;
 export type ListSshKeysResponse = z.infer<typeof listSshKeysResponseSchema>;
 export type Incident = z.infer<typeof incidentSchema>;
 export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
+export type AgentBinding = z.infer<typeof agentBindingSchema>;
 export type MonitoredService = z.infer<typeof monitoredServiceSchema>;
 export type CreateMonitoredServiceRequest = z.infer<typeof createMonitoredServiceRequestSchema>;
 export type UpdateMonitoredServiceRequest = z.infer<typeof updateMonitoredServiceRequestSchema>;
+export type AttachServiceToAgentResponse = z.infer<typeof attachServiceToAgentResponseSchema>;
+export type ListServicesForAgentResponse = z.infer<typeof listServicesForAgentResponseSchema>;
 export type Agent = z.infer<typeof agentSchema>;
 
 // ---------------------------------------------------------------------------

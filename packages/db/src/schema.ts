@@ -86,6 +86,38 @@ create table if not exists monitored_services (
 alter table monitored_services drop column if exists workflow_graph_id cascade;
 alter table monitored_services drop column if exists agent_runtime_backend cascade;
 
+-- agent ↔ service binding is many-to-many. The join table is the single
+-- source of truth. The legacy monitored_services.agent_id column
+-- (non-null for any service that was bound under the old single-FK model)
+-- is migrated into the join below, then dropped. Idempotent on re-runs.
+create table if not exists agent_services (
+  tenant_id text not null references tenants(id) on delete cascade,
+  agent_id text not null references agents(id) on delete cascade,
+  service_id text not null references monitored_services(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (agent_id, service_id)
+);
+
+create index if not exists agent_services_tenant_id_idx on agent_services(tenant_id);
+create index if not exists agent_services_service_id_idx on agent_services(service_id);
+
+-- Backfill from the legacy single-FK column. Wrapped in a DO block so it's
+-- a no-op when monitored_services.agent_id has already been dropped.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'monitored_services' and column_name = 'agent_id'
+  ) then
+    insert into agent_services (tenant_id, agent_id, service_id)
+      select tenant_id, agent_id, id from monitored_services
+      where agent_id is not null
+      on conflict do nothing;
+  end if;
+end$$;
+
+alter table monitored_services drop column if exists agent_id cascade;
+
 drop table if exists workflow_graphs cascade;
 
 create table if not exists service_runs (

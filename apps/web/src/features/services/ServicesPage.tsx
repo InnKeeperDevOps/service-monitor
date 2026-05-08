@@ -1,22 +1,52 @@
 import { useEffect, useState } from "react";
 import { Box } from "lucide-react";
-import { api, type MonitoredService, type SshKey } from "../../lib/api.js";
+import { api, type Agent, type MonitoredService, type SshKey } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
+
+type ServiceForm = {
+  name: string;
+  gitRepoUrl: string;
+  sshKeyId: string;
+  branch: string;
+  dockerImage: string;
+  composePath: string;
+  agentIds: string[];
+};
+
+const emptyForm: ServiceForm = {
+  name: "",
+  gitRepoUrl: "",
+  sshKeyId: "",
+  branch: "main",
+  dockerImage: "",
+  composePath: "",
+  agentIds: []
+};
 
 export function ServicesPage() {
   const [services, setServices] = useState<MonitoredService[]>([]);
   const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
+  const [form, setForm] = useState<ServiceForm>(emptyForm);
   const { isAdmin } = useAuth();
   const canManage = isAdmin;
 
   useEffect(() => {
     api.listServices().then((r) => setServices(r.services)).catch((e) => setError(e.message));
     api.listSshKeys().then((r) => setSshKeys(r.keys)).catch(() => {});
+    api.listAgents().then((r) => setAgents(r.agents)).catch(() => {});
   }, []);
+
+  function toggleAgent(agentId: string) {
+    setForm((prev) =>
+      prev.agentIds.includes(agentId)
+        ? { ...prev, agentIds: prev.agentIds.filter((a) => a !== agentId) }
+        : { ...prev, agentIds: [...prev.agentIds, agentId] }
+    );
+  }
 
   async function handleCreate(ev: React.FormEvent) {
     ev.preventDefault();
@@ -28,7 +58,8 @@ export function ServicesPage() {
           sshKeyId: form.sshKeyId || null,
           branch: form.branch,
           dockerImage: form.dockerImage.trim() || undefined,
-          composePath: form.composePath.trim() || undefined
+          composePath: form.composePath.trim() || undefined,
+          agentIds: form.agentIds
         });
         setServices((prev) => prev.map((s) => s.id === editingId ? svc : s));
       } else {
@@ -38,13 +69,14 @@ export function ServicesPage() {
           sshKeyId: form.sshKeyId || undefined,
           branch: form.branch,
           dockerImage: form.dockerImage.trim() || undefined,
-          composePath: form.composePath.trim() || undefined
+          composePath: form.composePath.trim() || undefined,
+          agentIds: form.agentIds
         });
         setServices((prev) => [...prev, svc]);
       }
       setShowForm(false);
       setEditingId(null);
-      setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
+      setForm(emptyForm);
     } catch (e: unknown) {
       setError((e as Error).message);
     }
@@ -57,7 +89,8 @@ export function ServicesPage() {
       sshKeyId: svc.sshKeyId || "",
       branch: svc.branch,
       dockerImage: svc.dockerImage || "",
-      composePath: svc.composePath || ""
+      composePath: svc.composePath || "",
+      agentIds: (svc.agents ?? []).map((b) => b.agentId)
     });
     setEditingId(svc.id);
     setShowForm(true);
@@ -73,11 +106,17 @@ export function ServicesPage() {
       if (editingId === svc.id) {
         setEditingId(null);
         setShowForm(false);
-        setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" });
+        setForm(emptyForm);
       }
     } catch (e: unknown) {
       setError((e as Error).message);
     }
+  }
+
+  function renderAgents(svc: MonitoredService): string {
+    const ids = (svc.agents ?? []).map((b) => b.agentId);
+    if (ids.length === 0) return "—";
+    return ids.join(", ");
   }
 
   return (
@@ -85,7 +124,7 @@ export function ServicesPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
         <h2 style={{ margin: 0 }}>Monitored Services</h2>
         {canManage && (
-          <button onClick={() => { setShowForm(!showForm); setEditingId(null); setForm({ name: "", gitRepoUrl: "", sshKeyId: "", branch: "main", dockerImage: "", composePath: "" }); }} style={primaryBtn}>{showForm ? "Cancel" : "Add Service"}</button>
+          <button onClick={() => { setShowForm(!showForm); setEditingId(null); setForm(emptyForm); }} style={primaryBtn}>{showForm ? "Cancel" : "Add Service"}</button>
         )}
       </div>
       {error && <div style={{ color: "var(--color-danger)", marginBottom: "0.5rem" }}>{error}</div>}
@@ -140,6 +179,29 @@ export function ServicesPage() {
             Compose Path <span style={{ color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>(optional)</span>
             <input value={form.composePath} onChange={(e) => setForm({ ...form, composePath: e.target.value })} placeholder="e.g. docker-compose.yml" style={inputStyle} />
           </label>
+          <fieldset style={{ border: "1px solid var(--color-border)", borderRadius: 6, padding: "0.5rem 0.75rem" }}>
+            <legend style={{ padding: "0 0.4rem", fontSize: "0.8rem", color: "var(--color-text-secondary)" }}>
+              Bound agents <span>(many-to-many; pick zero or more)</span>
+            </legend>
+            {agents.length === 0 ? (
+              <p style={{ margin: 0, color: "var(--color-text-secondary)", fontSize: "0.82rem" }}>
+                No agents enrolled yet. Bind agents from the Agents page after they appear.
+              </p>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 1rem" }}>
+                {agents.map((a) => (
+                  <label key={a.id} style={{ display: "inline-flex", gap: "0.3rem", alignItems: "center", fontSize: "0.85rem" }}>
+                    <input
+                      type="checkbox"
+                      checked={form.agentIds.includes(a.id)}
+                      onChange={() => toggleAgent(a.id)}
+                    />
+                    {a.name?.trim() || a.id}
+                  </label>
+                ))}
+              </div>
+            )}
+          </fieldset>
           <button type="submit" style={primaryBtn}>{editingId ? "Save Changes" : "Create"}</button>
         </form>
       )}
@@ -150,7 +212,7 @@ export function ServicesPage() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              {["Name", "Repository", "Branch", "Agent", "Detectors", "Actions"].map((h) => (
+              {["Name", "Repository", "Branch", "Agents", "Detectors", "Actions"].map((h) => (
                 <th key={h} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid var(--color-border)", color: "var(--color-text-secondary)", fontSize: "0.8rem" }}>
                   {h}
                 </th>
@@ -166,7 +228,7 @@ export function ServicesPage() {
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>{svc.gitRepoUrl}</td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>{svc.branch}</td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
-                  {svc.agentId ?? "\u2014"}
+                  {renderAgents(svc)}
                 </td>
                 <td style={{ padding: "0.5rem", fontSize: "0.85rem", color: "var(--color-text-secondary)" }}>
                   Default

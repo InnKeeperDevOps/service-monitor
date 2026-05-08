@@ -17,6 +17,11 @@ import {
   deleteSshKey,
   updateAgent,
   deleteAgent,
+  attachServiceToAgent,
+  detachServiceFromAgent,
+  listAgentsForService,
+  listServicesForAgent,
+  setAgentBindings,
   createApiCredential,
   listApiCredentials,
   findApiCredentialByTokenHash,
@@ -349,19 +354,17 @@ describe("markAgentOffline", () => {
 // ---------------------------------------------------------------------------
 
 describe("listServices", () => {
-  it("returns mapped rows", async () => {
+  it("returns mapped rows (agent bindings are joined separately)", async () => {
     const query = mockQuery([
       {
         id: "s1",
         tenant_id: "t1",
-        agent_id: "a1",
         name: "web",
         git_repo_url: "r",
         ssh_key_id: "k1",
         branch: "main",
         docker_image: "acme/web:latest",
-        compose_path: "compose.yml",
-        agent_runtime_backend: null
+        compose_path: "compose.yml"
       },
     ]);
     const result = await listServices(query, "t1");
@@ -369,7 +372,6 @@ describe("listServices", () => {
       {
         id: "s1",
         tenantId: "t1",
-        agentId: "a1",
         name: "web",
         gitRepoUrl: "r",
         sshKeyId: "k1",
@@ -382,12 +384,11 @@ describe("listServices", () => {
 });
 
 describe("createService", () => {
-  it("generates UUID and inserts", async () => {
+  it("generates UUID and inserts without agent_id", async () => {
     const query = mockQuery([
       {
         id: "new-uuid",
         tenant_id: "t1",
-        agent_id: null,
         name: "api",
         git_repo_url: "r",
         ssh_key_id: null,
@@ -405,12 +406,87 @@ describe("createService", () => {
       composePath: "deploy/compose.yml"
     });
     expect(result.name).toBe("api");
-    expect(result.agentId).toBeNull();
     expect(result.dockerImage).toBe("acme/api:1.0");
     expect(result.composePath).toBe("deploy/compose.yml");
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO monitored_services"),
-      expect.arrayContaining(["t1", null, "api", "r", null, "main", "acme/api:1.0", "deploy/compose.yml"]),
+      expect.arrayContaining(["t1", "api", "r", null, "main", "acme/api:1.0", "deploy/compose.yml"]),
+    );
+  });
+});
+
+describe("agent_services join queries", () => {
+  it("attachServiceToAgent returns true when a row was inserted", async () => {
+    const query = mockQuery([{ agent_id: "a1" }]);
+    const ok = await attachServiceToAgent(query, "t1", "a1", "s1");
+    expect(ok).toBe(true);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO agent_services"),
+      ["t1", "a1", "s1"]
+    );
+  });
+
+  it("attachServiceToAgent returns false when ON CONFLICT swallowed the insert", async () => {
+    const query = mockQuery([]);
+    const ok = await attachServiceToAgent(query, "t1", "a1", "s1");
+    expect(ok).toBe(false);
+  });
+
+  it("detachServiceFromAgent returns true when a row was deleted", async () => {
+    const query = mockQuery([{ agent_id: "a1" }]);
+    const ok = await detachServiceFromAgent(query, "t1", "a1", "s1");
+    expect(ok).toBe(true);
+  });
+
+  it("detachServiceFromAgent returns false on miss", async () => {
+    const query = mockQuery([]);
+    const ok = await detachServiceFromAgent(query, "t1", "a1", "s1");
+    expect(ok).toBe(false);
+  });
+
+  it("listAgentsForService maps rows", async () => {
+    const query = mockQuery([{ agent_id: "a1" }, { agent_id: "a2" }]);
+    const got = await listAgentsForService(query, "t1", "s1");
+    expect(got).toEqual([{ agentId: "a1" }, { agentId: "a2" }]);
+  });
+
+  it("listServicesForAgent maps service rows", async () => {
+    const query = mockQuery([
+      { id: "s1", tenant_id: "t1", name: "web", git_repo_url: "r", ssh_key_id: null, branch: "main", docker_image: null, compose_path: null }
+    ]);
+    const got = await listServicesForAgent(query, "t1", "a1");
+    expect(got).toHaveLength(1);
+    expect(got[0].name).toBe("web");
+  });
+
+  it("setAgentBindings deletes everything when given an empty list", async () => {
+    const query = mockQuery([]);
+    await setAgentBindings(query, "t1", "s1", []);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("DELETE FROM agent_services WHERE tenant_id = $1 AND service_id = $2"),
+      ["t1", "s1"]
+    );
+  });
+
+  it("setAgentBindings prunes then upserts", async () => {
+    const query = mockQuery([]);
+    await setAgentBindings(query, "t1", "s1", ["a1", "a2"]);
+    // First call: prune
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("agent_id <> ALL($3::text[])"),
+      ["t1", "s1", ["a1", "a2"]]
+    );
+    // Then one upsert per agent
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("INSERT INTO agent_services"),
+      ["t1", "a1", "s1"]
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("INSERT INTO agent_services"),
+      ["t1", "a2", "s1"]
     );
   });
 });

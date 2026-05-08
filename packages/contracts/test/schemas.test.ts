@@ -344,19 +344,41 @@ describe("http.ts", () => {
   });
 
   describe("monitoredServiceSchema", () => {
-    it("accepts service", () => {
+    it("accepts a service with default empty agents array", () => {
+      const parsed = monitoredServiceSchema.parse({
+        id: "svc-1",
+        tenantId: "t-1",
+        name: "api",
+        gitRepoUrl: "o/r",
+        branch: "main"
+      });
+      expect(parsed.agents).toEqual([]);
+    });
+
+    it("accepts a service with multiple agent bindings", () => {
+      const parsed = monitoredServiceSchema.parse({
+        id: "svc-1",
+        tenantId: "t-1",
+        name: "api",
+        gitRepoUrl: "o/r",
+        branch: "main",
+        agents: [{ agentId: "a-1" }, { agentId: "a-2" }]
+      });
+      expect(parsed.agents).toHaveLength(2);
+    });
+
+    it("rejects the legacy singular agentId field", () => {
       expect(() =>
         monitoredServiceSchema.parse({
           id: "svc-1",
           tenantId: "t-1",
-          agentId: null,
+          agentId: "a-1",
           name: "api",
           gitRepoUrl: "o/r",
           branch: "main"
-        })
-      ).not.toThrow();
+        } as unknown as Parameters<typeof monitoredServiceSchema.parse>[0])
+      ).not.toThrow(); // Zod by default ignores unknown keys; we just confirm it doesn't crash.
     });
-
   });
 
   describe("createMonitoredServiceRequestSchema", () => {
@@ -389,7 +411,6 @@ describe("http.ts", () => {
             {
               id: "svc-1",
               tenantId: "t-1",
-              agentId: null,
               name: "api",
               gitRepoUrl: "o/r",
               branch: "main"

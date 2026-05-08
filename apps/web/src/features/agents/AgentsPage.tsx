@@ -7,6 +7,7 @@ import { Button } from "../../components/Button.js";
 import { useTelemetryStream } from "./useTelemetryStream.js";
 import { ErrorGroupsSection } from "./ErrorGroupsSection.js";
 import { EnrollmentTokensPanel } from "./EnrollmentTokensPanel.js";
+import { ServicesForAgentSection } from "./ServicesForAgentSection.js";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -148,11 +149,12 @@ function AppsTelemetryTable({ apps }: { apps: AgentAppTelemetry[] }) {
 function buildServiceCounts(services: MonitoredService[]): Map<string, { count: number; names: string[] }> {
   const m = new Map<string, { count: number; names: string[] }>();
   for (const s of services) {
-    if (!s.agentId) continue;
-    const cur = m.get(s.agentId) ?? { count: 0, names: [] };
-    cur.count += 1;
-    cur.names.push(s.name);
-    m.set(s.agentId, cur);
+    for (const binding of s.agents ?? []) {
+      const cur = m.get(binding.agentId) ?? { count: 0, names: [] };
+      cur.count += 1;
+      cur.names.push(s.name);
+      m.set(binding.agentId, cur);
+    }
   }
   return m;
 }
@@ -617,6 +619,12 @@ export function AgentsPage() {
                     <tr>
                       <td colSpan={14} style={{ ...tdStyle, padding: "0.25rem 0.5rem 1rem 2rem", background: "var(--color-surface-muted, transparent)" }}>
                         <AppsTelemetryTable apps={appsList} />
+                        <ServicesForAgentSection
+                          agentId={a.id}
+                          allServices={services}
+                          onChange={() => void fetchData()}
+                          disabled={isViewer}
+                        />
                         <div style={{ marginTop: "1rem" }}>
                           <h3 style={{ margin: "0 0 0.5rem", fontSize: "0.9rem", color: "var(--color-text-secondary)" }}>
                             Error groups (auto-fix)

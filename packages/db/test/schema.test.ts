@@ -40,17 +40,25 @@ describe("db schema", () => {
       expect(coreSchemaSql).toContain("local_path text");
     });
 
-    it("defines monitored_services with tenant, nullable agent FK, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path", () => {
+    it("defines monitored_services without an agent_id column (many-to-many via agent_services)", () => {
       expect(coreSchemaSql).toContain("create table if not exists monitored_services");
-      expect(coreSchemaSql).toMatch(
-        /agent_id text references agents\(id\)[^\n]*on delete set null/,
-      );
       expect(coreSchemaSql).toContain("name text not null");
       expect(coreSchemaSql).toContain("git_repo_url text not null");
       expect(coreSchemaSql).toMatch(/ssh_key_id text references ssh_keys\(id\)/);
       expect(coreSchemaSql).toContain("branch text not null");
       expect(coreSchemaSql).toContain("docker_image text");
       expect(coreSchemaSql).toContain("compose_path text");
+      // Migration drops the legacy single-FK column at end of bootstrap.
+      expect(coreSchemaSql).toMatch(/alter table monitored_services drop column if exists agent_id cascade/);
+    });
+
+    it("defines agent_services join table with composite PK and indexes", () => {
+      expect(coreSchemaSql).toContain("create table if not exists agent_services");
+      expect(coreSchemaSql).toMatch(/agent_id text not null references agents\(id\) on delete cascade/);
+      expect(coreSchemaSql).toMatch(/service_id text not null references monitored_services\(id\) on delete cascade/);
+      expect(coreSchemaSql).toMatch(/primary key \(agent_id, service_id\)/);
+      expect(coreSchemaSql).toContain("agent_services_tenant_id_idx");
+      expect(coreSchemaSql).toContain("agent_services_service_id_idx");
     });
 
     it("defines service_runs with tenant, service, agent FKs and state check", () => {
