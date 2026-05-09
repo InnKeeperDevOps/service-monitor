@@ -1460,8 +1460,28 @@ export function buildServer(opts: BuildServerOptions = {}) {
       );
     }
     try {
-      const tokens = await listEnrollmentTokensForTenant(session.tenantId);
-      return listEnrollmentTokensResponseSchema.parse({ tokens });
+      // Defaults: only ACTIVE tokens, capped at 50 most-recent rows.
+      // Without these defaults the panel can render thousands of rows
+      // (operators that re-mint on every reconcile, plus accumulated
+      // expired/used tokens) and spend ~400 ms blocking the main thread.
+      // Override with `?includeInactive=true` (caller wants the full
+      // list) and/or `?limit=N` (caller wants more than 50). Hard cap
+      // 500 so a misbehaving caller can't ask for ten thousand.
+      const HARD_CAP = 500;
+      const DEFAULT_LIMIT = 50;
+      const q = req.query as Record<string, string | undefined>;
+      const includeInactive = q.includeInactive === "true" || q.includeInactive === "1";
+      const requestedLimit = q.limit ? Number.parseInt(q.limit, 10) : DEFAULT_LIMIT;
+      const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(requestedLimit, HARD_CAP)
+        : DEFAULT_LIMIT;
+      const all = await listEnrollmentTokensForTenant(session.tenantId);
+      const filtered = includeInactive ? all : all.filter((t) => t.isActive);
+      const sorted = [...filtered].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+      const capped = sorted.slice(0, limit);
+      return listEnrollmentTokensResponseSchema.parse({ tokens: capped });
     } catch (err) {
       return reply.status(503).send(
         apiErrorSchema.parse({

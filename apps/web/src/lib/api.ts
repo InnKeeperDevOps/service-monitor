@@ -346,7 +346,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data)
     }),
-  listEnrollmentTokens: () =>
+  listEnrollmentTokens: (opts: { includeInactive?: boolean } = {}) =>
     apiFetch<{
       tokens: {
         id: string;
@@ -358,7 +358,9 @@ export const api = {
         revokedAt: string | null;
         isActive: boolean;
       }[];
-    }>("/api/v1/agents/enrollment-tokens"),
+    }>(
+      `/api/v1/agents/enrollment-tokens${opts.includeInactive ? "?includeInactive=true" : ""}`
+    ),
 
   createEnrollmentToken: (data: { ttlSeconds: number }) =>
     apiFetch<{
