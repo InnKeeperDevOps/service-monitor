@@ -161,10 +161,102 @@ describe("AgentsPage", () => {
     expect(screen.getByRole("link", { name: "1" })).toHaveAttribute("href", "#services");
   });
 
-  // The "attaches an unbound service to an agent from the expanded row"
-  // test was removed alongside the temporary recovery that gates
-  // ServicesForAgentSection off (it caused a Chrome lock-up when bound
-  // services were rendered). Bindings are still editable from the
-  // ServicesPage form — see services-page.test.tsx for that flow.
-  // Restore this test when ServicesForAgentSection is re-enabled.
+  it("attaches an unbound service to an agent from the expanded row", async () => {
+    listAgents.mockResolvedValue({
+      agents: [
+        {
+          id: "agent-1",
+          tenantId: "t1",
+          name: "Edge",
+          version: "2.1.0",
+          status: "online",
+          lastSeenAt: new Date().toISOString(),
+          allowedCapabilities: [],
+          websocketConnected: true
+        }
+      ]
+    });
+    listServices.mockResolvedValue({
+      services: [
+        {
+          id: "svc-1",
+          tenantId: "t1",
+          name: "app-a",
+          gitRepoUrl: "o/r",
+          branch: "main",
+          agents: [],
+          dockerImage: null,
+          composePath: null
+        }
+      ]
+    });
+    attachServiceToAgent.mockResolvedValue({ bound: true, agentId: "agent-1", serviceId: "svc-1" });
+
+    render(<AgentsPage />);
+    await waitFor(() => {
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    });
+
+    // Expand the agent row.
+    const expandBtn = screen.getByRole("button", { name: "Expand apps" });
+    expandBtn.click();
+
+    // The unbound service should appear in the picker.
+    const picker = await screen.findByLabelText("Pick a service to bind to this agent");
+    fireEvent.change(picker, { target: { value: "svc-1" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "+ Bind" }));
+
+    await waitFor(() => {
+      expect(attachServiceToAgent).toHaveBeenCalledWith("agent-1", "svc-1");
+    });
+  });
+
+  it("renders bound services as flex rows (no nested table) when bindings exist", async () => {
+    // Regression test for the Chrome lock-up: under the old <table> render
+    // path, having bindings would freeze the page. Now we render them as
+    // div-based list items.
+    listAgents.mockResolvedValue({
+      agents: [
+        {
+          id: "agent-1",
+          tenantId: "t1",
+          name: "Edge",
+          version: "2.1.0",
+          status: "online",
+          lastSeenAt: new Date().toISOString(),
+          allowedCapabilities: [],
+          websocketConnected: true
+        }
+      ]
+    });
+    listServices.mockResolvedValue({
+      services: [
+        {
+          id: "svc-1",
+          tenantId: "t1",
+          name: "bound-app",
+          gitRepoUrl: "git@example.com:o/r.git",
+          branch: "main",
+          agents: [{ agentId: "agent-1" }],
+          dockerImage: null,
+          composePath: null
+        }
+      ]
+    });
+
+    render(<AgentsPage />);
+    await waitFor(() => {
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand apps" }));
+
+    // The bound service is shown by name with a Detach button.
+    expect(await screen.findByText("bound-app")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Detach" })).toBeInTheDocument();
+    // No <table> element inside the bound list — it's flex rows.
+    const boundContainer = screen.getByText("bound-app").closest('[role="listitem"]');
+    expect(boundContainer).not.toBeNull();
+  });
 });

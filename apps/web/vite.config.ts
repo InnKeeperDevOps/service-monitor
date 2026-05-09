@@ -1,8 +1,8 @@
-import react from "@vitejs/plugin-react";
+import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [vue()],
   build: {
     outDir: "dist"
   },
@@ -19,7 +19,6 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
-      // Sparse UI tests today; raise toward 80% as feature tests grow.
       thresholds: { lines: 20 }
     }
   }

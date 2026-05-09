@@ -1,0 +1,628 @@
+<script setup lang="ts">
+import { onMounted, ref, type CSSProperties } from "vue";
+import { Key } from "lucide-vue-next";
+import { api, type MonitoredService } from "../../lib/api.js";
+
+type TokenInfo = {
+  id: string;
+  tenantId: string;
+  expiresAt: string;
+  createdBy: string;
+  createdAt: string;
+  usedAt: string | null;
+  revokedAt: string | null;
+  isActive: boolean;
+};
+type EnrollmentTokenPreset = "1h" | "24h" | "7d" | "30d";
+type AgentRuntime = "docker" | "shell" | "kubernetes" | "podman";
+type InstallTab = "linux" | "kubernetes";
+
+const ENROLLMENT_MAX_TTL_SECONDS = 365 * 24 * 60 * 60;
+const ENROLLMENT_PRESET_SECONDS: Record<EnrollmentTokenPreset, number> = {
+  "1h": 60 * 60,
+  "24h": 24 * 60 * 60,
+  "7d": 7 * 24 * 60 * 60,
+  "30d": 30 * 24 * 60 * 60
+};
+
+const RUNTIME_LABELS: Record<AgentRuntime, string> = {
+  docker: "Docker",
+  shell: "Shell (host processes)",
+  kubernetes: "Kubernetes",
+  podman: "Podman"
+};
+const RUNTIME_OPTIONS: AgentRuntime[] = ["docker", "shell", "kubernetes", "podman"];
+
+function formatDateTimeLocal(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const h = String(date.getHours()).padStart(2, "0");
+  const mn = String(date.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${d}T${h}:${mn}`;
+}
+function toPresetExpiration(preset: EnrollmentTokenPreset): string {
+  return formatDateTimeLocal(new Date(Date.now() + ENROLLMENT_PRESET_SECONDS[preset] * 1000));
+}
+function runtimeEnvClause(runtime: AgentRuntime): string {
+  switch (runtime) {
+    case "docker":
+      return "";
+    case "shell":
+      return "SM_AGENT_RUNTIME_OVERRIDE=shell ";
+    case "kubernetes":
+      return "SM_AGENT_RUNTIME_OVERRIDE=kubernetes ";
+    case "podman":
+      return "SM_DOCKER_SOCKET=/run/podman/podman.sock ";
+  }
+}
+
+function buildKaiadAgentManifest(opts: { serviceId?: string | null }): string {
+  const realtimeUrl =
+    typeof window === "undefined"
+      ? "wss://your-kaiad.example.com/realtime"
+      : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/realtime`;
+  const name = "edge-agent";
+  const namespace = "kaiad-system";
+  const image = "ghcr.io/innkeeperdevops/kaiad-agent:latest";
+  const serviceId = opts.serviceId?.trim();
+  const lines = [
+    "apiVersion: kaiad.dev/v1alpha1",
+    "kind: KaiadAgent",
+    "metadata:",
+    `  name: ${name}`,
+    `  namespace: ${namespace}`,
+    "spec:",
+    "  controlPlane:",
+    `    realtimeUrl: ${realtimeUrl}`,
+    "  enrollment:",
+    "    autoMint: true",
+    `  image: ${image}`,
+    ...(serviceId ? [`  serviceId: ${serviceId}`] : []),
+    "  manages:",
+    "    - apiGroups: [\"apps\"]",
+    "      resources: [\"deployments\", \"statefulsets\"]",
+    "      verbs: [\"get\", \"list\", \"watch\", \"patch\", \"update\"]",
+    "      namespaceSelector:",
+    "        matchLabels:",
+    "          kaiad.dev/managed: \"true\"",
+    "    - apiGroups: [\"\"]",
+    "      resources: [\"pods\", \"pods/log\"]",
+    "      verbs: [\"get\", \"list\", \"watch\"]",
+    "      namespaceSelector:",
+    "        matchLabels:",
+    "          kaiad.dev/managed: \"true\""
+  ];
+  return lines.join("\n") + "\n";
+}
+
+function buildAgentStartCommand(token: string, serviceId?: string | null, runtime: AgentRuntime = "docker"): string {
+  const realtimeUrl =
+    typeof window === "undefined"
+      ? "wss://your-kaiad.example.com/realtime"
+      : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/realtime`;
+  const trimmed = serviceId?.trim();
+  const serviceClause = trimmed ? `SM_SERVICE_ID=${trimmed} ` : "";
+  const runtimeClause = runtimeEnvClause(runtime);
+  return `SM_REALTIME_URL=${realtimeUrl} NODE_ENV=production SM_ENROLLMENT_TOKEN=${token} ${serviceClause}${runtimeClause}/usr/local/bin/agent`;
+}
+
+const installTab = ref<InstallTab>("linux");
+const yamlCopyMessage = ref<string | null>(null);
+const tokens = ref<TokenInfo[]>([]);
+const services = ref<MonitoredService[]>([]);
+const selectedPreset = ref<EnrollmentTokenPreset>("24h");
+const expiresAtInput = ref<string>(toPresetExpiration("24h"));
+const selectedServiceId = ref<string>("");
+const latestServiceId = ref<string>("");
+const selectedRuntime = ref<AgentRuntime>("docker");
+const latestRuntime = ref<AgentRuntime>("docker");
+const isGeneratingToken = ref(false);
+const deletingTokenId = ref<string | null>(null);
+const deactivatingTokenId = ref<string | null>(null);
+const tokenError = ref<string | null>(null);
+const latestToken = ref<string | null>(null);
+const copyMessage = ref<string | null>(null);
+const commandCopyMessage = ref<string | null>(null);
+// We render only ACTIVE tokens by default. A long-lived tenant can have
+// thousands of expired/used tokens; rendering them all blocks the main
+// thread. The user can opt in via the "Show inactive" button.
+const includeInactive = ref(false);
+const loadingInactive = ref(false);
+
+async function loadTokens() {
+  try {
+    const r = await api.listEnrollmentTokens({ includeInactive: includeInactive.value });
+    tokens.value = r.tokens;
+  } catch {
+    /* ignore */
+  }
+}
+
+async function toggleInactive() {
+  loadingInactive.value = true;
+  includeInactive.value = !includeInactive.value;
+  try {
+    await loadTokens();
+  } finally {
+    loadingInactive.value = false;
+  }
+}
+
+onMounted(async () => {
+  await loadTokens();
+  try {
+    const r = await api.listServices();
+    services.value = r.services;
+  } catch {
+    /* ignore */
+  }
+});
+
+function onPresetChange(e: Event) {
+  const preset = (e.target as HTMLSelectElement).value as EnrollmentTokenPreset;
+  selectedPreset.value = preset;
+  expiresAtInput.value = toPresetExpiration(preset);
+}
+
+async function handleGenerateEnrollmentToken() {
+  tokenError.value = null;
+  latestToken.value = null;
+  copyMessage.value = null;
+  commandCopyMessage.value = null;
+
+  const expiration = new Date(expiresAtInput.value);
+  if (!expiresAtInput.value || Number.isNaN(expiration.getTime())) {
+    tokenError.value = "Choose a valid expiration date and time.";
+    return;
+  }
+  const ttlSeconds = Math.floor((expiration.getTime() - Date.now()) / 1000);
+  if (ttlSeconds <= 0) {
+    tokenError.value = "Expiration must be in the future.";
+    return;
+  }
+  if (ttlSeconds > ENROLLMENT_MAX_TTL_SECONDS) {
+    tokenError.value = "Expiration cannot be more than 365 days from now.";
+    return;
+  }
+
+  isGeneratingToken.value = true;
+  try {
+    const created = await api.createEnrollmentToken({ ttlSeconds });
+    const { token, ...metadata } = created;
+    tokens.value = [metadata, ...tokens.value];
+    latestToken.value = token;
+    latestServiceId.value = selectedServiceId.value;
+    latestRuntime.value = selectedRuntime.value;
+  } catch (e) {
+    tokenError.value = (e as Error).message;
+  } finally {
+    isGeneratingToken.value = false;
+  }
+}
+
+async function handleCopyToken() {
+  if (!latestToken.value) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(latestToken.value);
+    copyMessage.value = "Copied token to clipboard.";
+  } catch {
+    copyMessage.value = "Unable to copy token automatically.";
+  }
+}
+
+async function handleCopyStartCommand() {
+  if (!latestToken.value) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(
+      buildAgentStartCommand(latestToken.value, latestServiceId.value, latestRuntime.value)
+    );
+    commandCopyMessage.value = "Copied command to clipboard.";
+  } catch {
+    commandCopyMessage.value = "Unable to copy command automatically.";
+  }
+}
+
+async function handleCopyKubernetesYaml() {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(buildKaiadAgentManifest({ serviceId: selectedServiceId.value }));
+    yamlCopyMessage.value = "Copied YAML to clipboard.";
+  } catch {
+    yamlCopyMessage.value = "Unable to copy YAML automatically.";
+  }
+}
+
+function enrollmentTokenStatus(t: TokenInfo): string {
+  if (t.isActive) return "Active";
+  if (t.revokedAt && !t.usedAt) return "Revoked";
+  if (t.usedAt) return "Used";
+  return "Expired";
+}
+
+async function handleDeactivate(tokenId: string) {
+  const t = tokens.value.find((entry) => entry.id === tokenId);
+  if (!t || !t.isActive) return;
+  if (!window.confirm("Deactivate this enrollment token? It will no longer work for new agent connections.")) return;
+  tokenError.value = null;
+  deactivatingTokenId.value = tokenId;
+  try {
+    await api.deactivateEnrollmentToken(tokenId);
+    tokens.value = tokens.value.map((entry) =>
+      entry.id === tokenId ? { ...entry, isActive: false, revokedAt: new Date().toISOString() } : entry
+    );
+  } catch (e) {
+    tokenError.value = (e as Error).message;
+  } finally {
+    deactivatingTokenId.value = null;
+  }
+}
+
+async function handleDelete(tokenId: string) {
+  const t = tokens.value.find((entry) => entry.id === tokenId);
+  if (!t || t.isActive) return;
+  if (!window.confirm("Delete this inactive enrollment token?")) return;
+  tokenError.value = null;
+  deletingTokenId.value = tokenId;
+  try {
+    await api.deleteEnrollmentToken(tokenId);
+    tokens.value = tokens.value.filter((token) => token.id !== tokenId);
+  } catch (e) {
+    tokenError.value = (e as Error).message;
+  } finally {
+    deletingTokenId.value = null;
+  }
+}
+
+const sectionStyle: CSSProperties = {
+  background: "var(--color-surface)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "10px",
+  padding: "1rem",
+  marginTop: "1.5rem"
+};
+const h3Style: CSSProperties = {
+  margin: "0 0 0.75rem",
+  fontSize: "1rem",
+  display: "flex",
+  alignItems: "center",
+  gap: "0.4rem"
+};
+const mutedText: CSSProperties = { color: "var(--color-text-secondary)", margin: 0, fontSize: "0.85rem" };
+function tabBtnStyle(active: boolean): CSSProperties {
+  return {
+    background: active ? "var(--color-primary)" : "transparent",
+    color: active ? "var(--color-primary-foreground)" : "var(--color-text-primary)",
+    border: "1px solid var(--color-border)",
+    borderRadius: "6px",
+    padding: "0.35rem 0.7rem",
+    fontSize: "0.85rem",
+    cursor: "pointer"
+  };
+}
+</script>
+
+<template>
+  <div :style="sectionStyle">
+    <h3 :style="h3Style"><Key :size="16" /> Enrollment Tokens</h3>
+    <div role="tablist" aria-label="Install path" :style="{ display: 'flex', gap: '0.4rem', marginBottom: '0.75rem' }">
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="installTab === 'linux'"
+        :style="tabBtnStyle(installTab === 'linux')"
+        @click="installTab = 'linux'"
+      >Linux / VM</button>
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="installTab === 'kubernetes'"
+        :style="tabBtnStyle(installTab === 'kubernetes')"
+        @click="installTab = 'kubernetes'"
+      >Kubernetes (operator)</button>
+    </div>
+
+    <div v-if="installTab === 'kubernetes'" :style="{ marginBottom: '0.75rem' }">
+      <p :style="mutedText">
+        Install the operator once per cluster, then apply this <code>KaiadAgent</code> resource. The operator mints a
+        short-TTL enrollment token via the Kaiad API on your behalf — no need to copy a token here.
+      </p>
+      <pre
+        aria-label="KaiadAgent YAML"
+        :style="{
+          background: 'var(--color-surface-muted)',
+          border: '1px solid var(--color-border)',
+          borderRadius: '6px',
+          padding: '0.65rem',
+          fontSize: '0.78rem',
+          overflowX: 'auto',
+          margin: '0.5rem 0'
+        }"
+      >{{ buildKaiadAgentManifest({ serviceId: selectedServiceId }) }}</pre>
+      <div :style="{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }">
+        <button
+          type="button"
+          :style="{
+            background: 'var(--color-surface)',
+            color: 'var(--color-text-primary)',
+            border: '1px solid var(--color-border)',
+            borderRadius: '6px',
+            padding: '0.35rem 0.65rem',
+            fontSize: '0.8rem',
+            cursor: 'pointer'
+          }"
+          @click="handleCopyKubernetesYaml"
+        >Copy YAML</button>
+        <span
+          v-if="yamlCopyMessage"
+          :style="{
+            fontSize: '0.8rem',
+            color: yamlCopyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
+          }"
+        >{{ yamlCopyMessage }}</span>
+        <span :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)' }">
+          Pair the YAML with a service binding by selecting a service below.
+        </span>
+      </div>
+    </div>
+
+    <template v-if="installTab === 'linux'">
+      <div :style="{ display: 'flex', gap: '0.75rem', alignItems: 'end', flexWrap: 'wrap', marginBottom: '0.75rem' }">
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Preset</span>
+          <select
+            :value="selectedPreset"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)'
+            }"
+            @change="onPresetChange"
+          >
+            <option value="1h">1 hour</option>
+            <option value="24h">24 hours</option>
+            <option value="7d">7 days</option>
+            <option value="30d">30 days</option>
+          </select>
+        </label>
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Expires at</span>
+          <input
+            v-model="expiresAtInput"
+            type="datetime-local"
+            aria-label="Expires at"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)'
+            }"
+          />
+        </label>
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Service this agent runs</span>
+          <select
+            v-model="selectedServiceId"
+            aria-label="Service this agent runs"
+            :disabled="services.length === 0"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              minWidth: '220px'
+            }"
+          >
+            <option value="">{{ services.length === 0 ? "No services configured" : "Unbound (no service)" }}</option>
+            <option v-for="svc in services" :key="svc.id" :value="svc.id">
+              {{ svc.name }} ({{ svc.id }})
+            </option>
+          </select>
+        </label>
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Runtime</span>
+          <select
+            v-model="selectedRuntime"
+            aria-label="Agent runtime"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              minWidth: '160px'
+            }"
+          >
+            <option v-for="r in RUNTIME_OPTIONS" :key="r" :value="r">{{ RUNTIME_LABELS[r] }}</option>
+          </select>
+        </label>
+        <button
+          :disabled="isGeneratingToken"
+          :style="{
+            background: 'var(--color-primary)',
+            color: 'var(--color-primary-foreground)',
+            border: 'none',
+            borderRadius: '6px',
+            padding: '0.45rem 0.8rem',
+            fontSize: '0.85rem',
+            cursor: isGeneratingToken ? 'not-allowed' : 'pointer',
+            opacity: isGeneratingToken ? 0.75 : 1
+          }"
+          @click="handleGenerateEnrollmentToken"
+        >{{ isGeneratingToken ? "Generating..." : "Generate token" }}</button>
+      </div>
+
+      <p
+        v-if="tokenError"
+        :style="{ color: 'var(--color-danger)', fontSize: '0.85rem', margin: '0 0 0.75rem' }"
+      >{{ tokenError }}</p>
+
+      <div
+        v-if="latestToken"
+        :style="{
+          marginBottom: '0.75rem',
+          background: 'var(--color-surface-muted)',
+          border: '1px solid var(--color-border)',
+          borderRadius: '6px',
+          padding: '0.65rem'
+        }"
+      >
+        <div :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginBottom: '0.35rem' }">
+          New enrollment token (copy now - shown only once):
+        </div>
+        <code :style="{ display: 'block', fontSize: '0.8rem', wordBreak: 'break-all' }">{{ latestToken }}</code>
+        <div :style="{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }">
+          <button
+            type="button"
+            :style="{
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.65rem',
+              fontSize: '0.8rem',
+              cursor: 'pointer'
+            }"
+            @click="handleCopyToken"
+          >Copy token</button>
+          <span
+            v-if="copyMessage"
+            :style="{
+              fontSize: '0.8rem',
+              color: copyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
+            }"
+          >{{ copyMessage }}</span>
+        </div>
+        <div :style="{ marginTop: '0.65rem' }">
+          <div :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginBottom: '0.35rem' }">
+            Start command{{ latestServiceId ? ` (bound to ${latestServiceId})` : "" }} —
+            {{ RUNTIME_LABELS[latestRuntime] }}:
+          </div>
+          <code :style="{ display: 'block', fontSize: '0.8rem', wordBreak: 'break-all' }">
+            {{ buildAgentStartCommand(latestToken, latestServiceId, latestRuntime) }}
+          </code>
+          <div :style="{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }">
+            <button
+              type="button"
+              :style="{
+                background: 'var(--color-surface)',
+                color: 'var(--color-text-primary)',
+                border: '1px solid var(--color-border)',
+                borderRadius: '6px',
+                padding: '0.35rem 0.65rem',
+                fontSize: '0.8rem',
+                cursor: 'pointer'
+              }"
+              @click="handleCopyStartCommand"
+            >Copy start command</button>
+            <span
+              v-if="commandCopyMessage"
+              :style="{
+                fontSize: '0.8rem',
+                color: commandCopyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
+              }"
+            >{{ commandCopyMessage }}</span>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <div :style="{ display: 'flex', alignItems: 'center', gap: '0.6rem', margin: '0 0 0.5rem' }">
+      <span :style="{ ...mutedText, fontSize: '0.78rem' }">
+        Showing {{ tokens.length }} {{ includeInactive ? "" : "active " }}token{{ tokens.length === 1 ? "" : "s" }}{{
+          includeInactive ? " (most recent first, capped at 500)" : ""
+        }}
+      </span>
+      <button
+        type="button"
+        :disabled="loadingInactive"
+        :style="{
+          background: 'var(--color-surface-muted)',
+          color: 'var(--color-text-primary)',
+          border: '1px solid var(--color-border)',
+          borderRadius: '6px',
+          padding: '0.25rem 0.55rem',
+          fontSize: '0.75rem',
+          cursor: loadingInactive ? 'wait' : 'pointer',
+          opacity: loadingInactive ? 0.7 : 1
+        }"
+        @click="toggleInactive"
+      >
+        {{ loadingInactive ? "Loading…" : includeInactive ? "Hide inactive" : "Show inactive" }}
+      </button>
+    </div>
+
+    <p v-if="tokens.length === 0" :style="mutedText">No enrollment tokens found.</p>
+
+    <table v-else :style="{ width: '100%', borderCollapse: 'collapse' }">
+      <thead>
+        <tr>
+          <th
+            v-for="h in ['ID', 'Status', 'Expires', 'Created By', 'Used', 'Actions']"
+            :key="h"
+            :style="{
+              textAlign: 'left',
+              padding: '0.4rem',
+              borderBottom: '1px solid var(--color-border)',
+              color: 'var(--color-text-secondary)',
+              fontSize: '0.8rem'
+            }"
+          >{{ h }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="t in tokens" :key="t.id">
+          <td :style="{ padding: '0.4rem', fontSize: '0.8rem', fontFamily: 'monospace' }">
+            {{ t.id.slice(0, 12) }}...
+          </td>
+          <td :style="{ padding: '0.4rem', fontSize: '0.8rem' }">{{ enrollmentTokenStatus(t) }}</td>
+          <td :style="{ padding: '0.4rem', fontSize: '0.8rem' }">{{ new Date(t.expiresAt).toLocaleString() }}</td>
+          <td :style="{ padding: '0.4rem', fontSize: '0.8rem' }">{{ t.createdBy }}</td>
+          <td :style="{ padding: '0.4rem', fontSize: '0.8rem' }">{{ t.usedAt ? "Yes" : "No" }}</td>
+          <td :style="{ padding: '0.4rem', fontSize: '0.8rem' }">
+            <div :style="{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }">
+              <button
+                type="button"
+                :aria-label="`Deactivate token ${t.id}`"
+                :disabled="deactivatingTokenId === t.id || !t.isActive"
+                :style="{
+                  background: 'var(--color-surface-muted)',
+                  color: 'var(--color-text-primary)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: '6px',
+                  padding: '0.3rem 0.55rem',
+                  fontSize: '0.75rem',
+                  cursor: deactivatingTokenId === t.id || !t.isActive ? 'not-allowed' : 'pointer',
+                  opacity: deactivatingTokenId === t.id || !t.isActive ? 0.7 : 1
+                }"
+                @click="handleDeactivate(t.id)"
+              >{{ deactivatingTokenId === t.id ? "Deactivating..." : "Deactivate" }}</button>
+              <button
+                type="button"
+                :aria-label="`Delete token ${t.id}`"
+                :disabled="deletingTokenId === t.id || t.isActive"
+                :style="{
+                  background: 'var(--color-danger-bg)',
+                  color: 'var(--color-danger)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: '6px',
+                  padding: '0.3rem 0.55rem',
+                  fontSize: '0.75rem',
+                  cursor: deletingTokenId === t.id || t.isActive ? 'not-allowed' : 'pointer',
+                  opacity: deletingTokenId === t.id || t.isActive ? 0.7 : 1
+                }"
+                @click="handleDelete(t.id)"
+              >{{ deletingTokenId === t.id ? "Deleting..." : "Delete" }}</button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</template>

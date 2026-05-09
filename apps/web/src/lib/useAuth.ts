@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { computed, inject, provide, type ComputedRef, type InjectionKey, type Ref } from "vue";
 
 export type AuthMembership = {
   tenantId: string;
@@ -24,11 +24,7 @@ export type AuthState = {
 
 const EMPTY: AuthState = { user: null, role: null, isAdmin: false, isOperator: false, isViewer: false };
 
-export const AuthContext = createContext<AuthState>(EMPTY);
-
-export function useAuth(): AuthState {
-  return useContext(AuthContext);
-}
+export const AuthKey: InjectionKey<Ref<AuthUser | null>> = Symbol("AuthUser");
 
 export function buildAuthState(user: AuthUser | null): AuthState {
   if (!user) return EMPTY;
@@ -40,4 +36,13 @@ export function buildAuthState(user: AuthUser | null): AuthState {
     isOperator: role === "operator",
     isViewer: role === "viewer",
   };
+}
+
+export function provideAuth(userRef: Ref<AuthUser | null>): void {
+  provide(AuthKey, userRef);
+}
+
+export function useAuth(): ComputedRef<AuthState> {
+  const userRef = inject(AuthKey);
+  return computed(() => buildAuthState(userRef ? userRef.value : null));
 }

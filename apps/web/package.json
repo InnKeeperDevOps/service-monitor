@@ -6,24 +6,23 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "typecheck": "vue-tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@sm/contracts": "workspace:*",
-    "lucide-react": "^0.503.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "lucide-vue-next": "^0.503.0",
+    "vue": "^3.5.13"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
-    "@testing-library/react": "^16.2.0",
-    "@types/react": "^19.1.1",
-    "@types/react-dom": "^19.1.2",
-    "@vitejs/plugin-react": "^4.7.0",
+    "@vitejs/plugin-vue": "^6.0.6",
     "@vitest/coverage-v8": "^3.1.1",
+    "@vue/test-utils": "^2.4.6",
+    "@vue/tsconfig": "^0.7.0",
     "jsdom": "^26.0.0",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vue-tsc": "^2.2.0"
   }
 }
