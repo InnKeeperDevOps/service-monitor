@@ -22,6 +22,15 @@ type EnrollmentStore = {
   delete(tenantId: string, tokenId: string): Promise<boolean>;
   deactivate(tenantId: string, tokenId: string): Promise<DeactivateEnrollmentTokenResult>;
   consume(plaintext: string): Promise<{ tenantId: string; tokenId: string } | null>;
+  /**
+   * Look up a token without marking it used. Same accept criteria as
+   * consume (not revoked, not expired) BUT a previously-consumed token
+   * still resolves — required for the registry token-auth path, since
+   * image pulls happen repeatedly during a Pod's lifetime and the same
+   * token has already been consumed by the agent's first-connect on the
+   * /realtime endpoint.
+   */
+  peek(plaintext: string): Promise<{ tenantId: string; tokenId: string } | null>;
   resetForTests?(): void | Promise<void>;
 };
 
@@ -117,6 +126,22 @@ function createInMemoryEnrollmentStore(): EnrollmentStore {
             if (row.usedAt === null) {
               row.usedAt = now;
             }
+            return { tenantId: row.tenantId, tokenId: row.id };
+          }
+        }
+      }
+      return null;
+    },
+    async peek(plaintext) {
+      const hash = hashToken(plaintext);
+      const now = new Date();
+      for (const rows of tokensByTenant.values()) {
+        for (const row of rows) {
+          if (
+            row.tokenHash === hash &&
+            row.revokedAt === null &&
+            row.expiresAt > now
+          ) {
             return { tenantId: row.tenantId, tokenId: row.id };
           }
         }
@@ -230,6 +255,22 @@ async function createPostgresEnrollmentStore(): Promise<EnrollmentStore | null> 
           tenantId: String(result.rows[0].tenant_id),
           tokenId: String(result.rows[0].id)
         };
+      },
+      async peek(plaintext) {
+        const result = await pool.query(
+          `select tenant_id, id
+             from agent_enrollment_tokens
+            where token_hash = $1
+              and revoked_at is null
+              and expires_at > now()
+            limit 1`,
+          [hashToken(plaintext)]
+        );
+        if (result.rows.length === 0) return null;
+        return {
+          tenantId: String(result.rows[0].tenant_id),
+          tokenId: String(result.rows[0].id)
+        };
       }
     };
   } catch (err) {
@@ -289,6 +330,12 @@ export async function deactivateEnrollmentTokenForTenant(
 export async function validateEnrollmentToken(plaintext: string): Promise<{ tenantId: string; tokenId: string } | null> {
   const store = await getEnrollmentStore();
   return store.consume(plaintext);
+}
+
+/** Validate without consuming — for repeated callers like the registry. */
+export async function peekEnrollmentToken(plaintext: string): Promise<{ tenantId: string; tokenId: string } | null> {
+  const store = await getEnrollmentStore();
+  return store.peek(plaintext);
 }
 
 /** Test helper: clear in-memory enrollment state */

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { bootstrapEnv, isSetupRequired } from "./bootstrapEnv.js";
+import { bootstrapEnv, getDataDir, isSetupRequired } from "./bootstrapEnv.js";
 import { setupRoutes, type SetupCompleteCallback } from "./setupRoutes.js";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
@@ -83,8 +83,17 @@ import {
   deactivateEnrollmentTokenForTenant,
   deleteEnrollmentTokenForTenant,
   listEnrollmentTokensForTenant,
+  peekEnrollmentToken,
   validateEnrollmentToken
 } from "./enrollmentStore.js";
+import {
+  ensureRegistryAuth,
+  filterAllowedActions,
+  parseScopes,
+  signRegistryToken,
+  type RegistryAccess,
+  type RegistryAuthConfig
+} from "./registryAuth.js";
 import { createMemoryAuthStore, seedDevUser } from "./memoryAuthStore.js";
 import { createPostgresAuthStore } from "./postgresAuthStore.js";
 import { readConfig, writeConfig, type KaiadConfig } from "./configPersistence.js";
@@ -436,6 +445,112 @@ export function buildServer(opts: BuildServerOptions = {}) {
   });
 
   app.register(setupRoutes, { onSetupComplete: opts.onSetupComplete });
+
+  // Registry token-auth endpoint. The built-in OCI registry is configured
+  // with `auth: token` and points at this realm; clients hit it with
+  // Basic auth and ?service=&scope=, and we hand back a JWT scoped to
+  // what they requested (or 401 if they have no business pulling).
+  //
+  // Auth model:
+  //   - kaiad session (owner/admin) → push + pull on any repo
+  //   - kaiad session (operator/viewer) or api credential → pull only
+  //   - enrollment token (peeked, not consumed) → pull only on `kaiad-agent`
+  //
+  // The dev-token shortcut counts as an owner session, so the local
+  // push helper script (scripts/push-agent.sh) keeps working with
+  // `docker login -u admin -p dev-token`.
+  const registryAuthConfig: RegistryAuthConfig = {
+    keyPath: process.env.REGISTRY_AUTH_KEY_PATH || `${getDataDir()}/registry-auth/key.pem`,
+    certPath: process.env.REGISTRY_AUTH_CERT_PATH || `${getDataDir()}/registry-auth/cert.pem`,
+    issuer: process.env.REGISTRY_AUTH_ISSUER || "kaiad",
+    service: process.env.REGISTRY_AUTH_SERVICE || "kaiad-registry"
+  };
+  // Generate the keypair eagerly so the registry can read cert.pem at startup.
+  ensureRegistryAuth(registryAuthConfig);
+
+  app.get("/registry/token", async (req, reply) => {
+    // Docker daemons frequently request the same realm with multiple
+    // ?scope= params (one per repo touched in the operation), and
+    // Fastify deserializes repeated keys as a string array. Normalize
+    // to a single space-joined string before passing to parseScopes.
+    const q = req.query as Record<string, string | string[] | undefined>;
+    const requestedService = (Array.isArray(q.service) ? q.service[0] : q.service) ?? "";
+    const rawScope = q.scope;
+    const scope = Array.isArray(rawScope)
+      ? rawScope.filter((s): s is string => typeof s === "string").join(" ")
+      : rawScope ?? "";
+
+    // Decode Basic auth — Docker daemons / kubelet / podman all use it.
+    const auth = req.headers.authorization ?? "";
+    let user = "";
+    let password = "";
+    if (auth.startsWith("Basic ")) {
+      try {
+        const decoded = Buffer.from(auth.slice("Basic ".length), "base64").toString("utf8");
+        const idx = decoded.indexOf(":");
+        if (idx >= 0) {
+          user = decoded.slice(0, idx);
+          password = decoded.slice(idx + 1);
+        }
+      } catch {
+        /* fall through to 401 */
+      }
+    }
+
+    if (!password) {
+      reply.header("WWW-Authenticate", 'Basic realm="kaiad-registry"');
+      return reply.status(401).send({ errors: [{ code: "UNAUTHORIZED", message: "Basic auth required" }] });
+    }
+
+    // Resolve credential. Try kaiad session first (admin-class push).
+    type Grant = { subject: string; canPush: boolean };
+    let grant: Grant | null = null;
+    const session = await resolveSession(authStore, `Bearer ${password}`);
+    if (session) {
+      const adminLike = session.role === "owner" || session.role === "admin";
+      grant = { subject: session.id, canPush: adminLike };
+    }
+    if (!grant) {
+      const enroll = await peekEnrollmentToken(password);
+      if (enroll) {
+        grant = { subject: `enrollment:${enroll.tokenId}`, canPush: false };
+      }
+    }
+    if (!grant) {
+      reply.header("WWW-Authenticate", 'Basic realm="kaiad-registry"');
+      return reply.status(401).send({ errors: [{ code: "UNAUTHORIZED", message: "Invalid credentials" }] });
+    }
+
+    // Translate the requested scope into what we'll grant.
+    const requested = parseScopes(scope);
+    const granted: RegistryAccess[] =
+      requested.length === 0
+        ? []
+        : filterAllowedActions(requested, (req) => {
+            // Only grant actions on `kaiad-agent` repository for now. Push
+            // requires an admin-class session.
+            if (req.type !== "repository") return [];
+            if (req.name !== "kaiad-agent") return [];
+            return req.actions.filter((action) => {
+              if (action === "pull") return true;
+              if (action === "push" || action === "*") return grant.canPush;
+              return false;
+            });
+          });
+
+    const audience = requestedService || registryAuthConfig.service;
+    const tokenInfo = signRegistryToken(
+      { ...registryAuthConfig, service: audience },
+      { subject: grant.subject, access: granted }
+    );
+
+    return {
+      token: tokenInfo.token,
+      access_token: tokenInfo.token,
+      expires_in: tokenInfo.expiresInSeconds,
+      issued_at: tokenInfo.issuedAt
+    };
+  });
 
   // WebSocket routes must live in an async child plugin (Fastify 5 + @fastify/websocket);
   // otherwise upgrades fail with HTTP 500 for both TCP and injectWS.

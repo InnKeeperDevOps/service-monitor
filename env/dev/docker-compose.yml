@@ -19,6 +19,10 @@ services:
       - VITE_API_BASE=http://panel.dev.kaiad.dev
     volumes:
       - ./data/kaiad:/data
+      # Registry-auth keypair shared rw with kaiad (writes on first boot
+      # if missing) and ro to the registry container (reads cert.pem
+      # for JWT verification).
+      - ./data/registry-auth:/data/registry-auth
     ports:
       - "8092:8092"
     healthcheck:
@@ -72,14 +76,25 @@ services:
   registry:
     image: registry:2
     user: "1000:1000"
+    depends_on:
+      kaiad:
+        condition: service_healthy
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
-      # Tell the registry the URL it answers to so v2 redirects (e.g. on
-      # blob upload) advertise the public host, not 127.0.0.1.
       REGISTRY_HTTP_ADDR: "0.0.0.0:5000"
       REGISTRY_HTTP_RELATIVEURLS: "true"
       REGISTRY_HTTP_HOST: "https://panel.dev.kaiad.dev"
+      # Token auth: every pull/push must present a JWT minted by the
+      # Kaiad API at /registry/token. The registry verifies the JWT
+      # signature against the cert in /auth/cert.pem (written by the
+      # kaiad container on first boot — see ../../apps/api/src/registryAuth.ts).
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: "https://panel.dev.kaiad.dev/registry/token"
+      REGISTRY_AUTH_TOKEN_SERVICE: "kaiad-registry"
+      REGISTRY_AUTH_TOKEN_ISSUER: "kaiad"
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /auth/cert.pem
     volumes:
       - ./data/registry-data:/var/lib/registry
+      - ./data/registry-auth:/auth:ro
     ports:
       - "5050:5000"
