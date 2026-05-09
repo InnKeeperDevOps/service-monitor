@@ -522,15 +522,19 @@ export function buildServer(opts: BuildServerOptions = {}) {
     }
 
     // Translate the requested scope into what we'll grant.
+    //   admin session         → pull + push on any repository
+    //   enrollment token      → pull-only on any repository (covers
+    //                           kaiad-agent AND any workload image
+    //                           the user pushed under this Kaiad)
+    // Catalog and other registry-wide ops aren't granted to either —
+    // browsing /v2/_catalog needs an explicit per-tenant scope we
+    // don't model yet.
     const requested = parseScopes(scope);
     const granted: RegistryAccess[] =
       requested.length === 0
         ? []
         : filterAllowedActions(requested, (req) => {
-            // Only grant actions on `kaiad-agent` repository for now. Push
-            // requires an admin-class session.
             if (req.type !== "repository") return [];
-            if (req.name !== "kaiad-agent") return [];
             return req.actions.filter((action) => {
               if (action === "pull") return true;
               if (action === "push" || action === "*") return grant.canPush;
