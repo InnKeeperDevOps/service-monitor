@@ -61,9 +61,22 @@ function runtimeEnvClause(runtime: AgentRuntime): string {
 // editable from the UI so two KaiadAgents can coexist in the same namespace
 // without sharing a Secret. The Secret name is derived from the agent name
 // (`<agent>-enrollment`) so each CR gets a per-agent Secret automatically.
+// The image defaults to Kaiad's own registry path so a fresh install pulls
+// the agent from the same host that serves the panel — no external registry
+// required.
 const DEFAULT_KUBE_AGENT_NAME = "edge-agent";
 const DEFAULT_KUBE_NAMESPACE = "kaiad-system";
 const KUBE_SECRET_KEY = "token";
+
+function defaultAgentImage(): string {
+  if (typeof window === "undefined") {
+    return "panel.example.com/kaiad-agent:latest";
+  }
+  // window.location.host already includes any non-standard port (e.g.
+  // localhost:3001 in dev). For HTTPS production this is `panel.dev.kaiad.dev`
+  // which routes /v2/ to the registry container via kaiad-proxy.
+  return `${window.location.host}/kaiad-agent:latest`;
+}
 
 function deriveSecretName(agentName: string): string {
   const base = agentName.trim() || DEFAULT_KUBE_AGENT_NAME;
@@ -74,12 +87,13 @@ function buildKaiadAgentManifest(opts: {
   serviceId?: string | null;
   agentName: string;
   namespace: string;
+  image: string;
 }): string {
   const realtimeUrl =
     typeof window === "undefined"
       ? "wss://your-kaiad.example.com/realtime"
       : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/realtime`;
-  const image = "ghcr.io/innkeeperdevops/kaiad-agent:latest";
+  const image = opts.image.trim() || defaultAgentImage();
   const serviceId = opts.serviceId?.trim();
   const agentName = opts.agentName.trim() || DEFAULT_KUBE_AGENT_NAME;
   const namespace = opts.namespace.trim() || DEFAULT_KUBE_NAMESPACE;
@@ -163,6 +177,7 @@ const commandCopyMessage = ref<string | null>(null);
 const kubectlCopyMessage = ref<string | null>(null);
 const kubeAgentName = ref<string>(DEFAULT_KUBE_AGENT_NAME);
 const kubeNamespace = ref<string>(DEFAULT_KUBE_NAMESPACE);
+const kubeImage = ref<string>(defaultAgentImage());
 // We render only ACTIVE tokens by default. A long-lived tenant can have
 // thousands of expired/used tokens; rendering them all blocks the main
 // thread. The user can opt in via the "Show inactive" button.
@@ -271,7 +286,8 @@ async function handleCopyKubernetesYaml() {
       buildKaiadAgentManifest({
         serviceId: selectedServiceId.value,
         agentName: kubeAgentName.value,
-        namespace: kubeNamespace.value
+        namespace: kubeNamespace.value,
+        image: kubeImage.value
       })
     );
     yamlCopyMessage.value = "Copied YAML to clipboard.";
@@ -536,6 +552,18 @@ const kubeCopyBtn: CSSProperties = {
             <code :style="kubeDerivedValue">{{ deriveSecretName(kubeAgentName) }}</code>
           </div>
         </div>
+        <label :style="{ ...kubeFieldLabel, marginTop: '0.65rem' }">
+          <span :style="kubeFieldHint">
+            Image
+            <span :style="{ color: 'var(--color-text-muted)' }">— defaults to this Kaiad's built-in registry</span>
+          </span>
+          <input
+            v-model="kubeImage"
+            aria-label="Agent image (kubernetes)"
+            :placeholder="defaultAgentImage()"
+            :style="{ ...kubeMonoInput, minWidth: '420px' }"
+          />
+        </label>
       </fieldset>
 
       <fieldset :style="kubeFieldset">
@@ -625,7 +653,7 @@ const kubeCopyBtn: CSSProperties = {
       <pre
         aria-label="KaiadAgent YAML"
         :style="kubeCommandBox"
-      >{{ buildKaiadAgentManifest({ serviceId: selectedServiceId, agentName: kubeAgentName, namespace: kubeNamespace }) }}</pre>
+      >{{ buildKaiadAgentManifest({ serviceId: selectedServiceId, agentName: kubeAgentName, namespace: kubeNamespace, image: kubeImage }) }}</pre>
       <div :style="kubeCopyRow">
         <button type="button" :style="kubeCopyBtn" @click="handleCopyKubernetesYaml">Copy YAML</button>
         <span
