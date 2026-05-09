@@ -364,6 +364,121 @@ function tabBtnStyle(active: boolean): CSSProperties {
     cursor: "pointer"
   };
 }
+
+// Shared styles for the kubernetes-tab quickstart form. Hoisted so the
+// template stays readable and 4 inputs share visual treatment.
+const kubeFieldset: CSSProperties = {
+  border: "1px solid var(--color-border)",
+  borderRadius: "8px",
+  padding: "0.5rem 0.85rem 0.85rem",
+  margin: "0 0 0.65rem"
+};
+const kubeLegend: CSSProperties = {
+  padding: "0 0.4rem",
+  fontSize: "0.75rem",
+  fontWeight: 600,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "var(--color-text-secondary)"
+};
+const kubeRow: CSSProperties = {
+  display: "flex",
+  gap: "0.75rem",
+  alignItems: "end",
+  flexWrap: "wrap"
+};
+const kubeFieldLabel: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.25rem",
+  fontSize: "0.8rem"
+};
+const kubeFieldHint: CSSProperties = { color: "var(--color-text-secondary)" };
+const kubeInput: CSSProperties = {
+  border: "1px solid var(--color-border)",
+  borderRadius: "6px",
+  padding: "0.35rem 0.45rem",
+  background: "var(--color-surface)",
+  color: "var(--color-text-primary)"
+};
+const kubeMonoInput: CSSProperties = {
+  ...kubeInput,
+  minWidth: "160px",
+  fontFamily: "ui-monospace, monospace",
+  fontSize: "0.8rem"
+};
+const kubeDerivedValue: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "0.35rem 0.55rem",
+  background: "var(--color-surface-muted)",
+  border: "1px dashed var(--color-border)",
+  borderRadius: "6px",
+  fontFamily: "ui-monospace, monospace",
+  fontSize: "0.8rem",
+  color: "var(--color-text-primary)",
+  minHeight: "2rem"
+};
+function kubePrimaryBtn(disabled: boolean): CSSProperties {
+  return {
+    background: "var(--color-primary)",
+    color: "var(--color-primary-foreground)",
+    border: "none",
+    borderRadius: "6px",
+    padding: "0.45rem 0.85rem",
+    fontSize: "0.85rem",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.75 : 1
+  };
+}
+const kubeStepHeader: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.5rem",
+  margin: "0.85rem 0 0.4rem",
+  fontSize: "0.85rem",
+  fontWeight: 600,
+  color: "var(--color-text-primary)"
+};
+const kubeStepBadge: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "20px",
+  height: "20px",
+  borderRadius: "50%",
+  background: "var(--color-primary)",
+  color: "var(--color-primary-foreground)",
+  fontSize: "0.72rem",
+  fontWeight: 700
+};
+const kubeCommandBox: CSSProperties = {
+  background: "var(--color-surface-muted)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "6px",
+  padding: "0.65rem",
+  fontFamily: "ui-monospace, monospace",
+  fontSize: "0.78rem",
+  overflowX: "auto",
+  whiteSpace: "pre",
+  margin: 0
+};
+const kubeCopyRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.5rem",
+  flexWrap: "wrap",
+  marginTop: "0.5rem"
+};
+const kubeCopyBtn: CSSProperties = {
+  background: "var(--color-surface)",
+  color: "var(--color-text-primary)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "6px",
+  padding: "0.35rem 0.65rem",
+  fontSize: "0.8rem",
+  cursor: "pointer"
+};
 </script>
 
 <template>
@@ -388,160 +503,108 @@ function tabBtnStyle(active: boolean): CSSProperties {
 
     <div v-if="installTab === 'kubernetes'" :style="{ marginBottom: '0.75rem' }">
       <p :style="mutedText">
-        Install the operator once per cluster, then for each agent: pick a name (one CR per agent in the
-        cluster), generate a one-shot enrollment token below, drop it into a
-        <code>{{ deriveSecretName(kubeAgentName) }}</code> Secret in <code>{{ kubeNamespace.trim() || DEFAULT_KUBE_NAMESPACE }}</code>,
-        and apply the <code>KaiadAgent</code> resource. Each agent gets its own Secret (named
-        <code>&lt;agent&gt;-enrollment</code>) so multiple agents in one namespace don't share tokens. The agent
-        consumes its token on first connect and persists its own credential — no per-reconcile minting.
+        Install the operator once per cluster, then for each agent: name it (one CR per agent),
+        generate a one-shot enrollment token, drop it into a <code>&lt;agent&gt;-enrollment</code> Secret,
+        and apply the <code>KaiadAgent</code> resource. Each agent gets its own Secret so multiple
+        agents in the same namespace don't share tokens. The agent consumes its token on first
+        connect and persists its own credential.
       </p>
 
-      <div :style="{ display: 'flex', gap: '0.75rem', alignItems: 'end', flexWrap: 'wrap', margin: '0.75rem 0' }">
-        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
-          <span :style="{ color: 'var(--color-text-secondary)' }">Agent name</span>
-          <input
-            v-model="kubeAgentName"
-            aria-label="Agent name (kubernetes)"
-            :placeholder="DEFAULT_KUBE_AGENT_NAME"
-            :style="{
-              border: '1px solid var(--color-border)',
-              borderRadius: '6px',
-              padding: '0.35rem 0.45rem',
-              background: 'var(--color-surface)',
-              color: 'var(--color-text-primary)',
-              minWidth: '160px',
-              fontFamily: 'ui-monospace, monospace',
-              fontSize: '0.8rem'
-            }"
-          />
-        </label>
-        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
-          <span :style="{ color: 'var(--color-text-secondary)' }">Namespace</span>
-          <input
-            v-model="kubeNamespace"
-            aria-label="Namespace (kubernetes)"
-            :placeholder="DEFAULT_KUBE_NAMESPACE"
-            :style="{
-              border: '1px solid var(--color-border)',
-              borderRadius: '6px',
-              padding: '0.35rem 0.45rem',
-              background: 'var(--color-surface)',
-              color: 'var(--color-text-primary)',
-              minWidth: '160px',
-              fontFamily: 'ui-monospace, monospace',
-              fontSize: '0.8rem'
-            }"
-          />
-        </label>
-        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
-          <span :style="{ color: 'var(--color-text-secondary)' }">Preset</span>
-          <select
-            :value="selectedPreset"
-            aria-label="Token preset (kubernetes)"
-            :style="{
-              border: '1px solid var(--color-border)',
-              borderRadius: '6px',
-              padding: '0.35rem 0.45rem',
-              background: 'var(--color-surface)',
-              color: 'var(--color-text-primary)'
-            }"
-            @change="onPresetChange"
-          >
-            <option value="1h">1 hour</option>
-            <option value="24h">24 hours</option>
-            <option value="7d">7 days</option>
-            <option value="30d">30 days</option>
-          </select>
-        </label>
-        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
-          <span :style="{ color: 'var(--color-text-secondary)' }">Expires at</span>
-          <input
-            v-model="expiresAtInput"
-            type="datetime-local"
-            aria-label="Expires at (kubernetes)"
-            :style="{
-              border: '1px solid var(--color-border)',
-              borderRadius: '6px',
-              padding: '0.35rem 0.45rem',
-              background: 'var(--color-surface)',
-              color: 'var(--color-text-primary)'
-            }"
-          />
-        </label>
-        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
-          <span :style="{ color: 'var(--color-text-secondary)' }">Service this agent runs</span>
-          <select
-            v-model="selectedServiceId"
-            aria-label="Service this agent runs (kubernetes)"
-            :disabled="services.length === 0"
-            :style="{
-              border: '1px solid var(--color-border)',
-              borderRadius: '6px',
-              padding: '0.35rem 0.45rem',
-              background: 'var(--color-surface)',
-              color: 'var(--color-text-primary)',
-              minWidth: '220px'
-            }"
-          >
-            <option value="">{{ services.length === 0 ? "No services configured" : "Unbound (no service)" }}</option>
-            <option v-for="svc in services" :key="svc.id" :value="svc.id">
-              {{ svc.name }} ({{ svc.id }})
-            </option>
-          </select>
-        </label>
-        <button
-          :disabled="isGeneratingToken"
-          :style="{
-            background: 'var(--color-primary)',
-            color: 'var(--color-primary-foreground)',
-            border: 'none',
-            borderRadius: '6px',
-            padding: '0.45rem 0.8rem',
-            fontSize: '0.85rem',
-            cursor: isGeneratingToken ? 'not-allowed' : 'pointer',
-            opacity: isGeneratingToken ? 0.75 : 1
-          }"
-          @click="handleGenerateEnrollmentToken"
-        >{{ isGeneratingToken ? "Generating..." : "Generate token" }}</button>
-      </div>
+      <fieldset :style="kubeFieldset">
+        <legend :style="kubeLegend">1 · Identity</legend>
+        <div :style="kubeRow">
+          <label :style="kubeFieldLabel">
+            <span :style="kubeFieldHint">Agent name</span>
+            <input
+              v-model="kubeAgentName"
+              aria-label="Agent name (kubernetes)"
+              :placeholder="DEFAULT_KUBE_AGENT_NAME"
+              :style="kubeMonoInput"
+            />
+          </label>
+          <label :style="kubeFieldLabel">
+            <span :style="kubeFieldHint">Namespace</span>
+            <input
+              v-model="kubeNamespace"
+              aria-label="Namespace (kubernetes)"
+              :placeholder="DEFAULT_KUBE_NAMESPACE"
+              :style="kubeMonoInput"
+            />
+          </label>
+          <div :style="kubeFieldLabel">
+            <span :style="kubeFieldHint">Will use Secret</span>
+            <code :style="kubeDerivedValue">{{ deriveSecretName(kubeAgentName) }}</code>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset :style="kubeFieldset">
+        <legend :style="kubeLegend">2 · Token</legend>
+        <div :style="kubeRow">
+          <label :style="kubeFieldLabel">
+            <span :style="kubeFieldHint">Preset</span>
+            <select
+              :value="selectedPreset"
+              aria-label="Token preset (kubernetes)"
+              :style="kubeInput"
+              @change="onPresetChange"
+            >
+              <option value="1h">1 hour</option>
+              <option value="24h">24 hours</option>
+              <option value="7d">7 days</option>
+              <option value="30d">30 days</option>
+            </select>
+          </label>
+          <label :style="kubeFieldLabel">
+            <span :style="kubeFieldHint">Expires at</span>
+            <input
+              v-model="expiresAtInput"
+              type="datetime-local"
+              aria-label="Expires at (kubernetes)"
+              :style="kubeInput"
+            />
+          </label>
+          <label :style="kubeFieldLabel">
+            <span :style="kubeFieldHint">Service this agent runs</span>
+            <select
+              v-model="selectedServiceId"
+              aria-label="Service this agent runs (kubernetes)"
+              :disabled="services.length === 0"
+              :style="{ ...kubeInput, minWidth: '220px' }"
+            >
+              <option value="">{{ services.length === 0 ? "No services configured" : "Unbound (no service)" }}</option>
+              <option v-for="svc in services" :key="svc.id" :value="svc.id">
+                {{ svc.name }} ({{ svc.id }})
+              </option>
+            </select>
+          </label>
+          <button
+            :disabled="isGeneratingToken"
+            :style="kubePrimaryBtn(isGeneratingToken)"
+            @click="handleGenerateEnrollmentToken"
+          >{{ isGeneratingToken ? "Generating…" : latestToken ? "Regenerate token" : "Generate token" }}</button>
+        </div>
+      </fieldset>
 
       <p
         v-if="tokenError"
-        :style="{ color: 'var(--color-danger)', fontSize: '0.85rem', margin: '0 0 0.75rem' }"
+        :style="{ color: 'var(--color-danger)', fontSize: '0.85rem', margin: '0.5rem 0 0' }"
       >{{ tokenError }}</p>
 
-      <div
-        v-if="latestToken"
-        :style="{
-          marginBottom: '0.75rem',
-          background: 'var(--color-surface-muted)',
-          border: '1px solid var(--color-border)',
-          borderRadius: '6px',
-          padding: '0.65rem'
-        }"
-      >
-        <div :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginBottom: '0.35rem' }">
-          1. Create the <code>{{ deriveSecretName(kubeAgentName) }}</code> Secret in
-          <code>{{ kubeNamespace.trim() || DEFAULT_KUBE_NAMESPACE }}</code>:
+      <div v-if="latestToken">
+        <div :style="kubeStepHeader">
+          <span :style="kubeStepBadge">3</span>
+          <span>Create the Secret in <code>{{ kubeNamespace.trim() || DEFAULT_KUBE_NAMESPACE }}</code></span>
+          <span :style="{ fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-secondary)' }">
+            — token is shown once
+          </span>
         </div>
-        <code
+        <pre
           aria-label="kubectl create secret command"
-          :style="{ display: 'block', fontSize: '0.8rem', wordBreak: 'break-all' }"
-        >{{ buildKubectlCreateSecretCommand({ token: latestToken, agentName: kubeAgentName, namespace: kubeNamespace }) }}</code>
-        <div :style="{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }">
-          <button
-            type="button"
-            :style="{
-              background: 'var(--color-surface)',
-              color: 'var(--color-text-primary)',
-              border: '1px solid var(--color-border)',
-              borderRadius: '6px',
-              padding: '0.35rem 0.65rem',
-              fontSize: '0.8rem',
-              cursor: 'pointer'
-            }"
-            @click="handleCopyKubectlCommand"
-          >Copy kubectl command</button>
+          :style="kubeCommandBox"
+        >{{ buildKubectlCreateSecretCommand({ token: latestToken, agentName: kubeAgentName, namespace: kubeNamespace }) }}</pre>
+        <div :style="kubeCopyRow">
+          <button type="button" :style="kubeCopyBtn" @click="handleCopyKubectlCommand">Copy kubectl command</button>
           <span
             v-if="kubectlCopyMessage"
             :style="{
@@ -549,41 +612,22 @@ function tabBtnStyle(active: boolean): CSSProperties {
               color: kubectlCopyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
             }"
           >{{ kubectlCopyMessage }}</span>
-          <span :style="{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }">
-            (token is shown once — copy it now)
-          </span>
         </div>
       </div>
 
-      <div :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginBottom: '0.35rem' }">
-        {{ latestToken ? "2. Apply the KaiadAgent resource:" : "Then apply the KaiadAgent resource:" }}
+      <div :style="kubeStepHeader">
+        <span :style="kubeStepBadge">{{ latestToken ? '4' : '3' }}</span>
+        <span>Apply the <code>KaiadAgent</code> resource</span>
+        <span v-if="!latestToken" :style="{ fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-secondary)' }">
+          — preview; refreshes as you edit Identity above
+        </span>
       </div>
       <pre
         aria-label="KaiadAgent YAML"
-        :style="{
-          background: 'var(--color-surface-muted)',
-          border: '1px solid var(--color-border)',
-          borderRadius: '6px',
-          padding: '0.65rem',
-          fontSize: '0.78rem',
-          overflowX: 'auto',
-          margin: '0.5rem 0'
-        }"
+        :style="kubeCommandBox"
       >{{ buildKaiadAgentManifest({ serviceId: selectedServiceId, agentName: kubeAgentName, namespace: kubeNamespace }) }}</pre>
-      <div :style="{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }">
-        <button
-          type="button"
-          :style="{
-            background: 'var(--color-surface)',
-            color: 'var(--color-text-primary)',
-            border: '1px solid var(--color-border)',
-            borderRadius: '6px',
-            padding: '0.35rem 0.65rem',
-            fontSize: '0.8rem',
-            cursor: 'pointer'
-          }"
-          @click="handleCopyKubernetesYaml"
-        >Copy YAML</button>
+      <div :style="kubeCopyRow">
+        <button type="button" :style="kubeCopyBtn" @click="handleCopyKubernetesYaml">Copy YAML</button>
         <span
           v-if="yamlCopyMessage"
           :style="{
