@@ -85,6 +85,14 @@ spec:
                   items:
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                imagePullSecrets:
+                  type: array
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
                 manages:
                   type: array
                   maxItems: 32

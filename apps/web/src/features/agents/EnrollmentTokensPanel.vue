@@ -83,6 +83,16 @@ function deriveSecretName(agentName: string): string {
   return `${base}-enrollment`;
 }
 
+function derivePullSecretName(agentName: string): string {
+  const base = agentName.trim() || DEFAULT_KUBE_AGENT_NAME;
+  return `${base}-pull`;
+}
+
+function defaultRegistryHost(): string {
+  if (typeof window === "undefined") return "panel.example.com";
+  return window.location.host;
+}
+
 function buildKaiadAgentManifest(opts: {
   serviceId?: string | null;
   agentName: string;
@@ -112,6 +122,8 @@ function buildKaiadAgentManifest(opts: {
     `      name: ${secretName}`,
     `      key: ${KUBE_SECRET_KEY}`,
     `  image: ${image}`,
+    "  imagePullSecrets:",
+    `    - name: ${derivePullSecretName(agentName)}`,
     ...(serviceId ? [`  serviceId: ${serviceId}`] : []),
     "  manages:",
     "    - apiGroups: [\"apps\"]",
@@ -146,6 +158,30 @@ function buildKubectlCreateSecretCommand(opts: {
   return `kubectl -n ${namespace} create secret generic ${secretName} --from-literal=${KUBE_SECRET_KEY}='${opts.token}'`;
 }
 
+// kubectl one-liner that creates the dockerconfigjson Secret kubelet
+// uses to authenticate against the kaiad-hosted registry. Same token
+// the agent consumes (the kaiad token-auth service grants `pull` to
+// any active enrollment token without consuming it). The Secret is
+// named per agent (`<agent>-pull`) and referenced via the CR's
+// spec.imagePullSecrets.
+function buildKubectlCreatePullSecretCommand(opts: {
+  token: string;
+  agentName: string;
+  namespace: string;
+  registryHost: string;
+}): string {
+  const agentName = opts.agentName.trim() || DEFAULT_KUBE_AGENT_NAME;
+  const namespace = opts.namespace.trim() || DEFAULT_KUBE_NAMESPACE;
+  const pullName = derivePullSecretName(agentName);
+  const host = opts.registryHost.trim() || defaultRegistryHost();
+  return (
+    `kubectl -n ${namespace} create secret docker-registry ${pullName} ` +
+    `--docker-server=${host} ` +
+    `--docker-username=kaiad-agent ` +
+    `--docker-password='${opts.token}'`
+  );
+}
+
 function buildAgentStartCommand(token: string, serviceId?: string | null, runtime: AgentRuntime = "docker"): string {
   const realtimeUrl =
     typeof window === "undefined"
@@ -175,6 +211,7 @@ const latestToken = ref<string | null>(null);
 const copyMessage = ref<string | null>(null);
 const commandCopyMessage = ref<string | null>(null);
 const kubectlCopyMessage = ref<string | null>(null);
+const pullSecretCopyMessage = ref<string | null>(null);
 const kubeAgentName = ref<string>(DEFAULT_KUBE_AGENT_NAME);
 const kubeNamespace = ref<string>(DEFAULT_KUBE_NAMESPACE);
 const kubeImage = ref<string>(defaultAgentImage());
@@ -310,6 +347,24 @@ async function handleCopyKubectlCommand() {
     kubectlCopyMessage.value = "Copied kubectl command to clipboard.";
   } catch {
     kubectlCopyMessage.value = "Unable to copy command automatically.";
+  }
+}
+
+async function handleCopyPullSecretCommand() {
+  if (!latestToken.value) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(
+      buildKubectlCreatePullSecretCommand({
+        token: latestToken.value,
+        agentName: kubeAgentName.value,
+        namespace: kubeNamespace.value,
+        registryHost: defaultRegistryHost()
+      })
+    );
+    pullSecretCopyMessage.value = "Copied kubectl command to clipboard.";
+  } catch {
+    pullSecretCopyMessage.value = "Unable to copy command automatically.";
   }
 }
 
@@ -622,9 +677,9 @@ const kubeCopyBtn: CSSProperties = {
       <div v-if="latestToken">
         <div :style="kubeStepHeader">
           <span :style="kubeStepBadge">3</span>
-          <span>Create the Secret in <code>{{ kubeNamespace.trim() || DEFAULT_KUBE_NAMESPACE }}</code></span>
+          <span>Create the enrollment Secret in <code>{{ kubeNamespace.trim() || DEFAULT_KUBE_NAMESPACE }}</code></span>
           <span :style="{ fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-secondary)' }">
-            — token is shown once
+            — agent reads this on first connect; token is shown once
           </span>
         </div>
         <pre
@@ -641,10 +696,29 @@ const kubeCopyBtn: CSSProperties = {
             }"
           >{{ kubectlCopyMessage }}</span>
         </div>
+
+        <div :style="kubeStepHeader">
+          <span :style="kubeStepBadge">4</span>
+          <span>Create the image-pull Secret (kubelet uses it to authenticate against this Kaiad's registry)</span>
+        </div>
+        <pre
+          aria-label="kubectl create pull secret command"
+          :style="kubeCommandBox"
+        >{{ buildKubectlCreatePullSecretCommand({ token: latestToken, agentName: kubeAgentName, namespace: kubeNamespace, registryHost: defaultRegistryHost() }) }}</pre>
+        <div :style="kubeCopyRow">
+          <button type="button" :style="kubeCopyBtn" @click="handleCopyPullSecretCommand">Copy kubectl command</button>
+          <span
+            v-if="pullSecretCopyMessage"
+            :style="{
+              fontSize: '0.8rem',
+              color: pullSecretCopyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
+            }"
+          >{{ pullSecretCopyMessage }}</span>
+        </div>
       </div>
 
       <div :style="kubeStepHeader">
-        <span :style="kubeStepBadge">{{ latestToken ? '4' : '3' }}</span>
+        <span :style="kubeStepBadge">{{ latestToken ? '5' : '3' }}</span>
         <span>Apply the <code>KaiadAgent</code> resource</span>
         <span v-if="!latestToken" :style="{ fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-secondary)' }">
           — preview; refreshes as you edit Identity above

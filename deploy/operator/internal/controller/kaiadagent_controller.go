@@ -341,6 +341,7 @@ func (r *KaiadAgentReconciler) applyDeployment(ctx context.Context, agent *kaiad
 		}
 		dep.Spec.Template.Spec.NodeSelector = agent.Spec.NodeSelector
 		dep.Spec.Template.Spec.Tolerations = agent.Spec.Tolerations
+		dep.Spec.Template.Spec.ImagePullSecrets = agent.Spec.ImagePullSecrets
 		if agent.Spec.Resources != nil {
 			dep.Spec.Template.Spec.Containers[0].Resources = *agent.Spec.Resources
 		} else {

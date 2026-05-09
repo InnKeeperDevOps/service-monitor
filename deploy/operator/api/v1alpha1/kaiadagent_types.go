@@ -81,6 +81,12 @@ type KaiadAgentSpec struct {
 	Resources    *corev1.ResourceRequirements `json:"resources,omitempty"`
 	NodeSelector map[string]string            `json:"nodeSelector,omitempty"`
 	Tolerations  []corev1.Toleration          `json:"tolerations,omitempty"`
+	// ImagePullSecrets are referenced from the agent Pod's spec so kubelet
+	// can authenticate against a private registry (typically Kaiad's
+	// built-in token-auth registry). The panel emits a `<agent>-pull`
+	// dockerconfigjson Secret alongside the enrollment Secret; this
+	// field threads it onto the Pod.
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 	// +kubebuilder:validation:MaxItems=32
 	Manages []ManagesRule `json:"manages,omitempty"`
 }
@@ -209,6 +215,10 @@ func (in *KaiadAgentSpec) DeepCopyInto(out *KaiadAgentSpec) {
 		for i := range in.Tolerations {
 			in.Tolerations[i].DeepCopyInto(&out.Tolerations[i])
 		}
+	}
+	if in.ImagePullSecrets != nil {
+		out.ImagePullSecrets = make([]corev1.LocalObjectReference, len(in.ImagePullSecrets))
+		copy(out.ImagePullSecrets, in.ImagePullSecrets)
 	}
 	if in.Manages != nil {
 		out.Manages = make([]ManagesRule, len(in.Manages))
