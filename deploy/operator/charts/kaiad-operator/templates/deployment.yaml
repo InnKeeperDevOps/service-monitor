@@ -1,6 +1,6 @@
-{{- if not .Values.kaiad.apiBaseURL }}
-{{- fail "kaiad.apiBaseURL is required" }}
-{{- end }}
+{{- /* apiBaseURL + apiCredentialSecret are optional. When set, the operator
+       polls control-plane status. When omitted, Ready reflects pod readiness only. */ -}}
+{{- $statusPolling := and (.Values.kaiad.apiBaseURL) (or (.Values.kaiad.apiCredentialSecret.create) (.Values.kaiad.apiCredentialSecret.name)) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,6 +35,7 @@ spec:
             - --metrics-bind-address={{ .Values.metrics.bindAddress }}
             - --health-probe-bind-address={{ .Values.healthProbe.bindAddress }}
           env:
+            {{- if $statusPolling }}
             - name: KAIAD_API_BASE_URL
               value: {{ .Values.kaiad.apiBaseURL | quote }}
             - name: KAIAD_API_CREDENTIAL
@@ -42,6 +43,7 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.kaiad.apiCredentialSecret.name }}
                   key: token
+            {{- end }}
             - name: KAIAD_OPERATOR_NAMESPACE
               valueFrom:
                 fieldRef:

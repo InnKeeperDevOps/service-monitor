@@ -1,10 +1,12 @@
 // Package kaiad implements the operator's HTTP client for the Kaiad
 // control-plane API.
 //
-// The operator authenticates with a long-lived API credential (created via
-// POST /api/v1/admin/api-credentials) and uses it to mint short-TTL enrollment
-// tokens that the agent pod consumes on first connect, and to poll agent
-// status during reconciliation.
+// Used only for status polling: GET /api/v1/agents/:id, which lets the
+// reconciler set Ready=True once the platform has seen the agent online.
+// The client is optional — when no API base URL or credential is configured,
+// the controller is constructed with a nil client and Ready reflects pod
+// readiness only. Enrollment tokens are NOT minted by the operator anymore;
+// see deploy/operator/charts/kaiad-operator/README.md for the secretRef flow.
 //
 // Retry policy: 3 attempts with exponential backoff on 5xx and network errors.
 // 4xx is not retried; the caller surfaces it as a permanent failure.
@@ -21,14 +23,6 @@ import (
 	"strings"
 	"time"
 )
-
-// Token mirrors POST /api/v1/agents/enrollment-tokens response shape.
-type Token struct {
-	ID        string
-	Token     string
-	ExpiresAt string
-	AgentID   string // present once the platform has reserved a stable agent id
-}
 
 // AgentInfo mirrors GET /api/v1/agents/:id response shape (subset).
 type AgentInfo struct {
@@ -158,30 +152,6 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		attempt = errors.New("kaiad API: exhausted retries")
 	}
 	return attempt
-}
-
-type mintResponse struct {
-	ID        string `json:"id"`
-	Token     string `json:"token"`
-	ExpiresAt string `json:"expiresAt"`
-	AgentID   string `json:"agentId,omitempty"`
-}
-
-// MintEnrollmentToken calls POST /api/v1/agents/enrollment-tokens.
-func (c *Client) MintEnrollmentToken(ctx context.Context, ttlSeconds int) (Token, error) {
-	if ttlSeconds <= 0 {
-		return Token{}, errors.New("ttlSeconds must be positive")
-	}
-	var resp mintResponse
-	if err := c.do(ctx, http.MethodPost, "/api/v1/agents/enrollment-tokens", map[string]int{"ttlSeconds": ttlSeconds}, &resp); err != nil {
-		return Token{}, err
-	}
-	return Token{
-		ID:        resp.ID,
-		Token:     resp.Token,
-		ExpiresAt: resp.ExpiresAt,
-		AgentID:   resp.AgentID,
-	}, nil
 }
 
 type agentResponse struct {

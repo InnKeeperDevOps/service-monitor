@@ -4,8 +4,14 @@
 // resources into agent Deployments, ServiceAccounts, and scoped RBAC objects
 // (see deploy/operator/internal/controller). Configuration is read from env:
 //
-//	KAIAD_API_BASE_URL        Required. Base URL of the Kaiad API (e.g. https://panel.example.com).
-//	KAIAD_API_CREDENTIAL      Required. Operator bearer token (created via POST /api/v1/admin/api-credentials).
+//	KAIAD_API_BASE_URL        Optional. Base URL of the Kaiad API (e.g. https://panel.example.com).
+//	                          When set together with KAIAD_API_CREDENTIAL, the operator
+//	                          enriches the Ready condition with control-plane status
+//	                          (GET /api/v1/agents/:id). When unset, Ready reflects
+//	                          pod readiness only.
+//	KAIAD_API_CREDENTIAL      Optional. Bearer token for the status endpoint.
+//	                          Tenant-scoped — only useful for agents enrolled into
+//	                          the same tenant as the credential.
 //	KAIAD_OPERATOR_NAMESPACE  Optional. Defaults to the pod's downward-API namespace; used for leader election scope.
 //	METRICS_BIND_ADDRESS      Optional. Defaults to ":8080".
 //	HEALTH_PROBE_BIND_ADDRESS Optional. Defaults to ":8081".
@@ -55,10 +61,9 @@ func main() {
 
 	apiBase := os.Getenv("KAIAD_API_BASE_URL")
 	apiCred := os.Getenv("KAIAD_API_CREDENTIAL")
-	if apiBase == "" || apiCred == "" {
-		logger.Error(nil, "KAIAD_API_BASE_URL and KAIAD_API_CREDENTIAL are required")
-		os.Exit(1)
-	}
+	// Both must be present together to enable status polling. Either
+	// missing → run without the API client; Ready reflects pod readiness only.
+	statusPollEnabled := apiBase != "" && apiCred != ""
 
 	leaderElectionNS := envOr("KAIAD_OPERATOR_NAMESPACE", "")
 
@@ -75,7 +80,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	kaiadClient := kaiad.NewClient(apiBase, apiCred)
+	var kaiadClient *kaiad.Client
+	if statusPollEnabled {
+		kaiadClient = kaiad.NewClient(apiBase, apiCred)
+	}
 
 	if err := (&controller.KaiadAgentReconciler{
 		Client:      mgr.GetClient(),
@@ -95,7 +103,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("starting manager", "metrics", metricsAddr, "probes", probeAddr, "kaiadAPI", apiBase)
+	if statusPollEnabled {
+		logger.Info("starting manager", "metrics", metricsAddr, "probes", probeAddr, "kaiadAPI", apiBase, "statusPolling", true)
+	} else {
+		logger.Info("starting manager", "metrics", metricsAddr, "probes", probeAddr, "statusPolling", false)
+	}
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		logger.Error(err, "manager exited with error")
 		os.Exit(1)

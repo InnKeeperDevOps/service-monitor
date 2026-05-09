@@ -1,11 +1,20 @@
-# Sample KaiadAgent CR. Apply with:
-#   kubectl create namespace kaiad-system   # if it doesn't exist
+# Sample KaiadAgent CR.
+#
+# Setup:
+#   kubectl create namespace kaiad-system
+#
+#   # 1) Generate an enrollment token in the panel:
+#   #    Settings → Enrollment tokens → Generate token
+#   # 2) Create a Secret in the agent's namespace holding that token:
+#   kubectl -n kaiad-system create secret generic kaiad-enrollment \
+#     --from-literal=token='<paste-token-here>'
+#
 #   kubectl apply -f deploy/operator/config/samples/v1alpha1_kaiadagent.yaml
 #
-# Pre-requisite: a Secret in the same namespace named `kaiad-enrollment` with
-# a `token` key holding a valid bootstrap enrollment token, OR set
-# enrollment.autoMint=true and configure the operator with an admin API
-# credential (see deploy/operator/charts/kaiad-operator/values.yaml).
+# The token's tenant binding is implicit (whichever panel session minted
+# it); the CR itself never names a tenant. Auto-mint was removed — every
+# reconcile would otherwise mint fresh and produce thousands of expired
+# tokens.
 apiVersion: kaiad.dev/v1alpha1
 kind: KaiadAgent
 metadata:

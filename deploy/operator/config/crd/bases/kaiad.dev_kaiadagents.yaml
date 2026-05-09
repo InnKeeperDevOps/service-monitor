@@ -57,6 +57,7 @@ spec:
                       pattern: "^wss?://.+"
                 enrollment:
                   type: object
+                  required: [secretRef]
                   properties:
                     secretRef:
                       type: object
@@ -67,9 +68,6 @@ spec:
                         key:
                           type: string
                           default: token
-                    autoMint:
-                      type: boolean
-                      default: false
                 serviceId:
                   type: string
                 image:

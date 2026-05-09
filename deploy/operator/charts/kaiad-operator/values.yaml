@@ -15,18 +15,25 @@ serviceAccount:
   create: true
   name: ""
 
-# Kaiad control-plane integration. Required.
+# Kaiad control-plane integration. ALL OPTIONAL.
+#
+# When apiBaseURL + an apiCredentialSecret are both configured, the operator
+# polls the panel's GET /api/v1/agents/:id and sets Ready=True only after
+# the control plane has seen the agent online. With either left empty,
+# Ready reflects pod readiness only — sufficient for most installs.
+#
+# Enrollment tokens are NOT auto-minted. Generate one in the panel UI
+# (Settings → Enrollment tokens → Generate token) and create a Secret in
+# the agent's namespace before applying the KaiadAgent CR. See the chart
+# README for an example.
 kaiad:
-  # API base URL (no trailing slash) — e.g. https://panel.example.com
   apiBaseURL: ""
-  # The bearer token must be created via:
-  #   POST /api/v1/admin/api-credentials  with scopes: ["enrollment-tokens.create", "agents.read"]
   apiCredentialSecret:
     # If true, the chart creates a Secret with the token from `value` below.
     # If false, supply `name` pointing at a pre-provisioned Secret with key
-    # `token` holding the bearer.
+    # `token` holding the bearer (only `agents.read` scope is needed).
     create: false
-    name: kaiad-operator-credentials
+    name: ""
     # Only used when `create: true`.
     value: ""
 

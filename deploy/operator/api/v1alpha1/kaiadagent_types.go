@@ -29,13 +29,20 @@ type SecretKeyRef struct {
 
 // EnrollmentSpec describes how the agent obtains its bootstrap enrollment token.
 //
-// Exactly one of SecretRef or AutoMint must be true. If AutoMint is set, the
-// operator calls the Kaiad API (see internal/kaiad) to mint a token on first
-// reconcile and writes it into a Secret it owns. Otherwise SecretRef must point
-// at a Secret the cluster admin pre-provisioned.
+// SecretRef is required and must point at a Secret the cluster admin
+// pre-provisioned with a token minted via the Kaiad panel (Settings →
+// Enrollment tokens → Generate). The token's tenant binding is implicit
+// (whichever tenant the panel session is in when generating); the CR itself
+// never names a tenant.
+//
+// (Earlier revisions supported `autoMint: true` so the operator minted a
+// fresh token on every reconcile via an API credential. That tied the
+// operator to a single tenant via its credential — a tenant the CR could
+// not name — and produced thousands of expired tokens because every
+// reconcile minted anew. Removed in favor of the explicit secretRef path.)
 type EnrollmentSpec struct {
-	SecretRef *SecretKeyRef `json:"secretRef,omitempty"`
-	AutoMint  bool          `json:"autoMint,omitempty"`
+	// +kubebuilder:validation:Required
+	SecretRef *SecretKeyRef `json:"secretRef"`
 }
 
 // ManagesRule is one RBAC rule the agent's ServiceAccount will be granted.
