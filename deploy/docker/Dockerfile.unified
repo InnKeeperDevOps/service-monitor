@@ -32,11 +32,58 @@ COPY . .
 # Build everything (turbo respects dependency order: packages → web → api)
 RUN pnpm run build
 
+# ── Build stage: kaiad-agent Go binary ─────────────────────
+# Built here (not in apps/agent/Dockerfile) so the resulting OCI tarball
+# is baked into the runtime image and pushed to the local registry on
+# first boot — operators don't have to push the agent image themselves.
+FROM golang:1.22-alpine AS agent-build
+WORKDIR /src
+COPY apps/agent/go.mod apps/agent/go.sum ./
+RUN go mod download
+COPY apps/agent .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/agent ./cmd/agent
+
+# ── Build stage: crane CLI ─────────────────────────────────
+# crane (from go-containerregistry) is the smallest tool that can
+# (a) synthesize a docker image from a base + a layer tarball, and
+# (b) push a saved image to an OCI registry. ~25 MB statically-linked
+# Go binary; we use it both at build time (to assemble the agent
+# bundle) and at runtime (to push it on first boot).
+FROM alpine:3.20 AS crane-bin
+RUN apk add --no-cache curl tar
+RUN curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.20.2/go-containerregistry_Linux_x86_64.tar.gz \
+    | tar -xz -C /usr/local/bin crane
+
+# ── Build stage: assemble kaiad-agent OCI tarball ──────────
+# Output /opt/kaiad-agent.tar is a `crane push`-able archive of an
+# alpine:3.20 image with /usr/local/bin/agent layered in and the
+# entrypoint set to /usr/local/bin/agent. Mirrors what apps/agent/Dockerfile
+# would produce, but lives inside the kaiad image so first boot needs
+# no external push step.
+FROM crane-bin AS agent-bundle
+COPY --from=agent-build /out/agent /tmp/rootfs/usr/local/bin/agent
+RUN cd /tmp/rootfs && tar -cf /tmp/agent-layer.tar usr
+# `crane append` produces a fully-formed image but doesn't let us set
+# the entrypoint inline; the operator's container spec sets
+# `command: [/usr/local/bin/agent]` explicitly so the image just needs
+# the binary on PATH. Skipping `crane mutate` keeps this stage a single
+# step and avoids its quirky tarball-vs-image-reference flag handling.
+RUN crane append \
+      --base alpine:3.20 \
+      --new_layer /tmp/agent-layer.tar \
+      --new_tag kaiad-agent:bundle \
+      --output /opt/kaiad-agent.tar
+
 # ── Runtime stage ──────────────────────────────────────────
 FROM node:22-slim AS runtime
 WORKDIR /app
 
 RUN corepack enable
+# wget is in busybox-tools but base node:22-slim only has curl-style
+# /usr/bin/wget if installed; the push-on-boot script uses wget for
+# /ready polling and the JWT exchange.
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+ && rm -rf /var/lib/apt/lists/*
 
 # Copy built artifacts and node_modules
 COPY --from=build /build/package.json /build/pnpm-lock.yaml /build/pnpm-workspace.yaml /build/turbo.json ./
@@ -49,12 +96,25 @@ COPY --from=build /build/apps/worker/package.json ./apps/worker/
 COPY --from=build /build/apps/worker/node_modules ./apps/worker/node_modules
 COPY --from=build /build/packages ./packages
 
+# Bake the agent OCI tarball + crane + the push-on-boot shim.
+COPY --from=agent-bundle /opt/kaiad-agent.tar /opt/kaiad-agent.tar
+COPY --from=crane-bin /usr/local/bin/crane /usr/local/bin/crane
+COPY deploy/docker/push-agent-on-boot.sh /usr/local/bin/push-agent-on-boot.sh
+RUN chmod +x /usr/local/bin/push-agent-on-boot.sh
+
 ENV NODE_ENV=production
 ENV PORT=3001
 ENV SM_EMBED_WORKER=1
 ENV KAIAD_DATA_DIR=/data
+# Defaults the push-on-boot script reads. Override per environment.
+ENV KAIAD_AGENT_BUNDLE=/opt/kaiad-agent.tar
+ENV KAIAD_AGENT_VERSION=0.1.0
+ENV KAIAD_REGISTRY_INTERNAL=registry:5000
 
 VOLUME ["/data"]
 EXPOSE 3001
 
-CMD ["node", "apps/api/dist/server.js"]
+# Background the push so a slow / failing image push never blocks the
+# API from coming up. nohup detaches it from the shell so kaiad doesn't
+# leave a zombie when the script exits.
+CMD ["/bin/sh", "-c", "nohup /usr/local/bin/push-agent-on-boot.sh > /tmp/push-agent.log 2>&1 & exec node apps/api/dist/server.js"]

@@ -1,0 +1,101 @@
+#!/bin/sh
+# push-agent-on-boot.sh — push the baked-in kaiad-agent OCI tarball
+# into the local registry on first boot, if the requested tag isn't
+# already there. Runs in the background from kaiad's entrypoint.
+#
+# Inputs (env, with sensible defaults set in Dockerfile.unified):
+#   KAIAD_AGENT_BUNDLE         path to the OCI tarball baked into the image
+#   KAIAD_AGENT_VERSION        tag to push (e.g. 0.1.0)
+#   KAIAD_REGISTRY_INTERNAL    docker hostname:port reachable from this
+#                              container — typically the compose service
+#                              name (registry:5000) so the request stays
+#                              on the docker network and doesn't have
+#                              to round-trip through openresty/nginx.
+#   PORT                       port kaiad listens on (3001 in the runtime
+#                              image; 8092 in dev compose)
+#
+# Skips silently if the tarball isn't present or kaiad isn't ready
+# within a generous window. Failures are logged to /tmp/push-agent.log
+# (see the Dockerfile entrypoint redirect) but do not affect the API.
+set -eu
+
+REGISTRY="${KAIAD_REGISTRY_INTERNAL:-registry:5000}"
+VERSION="${KAIAD_AGENT_VERSION:-0.1.0}"
+TARBALL="${KAIAD_AGENT_BUNDLE:-/opt/kaiad-agent.tar}"
+KAIAD_PORT="${PORT:-3001}"
+
+if [ ! -f "$TARBALL" ]; then
+  echo "[push-agent] no tarball at $TARBALL; nothing to push" >&2
+  exit 0
+fi
+
+# Wait for kaiad's own /ready endpoint so /registry/token works. The
+# script and the API live in the same container, so we wait on
+# 127.0.0.1, not the public host.
+i=0
+until wget -q --spider "http://127.0.0.1:${KAIAD_PORT}/ready"; do
+  i=$((i + 1))
+  if [ "$i" -gt 60 ]; then
+    echo "[push-agent] kaiad /ready never came up after 120s; giving up" >&2
+    exit 1
+  fi
+  sleep 2
+done
+echo "[push-agent] kaiad ready at :${KAIAD_PORT}"
+
+# Wait for the registry container too. `registry:2` returns 401 (Bearer
+# challenge) on /v2/ once it's listening — we just need a TCP-level
+# response, not auth. wget exits 8 on HTTP 4xx but 4 on connection
+# failure; treat anything that isn't a connection error as "up".
+i=0
+while :; do
+  if wget -qO /dev/null --server-response "http://${REGISTRY}/v2/" 2>&1 \
+     | grep -q "^  HTTP/"; then
+    break
+  fi
+  i=$((i + 1))
+  if [ "$i" -gt 60 ]; then
+    echo "[push-agent] registry at ${REGISTRY} never came up after 120s; giving up" >&2
+    exit 1
+  fi
+  sleep 2
+done
+echo "[push-agent] registry ready at ${REGISTRY}"
+
+# Get a push+pull JWT from our own /registry/token. The dev-token
+# shortcut is owner-class in non-prod (NODE_ENV != production OR
+# SM_ALLOW_DEV_TOKEN=1) so this works for the dev compose stack
+# without configuring a real admin credential.
+BASIC=$(printf 'admin:dev-token' | base64 | tr -d '\n')
+JWT=$(wget -qO- \
+        --header="Authorization: Basic ${BASIC}" \
+        "http://127.0.0.1:${KAIAD_PORT}/registry/token?service=kaiad-registry&scope=repository:kaiad-agent:push,pull" \
+      | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+if [ -z "${JWT:-}" ]; then
+  echo "[push-agent] failed to obtain push JWT (is dev-token enabled?); giving up" >&2
+  exit 1
+fi
+
+# Crane reads ~/.docker/config.json. The `registrytoken` form passes
+# the bearer through directly, skipping crane's own re-auth roundtrip.
+mkdir -p "${HOME:-/tmp}/.docker"
+cat > "${HOME:-/tmp}/.docker/config.json" <<JSON
+{
+  "auths": {
+    "${REGISTRY}": { "registrytoken": "${JWT}" }
+  }
+}
+JSON
+export DOCKER_CONFIG="${HOME:-/tmp}/.docker"
+
+# Skip if the registry already has this tag — first-boot push only.
+if crane --insecure manifest "${REGISTRY}/kaiad-agent:${VERSION}" >/dev/null 2>&1; then
+  echo "[push-agent] ${REGISTRY}/kaiad-agent:${VERSION} already present; skipping push"
+  exit 0
+fi
+
+echo "[push-agent] pushing ${TARBALL} → ${REGISTRY}/kaiad-agent:${VERSION}"
+crane --insecure push "${TARBALL}" "${REGISTRY}/kaiad-agent:${VERSION}"
+crane --insecure tag "${REGISTRY}/kaiad-agent:${VERSION}" latest
+echo "[push-agent] done"

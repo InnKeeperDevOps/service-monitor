@@ -324,8 +324,15 @@ func (r *KaiadAgentReconciler) applyDeployment(ctx context.Context, agent *kaiad
 		dep.Spec.Template.Spec.ServiceAccountName = saName
 		dep.Spec.Template.Spec.Containers = []corev1.Container{
 			{
-				Name:            "agent",
-				Image:           agent.Spec.Image,
+				Name:  "agent",
+				Image: agent.Spec.Image,
+				// Explicit Command so the agent image only needs the
+				// binary at /usr/local/bin/agent; no ENTRYPOINT required
+				// in the image (the kaiad-baked OCI bundle is built with
+				// crane append on a stock alpine and skips the mutate
+				// step needed to set ENTRYPOINT). Mirrors the way
+				// apps/agent/Dockerfile sets ENTRYPOINT.
+				Command:         []string{"/usr/local/bin/agent"},
 				ImagePullPolicy: corev1.PullIfNotPresent,
 				Env:             buildAgentEnv(agent, enroll),
 				VolumeMounts: []corev1.VolumeMount{

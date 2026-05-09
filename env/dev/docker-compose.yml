@@ -82,8 +82,14 @@ services:
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
       REGISTRY_HTTP_ADDR: "0.0.0.0:5000"
+      # relativeurls: redirect URLs (e.g. blob upload session Location)
+      # are emitted as path-only, so internal pushes (registry:5000)
+      # and external pushes (panel.dev.kaiad.dev) both work without
+      # the registry having to know which side it's serving. Setting
+      # REGISTRY_HTTP_HOST overrides this for external host construction
+      # — leaving it unset lets the registry honour the request's Host
+      # header, which is what we want.
       REGISTRY_HTTP_RELATIVEURLS: "true"
-      REGISTRY_HTTP_HOST: "https://panel.dev.kaiad.dev"
       # Token auth: every pull/push must present a JWT minted by the
       # Kaiad API at /registry/token. The registry verifies the JWT
       # signature against the cert in /auth/cert.pem (written by the
