@@ -64,3 +64,22 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+  # OCI distribution registry hosted alongside Kaiad. Phase 1: anonymous
+  # read + push. Phase 2 will gate push (and optionally pull) behind the
+  # kaiad-issued JWT bearer auth at /v2/_token. The registry is reverse-
+  # proxied at panel.dev.kaiad.dev/v2/* by ../../kaiad-proxy/nginx.conf.
+  registry:
+    image: registry:2
+    user: "1000:1000"
+    environment:
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+      # Tell the registry the URL it answers to so v2 redirects (e.g. on
+      # blob upload) advertise the public host, not 127.0.0.1.
+      REGISTRY_HTTP_ADDR: "0.0.0.0:5000"
+      REGISTRY_HTTP_RELATIVEURLS: "true"
+      REGISTRY_HTTP_HOST: "https://panel.dev.kaiad.dev"
+    volumes:
+      - ./data/registry-data:/var/lib/registry
+    ports:
+      - "5050:5000"
