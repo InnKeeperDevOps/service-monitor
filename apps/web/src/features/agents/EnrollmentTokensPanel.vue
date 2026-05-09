@@ -57,26 +57,34 @@ function runtimeEnvClause(runtime: AgentRuntime): string {
   }
 }
 
+// Defaults for the operator quickstart. Kept as constants so the kubectl
+// "create secret" command and the manifest stay in lockstep — if the user
+// edits one, the other is wrong, so we don't expose them as inputs yet.
+const KUBE_AGENT_NAME = "edge-agent";
+const KUBE_NAMESPACE = "kaiad-system";
+const KUBE_SECRET_NAME = "kaiad-enrollment";
+const KUBE_SECRET_KEY = "token";
+
 function buildKaiadAgentManifest(opts: { serviceId?: string | null }): string {
   const realtimeUrl =
     typeof window === "undefined"
       ? "wss://your-kaiad.example.com/realtime"
       : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/realtime`;
-  const name = "edge-agent";
-  const namespace = "kaiad-system";
   const image = "ghcr.io/innkeeperdevops/kaiad-agent:latest";
   const serviceId = opts.serviceId?.trim();
   const lines = [
     "apiVersion: kaiad.dev/v1alpha1",
     "kind: KaiadAgent",
     "metadata:",
-    `  name: ${name}`,
-    `  namespace: ${namespace}`,
+    `  name: ${KUBE_AGENT_NAME}`,
+    `  namespace: ${KUBE_NAMESPACE}`,
     "spec:",
     "  controlPlane:",
     `    realtimeUrl: ${realtimeUrl}`,
     "  enrollment:",
-    "    autoMint: true",
+    "    secretRef:",
+    `      name: ${KUBE_SECRET_NAME}`,
+    `      key: ${KUBE_SECRET_KEY}`,
     `  image: ${image}`,
     ...(serviceId ? [`  serviceId: ${serviceId}`] : []),
     "  manages:",
@@ -94,6 +102,13 @@ function buildKaiadAgentManifest(opts: { serviceId?: string | null }): string {
     "          kaiad.dev/managed: \"true\""
   ];
   return lines.join("\n") + "\n";
+}
+
+// kubectl one-liner that drops the freshly-minted token into the Secret
+// the operator's KaiadAgent.spec.enrollment.secretRef points at.
+// Single-quoted to keep dollar signs / shell metacharacters literal.
+function buildKubectlCreateSecretCommand(token: string): string {
+  return `kubectl -n ${KUBE_NAMESPACE} create secret generic ${KUBE_SECRET_NAME} --from-literal=${KUBE_SECRET_KEY}='${token}'`;
 }
 
 function buildAgentStartCommand(token: string, serviceId?: string | null, runtime: AgentRuntime = "docker"): string {
@@ -124,6 +139,7 @@ const tokenError = ref<string | null>(null);
 const latestToken = ref<string | null>(null);
 const copyMessage = ref<string | null>(null);
 const commandCopyMessage = ref<string | null>(null);
+const kubectlCopyMessage = ref<string | null>(null);
 // We render only ACTIVE tokens by default. A long-lived tenant can have
 // thousands of expired/used tokens; rendering them all blocks the main
 // thread. The user can opt in via the "Show inactive" button.
@@ -235,6 +251,17 @@ async function handleCopyKubernetesYaml() {
   }
 }
 
+async function handleCopyKubectlCommand() {
+  if (!latestToken.value) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(buildKubectlCreateSecretCommand(latestToken.value));
+    kubectlCopyMessage.value = "Copied kubectl command to clipboard.";
+  } catch {
+    kubectlCopyMessage.value = "Unable to copy command automatically.";
+  }
+}
+
 function enrollmentTokenStatus(t: TokenInfo): string {
   if (t.isActive) return "Active";
   if (t.revokedAt && !t.usedAt) return "Revoked";
@@ -326,9 +353,137 @@ function tabBtnStyle(active: boolean): CSSProperties {
 
     <div v-if="installTab === 'kubernetes'" :style="{ marginBottom: '0.75rem' }">
       <p :style="mutedText">
-        Install the operator once per cluster, then apply this <code>KaiadAgent</code> resource. The operator mints a
-        short-TTL enrollment token via the Kaiad API on your behalf — no need to copy a token here.
+        Install the operator once per cluster, generate a one-shot enrollment token below, drop it
+        into a <code>{{ KUBE_SECRET_NAME }}</code> Secret in <code>{{ KUBE_NAMESPACE }}</code>, then apply the
+        <code>KaiadAgent</code> resource. The agent consumes the token on first connect and persists its own
+        credential — no per-reconcile minting.
       </p>
+
+      <div :style="{ display: 'flex', gap: '0.75rem', alignItems: 'end', flexWrap: 'wrap', margin: '0.75rem 0' }">
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Preset</span>
+          <select
+            :value="selectedPreset"
+            aria-label="Token preset (kubernetes)"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)'
+            }"
+            @change="onPresetChange"
+          >
+            <option value="1h">1 hour</option>
+            <option value="24h">24 hours</option>
+            <option value="7d">7 days</option>
+            <option value="30d">30 days</option>
+          </select>
+        </label>
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Expires at</span>
+          <input
+            v-model="expiresAtInput"
+            type="datetime-local"
+            aria-label="Expires at (kubernetes)"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)'
+            }"
+          />
+        </label>
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Service this agent runs</span>
+          <select
+            v-model="selectedServiceId"
+            aria-label="Service this agent runs (kubernetes)"
+            :disabled="services.length === 0"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              minWidth: '220px'
+            }"
+          >
+            <option value="">{{ services.length === 0 ? "No services configured" : "Unbound (no service)" }}</option>
+            <option v-for="svc in services" :key="svc.id" :value="svc.id">
+              {{ svc.name }} ({{ svc.id }})
+            </option>
+          </select>
+        </label>
+        <button
+          :disabled="isGeneratingToken"
+          :style="{
+            background: 'var(--color-primary)',
+            color: 'var(--color-primary-foreground)',
+            border: 'none',
+            borderRadius: '6px',
+            padding: '0.45rem 0.8rem',
+            fontSize: '0.85rem',
+            cursor: isGeneratingToken ? 'not-allowed' : 'pointer',
+            opacity: isGeneratingToken ? 0.75 : 1
+          }"
+          @click="handleGenerateEnrollmentToken"
+        >{{ isGeneratingToken ? "Generating..." : "Generate token" }}</button>
+      </div>
+
+      <p
+        v-if="tokenError"
+        :style="{ color: 'var(--color-danger)', fontSize: '0.85rem', margin: '0 0 0.75rem' }"
+      >{{ tokenError }}</p>
+
+      <div
+        v-if="latestToken"
+        :style="{
+          marginBottom: '0.75rem',
+          background: 'var(--color-surface-muted)',
+          border: '1px solid var(--color-border)',
+          borderRadius: '6px',
+          padding: '0.65rem'
+        }"
+      >
+        <div :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginBottom: '0.35rem' }">
+          1. Create the enrollment Secret in <code>{{ KUBE_NAMESPACE }}</code>:
+        </div>
+        <code
+          aria-label="kubectl create secret command"
+          :style="{ display: 'block', fontSize: '0.8rem', wordBreak: 'break-all' }"
+        >{{ buildKubectlCreateSecretCommand(latestToken) }}</code>
+        <div :style="{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }">
+          <button
+            type="button"
+            :style="{
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.65rem',
+              fontSize: '0.8rem',
+              cursor: 'pointer'
+            }"
+            @click="handleCopyKubectlCommand"
+          >Copy kubectl command</button>
+          <span
+            v-if="kubectlCopyMessage"
+            :style="{
+              fontSize: '0.8rem',
+              color: kubectlCopyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
+            }"
+          >{{ kubectlCopyMessage }}</span>
+          <span :style="{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }">
+            (token is shown once — copy it now)
+          </span>
+        </div>
+      </div>
+
+      <div :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginBottom: '0.35rem' }">
+        {{ latestToken ? "2. Apply the KaiadAgent resource:" : "Then apply the KaiadAgent resource:" }}
+      </div>
       <pre
         aria-label="KaiadAgent YAML"
         :style="{
@@ -362,9 +517,6 @@ function tabBtnStyle(active: boolean): CSSProperties {
             color: yamlCopyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
           }"
         >{{ yamlCopyMessage }}</span>
-        <span :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)' }">
-          Pair the YAML with a service binding by selecting a service below.
-        </span>
       </div>
     </div>
 
