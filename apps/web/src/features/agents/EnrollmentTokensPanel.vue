@@ -57,33 +57,45 @@ function runtimeEnvClause(runtime: AgentRuntime): string {
   }
 }
 
-// Defaults for the operator quickstart. Kept as constants so the kubectl
-// "create secret" command and the manifest stay in lockstep — if the user
-// edits one, the other is wrong, so we don't expose them as inputs yet.
-const KUBE_AGENT_NAME = "edge-agent";
-const KUBE_NAMESPACE = "kaiad-system";
-const KUBE_SECRET_NAME = "kaiad-enrollment";
+// Defaults for the operator quickstart. The agent name + namespace are
+// editable from the UI so two KaiadAgents can coexist in the same namespace
+// without sharing a Secret. The Secret name is derived from the agent name
+// (`<agent>-enrollment`) so each CR gets a per-agent Secret automatically.
+const DEFAULT_KUBE_AGENT_NAME = "edge-agent";
+const DEFAULT_KUBE_NAMESPACE = "kaiad-system";
 const KUBE_SECRET_KEY = "token";
 
-function buildKaiadAgentManifest(opts: { serviceId?: string | null }): string {
+function deriveSecretName(agentName: string): string {
+  const base = agentName.trim() || DEFAULT_KUBE_AGENT_NAME;
+  return `${base}-enrollment`;
+}
+
+function buildKaiadAgentManifest(opts: {
+  serviceId?: string | null;
+  agentName: string;
+  namespace: string;
+}): string {
   const realtimeUrl =
     typeof window === "undefined"
       ? "wss://your-kaiad.example.com/realtime"
       : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/realtime`;
   const image = "ghcr.io/innkeeperdevops/kaiad-agent:latest";
   const serviceId = opts.serviceId?.trim();
+  const agentName = opts.agentName.trim() || DEFAULT_KUBE_AGENT_NAME;
+  const namespace = opts.namespace.trim() || DEFAULT_KUBE_NAMESPACE;
+  const secretName = deriveSecretName(agentName);
   const lines = [
     "apiVersion: kaiad.dev/v1alpha1",
     "kind: KaiadAgent",
     "metadata:",
-    `  name: ${KUBE_AGENT_NAME}`,
-    `  namespace: ${KUBE_NAMESPACE}`,
+    `  name: ${agentName}`,
+    `  namespace: ${namespace}`,
     "spec:",
     "  controlPlane:",
     `    realtimeUrl: ${realtimeUrl}`,
     "  enrollment:",
     "    secretRef:",
-    `      name: ${KUBE_SECRET_NAME}`,
+    `      name: ${secretName}`,
     `      key: ${KUBE_SECRET_KEY}`,
     `  image: ${image}`,
     ...(serviceId ? [`  serviceId: ${serviceId}`] : []),
@@ -105,10 +117,19 @@ function buildKaiadAgentManifest(opts: { serviceId?: string | null }): string {
 }
 
 // kubectl one-liner that drops the freshly-minted token into the Secret
-// the operator's KaiadAgent.spec.enrollment.secretRef points at.
-// Single-quoted to keep dollar signs / shell metacharacters literal.
-function buildKubectlCreateSecretCommand(token: string): string {
-  return `kubectl -n ${KUBE_NAMESPACE} create secret generic ${KUBE_SECRET_NAME} --from-literal=${KUBE_SECRET_KEY}='${token}'`;
+// the agent's KaiadAgent.spec.enrollment.secretRef points at. The Secret
+// is named per agent (`<agent>-enrollment`) so multiple agents in the
+// same namespace don't collide. Single-quoted to keep dollar signs /
+// shell metacharacters literal.
+function buildKubectlCreateSecretCommand(opts: {
+  token: string;
+  agentName: string;
+  namespace: string;
+}): string {
+  const agentName = opts.agentName.trim() || DEFAULT_KUBE_AGENT_NAME;
+  const namespace = opts.namespace.trim() || DEFAULT_KUBE_NAMESPACE;
+  const secretName = deriveSecretName(agentName);
+  return `kubectl -n ${namespace} create secret generic ${secretName} --from-literal=${KUBE_SECRET_KEY}='${opts.token}'`;
 }
 
 function buildAgentStartCommand(token: string, serviceId?: string | null, runtime: AgentRuntime = "docker"): string {
@@ -140,6 +161,8 @@ const latestToken = ref<string | null>(null);
 const copyMessage = ref<string | null>(null);
 const commandCopyMessage = ref<string | null>(null);
 const kubectlCopyMessage = ref<string | null>(null);
+const kubeAgentName = ref<string>(DEFAULT_KUBE_AGENT_NAME);
+const kubeNamespace = ref<string>(DEFAULT_KUBE_NAMESPACE);
 // We render only ACTIVE tokens by default. A long-lived tenant can have
 // thousands of expired/used tokens; rendering them all blocks the main
 // thread. The user can opt in via the "Show inactive" button.
@@ -244,7 +267,13 @@ async function handleCopyStartCommand() {
 async function handleCopyKubernetesYaml() {
   try {
     if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
-    await navigator.clipboard.writeText(buildKaiadAgentManifest({ serviceId: selectedServiceId.value }));
+    await navigator.clipboard.writeText(
+      buildKaiadAgentManifest({
+        serviceId: selectedServiceId.value,
+        agentName: kubeAgentName.value,
+        namespace: kubeNamespace.value
+      })
+    );
     yamlCopyMessage.value = "Copied YAML to clipboard.";
   } catch {
     yamlCopyMessage.value = "Unable to copy YAML automatically.";
@@ -255,7 +284,13 @@ async function handleCopyKubectlCommand() {
   if (!latestToken.value) return;
   try {
     if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
-    await navigator.clipboard.writeText(buildKubectlCreateSecretCommand(latestToken.value));
+    await navigator.clipboard.writeText(
+      buildKubectlCreateSecretCommand({
+        token: latestToken.value,
+        agentName: kubeAgentName.value,
+        namespace: kubeNamespace.value
+      })
+    );
     kubectlCopyMessage.value = "Copied kubectl command to clipboard.";
   } catch {
     kubectlCopyMessage.value = "Unable to copy command automatically.";
@@ -353,13 +388,51 @@ function tabBtnStyle(active: boolean): CSSProperties {
 
     <div v-if="installTab === 'kubernetes'" :style="{ marginBottom: '0.75rem' }">
       <p :style="mutedText">
-        Install the operator once per cluster, generate a one-shot enrollment token below, drop it
-        into a <code>{{ KUBE_SECRET_NAME }}</code> Secret in <code>{{ KUBE_NAMESPACE }}</code>, then apply the
-        <code>KaiadAgent</code> resource. The agent consumes the token on first connect and persists its own
-        credential — no per-reconcile minting.
+        Install the operator once per cluster, then for each agent: pick a name (one CR per agent in the
+        cluster), generate a one-shot enrollment token below, drop it into a
+        <code>{{ deriveSecretName(kubeAgentName) }}</code> Secret in <code>{{ kubeNamespace.trim() || DEFAULT_KUBE_NAMESPACE }}</code>,
+        and apply the <code>KaiadAgent</code> resource. Each agent gets its own Secret (named
+        <code>&lt;agent&gt;-enrollment</code>) so multiple agents in one namespace don't share tokens. The agent
+        consumes its token on first connect and persists its own credential — no per-reconcile minting.
       </p>
 
       <div :style="{ display: 'flex', gap: '0.75rem', alignItems: 'end', flexWrap: 'wrap', margin: '0.75rem 0' }">
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Agent name</span>
+          <input
+            v-model="kubeAgentName"
+            aria-label="Agent name (kubernetes)"
+            :placeholder="DEFAULT_KUBE_AGENT_NAME"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              minWidth: '160px',
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: '0.8rem'
+            }"
+          />
+        </label>
+        <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
+          <span :style="{ color: 'var(--color-text-secondary)' }">Namespace</span>
+          <input
+            v-model="kubeNamespace"
+            aria-label="Namespace (kubernetes)"
+            :placeholder="DEFAULT_KUBE_NAMESPACE"
+            :style="{
+              border: '1px solid var(--color-border)',
+              borderRadius: '6px',
+              padding: '0.35rem 0.45rem',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              minWidth: '160px',
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: '0.8rem'
+            }"
+          />
+        </label>
         <label :style="{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }">
           <span :style="{ color: 'var(--color-text-secondary)' }">Preset</span>
           <select
@@ -448,12 +521,13 @@ function tabBtnStyle(active: boolean): CSSProperties {
         }"
       >
         <div :style="{ fontSize: '0.78rem', color: 'var(--color-text-secondary)', marginBottom: '0.35rem' }">
-          1. Create the enrollment Secret in <code>{{ KUBE_NAMESPACE }}</code>:
+          1. Create the <code>{{ deriveSecretName(kubeAgentName) }}</code> Secret in
+          <code>{{ kubeNamespace.trim() || DEFAULT_KUBE_NAMESPACE }}</code>:
         </div>
         <code
           aria-label="kubectl create secret command"
           :style="{ display: 'block', fontSize: '0.8rem', wordBreak: 'break-all' }"
-        >{{ buildKubectlCreateSecretCommand(latestToken) }}</code>
+        >{{ buildKubectlCreateSecretCommand({ token: latestToken, agentName: kubeAgentName, namespace: kubeNamespace }) }}</code>
         <div :style="{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }">
           <button
             type="button"
@@ -495,7 +569,7 @@ function tabBtnStyle(active: boolean): CSSProperties {
           overflowX: 'auto',
           margin: '0.5rem 0'
         }"
-      >{{ buildKaiadAgentManifest({ serviceId: selectedServiceId }) }}</pre>
+      >{{ buildKaiadAgentManifest({ serviceId: selectedServiceId, agentName: kubeAgentName, namespace: kubeNamespace }) }}</pre>
       <div :style="{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }">
         <button
           type="button"
