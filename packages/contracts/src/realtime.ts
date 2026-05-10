@@ -331,6 +331,27 @@ const runFixPlanCommandSchema = z.object({
   agentRuntimeBackend: z.enum(["docker", "kubernetes", "shell"]).optional()
 });
 
+/**
+ * Forces the agent to redeploy a service with the freshly-built image
+ * reference. Emitted by the worker after a manual build (triggered_by
+ * = 'manual') succeeds — the operator clicked "Start build" and
+ * implicitly opted into a redeploy. Polled builds never emit this.
+ *
+ * v1: agent acknowledges receipt; the per-runtime "pull image and
+ * recreate the container / `kubectl rollout restart`" handler is a
+ * follow-up. The dispatch round-trip is wired now so the panel shows
+ * the command being delivered.
+ */
+const redeployServiceCommandSchema = z.object({
+  type: z.literal("redeploy_service"),
+  commandId: z.string(),
+  serviceId: z.string(),
+  /** Fully-qualified image reference (host/repo:tag) the agent should pull. */
+  imageRef: z.string(),
+  /** Source build row id, for cross-referencing in agent logs. */
+  buildId: z.string()
+});
+
 /** Uses `z.union` (not `discriminatedUnion`) so variants may apply `.superRefine` (e.g. receive_source_archive url xor path). */
 export const platformToAgentMessageSchema = z.union([
   runStepCommandSchema,
@@ -341,7 +362,8 @@ export const platformToAgentMessageSchema = z.union([
   runClaudePlanCommandSchema,
   runToolchainCommandSchema,
   receiveSourceArchiveCommandSchema,
-  runFixPlanCommandSchema
+  runFixPlanCommandSchema,
+  redeployServiceCommandSchema
 ]);
 
 export type AgentToPlatformMessage = z.infer<typeof agentToPlatformMessageSchema>;

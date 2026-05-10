@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { ChevronDown, ChevronRight, RefreshCw, Download, FileCode } from "lucide-vue-next";
+import { ChevronDown, ChevronRight, RefreshCw, Download, FileCode, Play } from "lucide-vue-next";
 import { api, type ServiceBuild, type ServiceBuildArtifact } from "../../lib/api.js";
+import { useAuth } from "../../lib/useAuth.js";
 
 const props = defineProps<{
   serviceId: string;
   serviceName: string;
 }>();
+
+const auth = useAuth();
+const canTrigger = computed(() => auth.value.isAdmin);
+const triggering = ref(false);
 
 type RowState = {
   build: ServiceBuild;
@@ -70,6 +75,39 @@ async function loadDetail(row: RowState) {
 
 function isInFlight(b: ServiceBuild): boolean {
   return b.status === "queued" || b.status === "running";
+}
+
+async function handleTrigger() {
+  if (triggering.value || !canTrigger.value) return;
+  const ok = window.confirm(
+    `Start a new build for ${props.serviceName}?\n\n` +
+      `Builds the latest commit on the watched branch. On success, ` +
+      `kaiad dispatches a redeploy_service command to every bound agent.`
+  );
+  if (!ok) return;
+  triggering.value = true;
+  error.value = null;
+  try {
+    const r = await api.triggerServiceBuild(props.serviceId);
+    // Optimistically prepend the new build so the user sees it
+    // before the next refresh tick.
+    rows.value = [
+      {
+        build: r.build,
+        expanded: true,
+        detail: { build: r.build, artifacts: [] },
+        detailLoading: false
+      },
+      ...rows.value
+    ];
+    // Trigger a normal refresh so the row stays in sync as the
+    // worker resolves the SHA and starts running.
+    void load({ silent: true });
+  } catch (e: unknown) {
+    error.value = (e as Error).message;
+  } finally {
+    triggering.value = false;
+  }
 }
 
 function toggle(row: RowState) {
@@ -179,6 +217,28 @@ onUnmounted(() => {
       </span>
       <div :style="{ flex: 1 }" />
       <button
+        v-if="canTrigger"
+        type="button"
+        :disabled="triggering"
+        :title="`Build the current HEAD of ${serviceName}'s watched branch and dispatch redeploy to bound agents`"
+        :style="{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.25rem',
+          padding: '0.2rem 0.55rem',
+          background: 'var(--color-primary)',
+          color: 'var(--color-primary-foreground)',
+          border: 'none',
+          borderRadius: '4px',
+          fontSize: '0.75rem',
+          cursor: triggering ? 'wait' : 'pointer'
+        }"
+        @click="handleTrigger"
+      >
+        <Play :size="11" />
+        {{ triggering ? "Starting…" : "Start build" }}
+      </button>
+      <button
         type="button"
         :disabled="refreshing"
         :style="{
@@ -239,6 +299,19 @@ onUnmounted(() => {
             </td>
             <td :style="{ padding: '0.35rem 0.5rem', color: statusColor(row.build.status) }">
               ● {{ statusLabel(row.build.status) }}
+              <span
+                v-if="row.build.triggeredBy === 'manual'"
+                :title="'Triggered manually from the panel'"
+                :style="{
+                  marginLeft: '0.3rem',
+                  fontSize: '0.65rem',
+                  padding: '0.05rem 0.3rem',
+                  background: 'var(--color-bg)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: '3px',
+                  color: 'var(--color-text-secondary)'
+                }"
+              >manual</span>
             </td>
             <td
               :style="{ padding: '0.35rem 0.5rem', fontFamily: 'var(--font-mono)' }"

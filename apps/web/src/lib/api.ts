@@ -215,6 +215,7 @@ export type OAuthProviderConfigPayload = {
 };
 
 export type BuildStatus = "queued" | "running" | "success" | "failed" | "no_pipeline";
+export type BuildTrigger = "poll" | "manual";
 
 export type ServiceBuild = {
   id: string;
@@ -223,6 +224,7 @@ export type ServiceBuild = {
   gitSha: string;
   branch: string;
   status: BuildStatus;
+  triggeredBy: BuildTrigger;
   imageRef: string | null;
   log: string;
   pipelineYaml: string | null;
@@ -383,6 +385,13 @@ export const api = {
   listServiceBuilds: (serviceId: string) =>
     apiFetch<{ builds: ServiceBuild[] }>(
       `/api/v1/services/${encodeURIComponent(serviceId)}/builds`
+    ),
+
+  /** Manually queue a build for the service. Worker resolves HEAD on claim. */
+  triggerServiceBuild: (serviceId: string) =>
+    apiFetch<{ build: ServiceBuild }>(
+      `/api/v1/services/${encodeURIComponent(serviceId)}/builds`,
+      { method: "POST" }
     ),
 
   getServiceBuild: (serviceId: string, buildId: string) =>

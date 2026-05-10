@@ -116,6 +116,7 @@ import { createNamedQueue, createRedisConnectionFromEnv } from "@sm/queue";
 import { buildRealtimeAgentHello } from "./agentHelloPayload.js";
 import {
   ensureCoreSchema,
+  enqueueManualBuild,
   getBuild,
   getBuildArtifact,
   listBuildArtifacts,
@@ -2199,6 +2200,49 @@ export function buildServer(opts: BuildServerOptions = {}) {
     if (!q) return { builds: [] };
     const builds = await listBuildsForService(q, session.tenantId, req.params.id);
     return { builds };
+  });
+
+  // Manual build trigger. Inserts a queued row with empty git_sha; the
+  // worker resolves HEAD via git ls-remote on claim. After success, the
+  // worker dispatches a redeploy_service command to every bound agent.
+  // Owner/admin-only — manual builds bypass the poll dedupe and emit
+  // agent commands, so they need a real session.
+  app.post<{ Params: { id: string } }>("/api/v1/services/:id/builds", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply
+        .status(401)
+        .send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    if (session.kind === "apiCredential" || (session.role !== "owner" && session.role !== "admin")) {
+      return reply.status(403).send(
+        apiErrorSchema.parse({
+          code: "FORBIDDEN",
+          message: "Owner or admin session required to trigger a build",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const svc = await domainStore.getService(session.tenantId, req.params.id);
+    if (!svc) {
+      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Service not found", correlationId: (req as any).correlationId }));
+    }
+    const q = await getBuildsQuery();
+    if (!q) {
+      return reply.status(503).send(
+        apiErrorSchema.parse({
+          code: "BUILDS_UNAVAILABLE",
+          message: "Build pipeline requires a postgres backend",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const build = await enqueueManualBuild(q, {
+      tenantId: session.tenantId,
+      serviceId: svc.id,
+      branch: svc.branch
+    });
+    return reply.status(202).send({ build });
   });
 
   app.get<{ Params: { id: string; buildId: string } }>(

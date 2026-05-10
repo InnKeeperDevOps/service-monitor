@@ -226,7 +226,10 @@ create table if not exists service_builds (
   id text primary key,
   tenant_id text not null references tenants(id) on delete cascade,
   service_id text not null references monitored_services(id) on delete cascade,
-  git_sha text not null,
+  -- Empty string for a manual build that has not yet had its SHA
+  -- resolved by the worker. The worker rewrites this on claim before
+  -- starting the actual build.
+  git_sha text not null default '',
   branch text not null,
   status text not null check (status in ('queued','running','success','failed','no_pipeline')),
   image_ref text,
@@ -238,14 +241,22 @@ create table if not exists service_builds (
   finished_at timestamptz
 );
 
+-- Whether the build was queued by the periodic poller or explicitly
+-- triggered by an operator clicking "Start build" in the panel. Manual
+-- builds bypass the poller's same-SHA dedupe AND emit a redeploy_service
+-- agent command on success.
+alter table service_builds add column if not exists triggered_by text not null default 'poll'
+  check (triggered_by in ('poll', 'manual'));
+
 create index if not exists service_builds_service_id_idx
   on service_builds(service_id, created_at desc);
 create index if not exists service_builds_status_idx
   on service_builds(status, created_at);
--- The poller uses (service_id, git_sha) to dedupe on every tick,
--- so a unique index keeps the dedupe enforcement at the DB layer too.
-create unique index if not exists service_builds_service_sha_uniq
-  on service_builds(service_id, git_sha);
+-- The unique index on (service_id, git_sha) was here originally for
+-- poller idempotency, but it blocks manual rebuilds at the same SHA.
+-- The poller dedupes via getLatestBuildSha (filtered to triggered_by='poll')
+-- in app code, which is enough — we don't need to enforce at DB level.
+drop index if exists service_builds_service_sha_uniq;
 
 create table if not exists service_build_artifacts (
   build_id text not null references service_builds(id) on delete cascade,

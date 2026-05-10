@@ -68,6 +68,7 @@ import {
   listAllServicesForPoller,
   recordBuildArtifact,
   setBuildPipelineYaml,
+  updateBuildGitSha,
   type QueryFn,
   type ServiceBuildRow
 } from "@sm/db";
@@ -217,14 +218,13 @@ export async function runPollOnce(query: QueryFn, logger: Logger): Promise<void>
         gitSha: remoteSha,
         branch: svc.branch
       });
-      if (enq) {
-        logger.info("queued build", {
-          serviceId: svc.id,
-          name: svc.name,
-          sha: remoteSha.slice(0, 12),
-          branch: svc.branch
-        });
-      }
+      logger.info("queued build", {
+        serviceId: svc.id,
+        name: svc.name,
+        sha: remoteSha.slice(0, 12),
+        branch: svc.branch,
+        buildId: enq.id
+      });
     } catch (err) {
       // Don't surface every transient SSH failure — log once per pass and
       // move on. The next tick gets another shot.
@@ -292,6 +292,27 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
     return;
   }
 
+  // Manual builds are queued with an empty git_sha (the user clicked
+  // "Start build" — they don't know or care about the exact SHA, they
+  // just want HEAD of the watched branch). Resolve it now so the rest
+  // of the build flow has a concrete SHA to pin to.
+  if (!build.gitSha) {
+    try {
+      const head = await gitLsRemoteHead(query, svc);
+      if (!head) {
+        const reason = `git ls-remote returned no SHA for ${svc.gitRepoUrl}@${svc.branch}`;
+        await safelyFailBuild(query, build.id, reason);
+        return;
+      }
+      await updateBuildGitSha(query, build.id, head);
+      build.gitSha = head;
+      await appendBuildLog(query, build.id, `manual build resolved to ${svc.branch}@${head}\n`);
+    } catch (err) {
+      await safelyFailBuild(query, build.id, `git ls-remote failed: ${(err as Error).message}`);
+      return;
+    }
+  }
+
   // The workspace directory lives under /data/builds/<id>/ specifically
   // because the host docker daemon needs to bind-mount the same path
   // when it spawns build containers. /data/builds is bound to
@@ -308,7 +329,13 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
   await fs.mkdir(ws, { recursive: true });
   await fs.mkdir(artifactsDir, { recursive: true });
 
-  await appendBuildLog(query, build.id, banner(`build #${build.id.slice(0, 8)} ${svc.name}@${build.gitSha.slice(0, 12)}`));
+  await appendBuildLog(
+    query,
+    build.id,
+    banner(
+      `${build.triggeredBy === "manual" ? "MANUAL " : ""}build #${build.id.slice(0, 8)} ${svc.name}@${build.gitSha.slice(0, 12)}`
+    )
+  );
 
   try {
     // 1) Clone at the exact SHA.
@@ -393,6 +420,20 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
     await appendBuildLog(query, build.id, `done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s\n`);
     await finishBuild(query, build.id, { status: "success", imageRef });
     logger.info("build succeeded", { buildId: build.id, sha: build.gitSha.slice(0, 12), imageRef });
+
+    // Manual builds emit a redeploy_service command to every bound
+    // agent on success. Stub: the agent acknowledges the dispatch but
+    // doesn't yet pull/recreate (per-runtime handler is a follow-up).
+    if (build.triggeredBy === "manual" && imageRef) {
+      await dispatchRedeployToBoundAgents(query, build.id, build.serviceId, imageRef, logger).catch(
+        (err) => {
+          logger.warn("redeploy dispatch failed", {
+            buildId: build.id,
+            err: (err as Error).message
+          });
+        }
+      );
+    }
   } finally {
     // Best-effort cleanup. /tmp gets reaped on container restart anyway,
     // but leaving 1 GB of node_modules around per build adds up.
@@ -868,6 +909,100 @@ function runProcStreaming(
 }
 
 // ─── Misc helpers ──────────────────────────────────────────────────────────
+
+// ─── Manual-build redeploy dispatch ────────────────────────────────────────
+
+/**
+ * Send a redeploy_service agent command to every agent bound to this
+ * service. We POST to the API's existing /api/v1/internal/agent-commands
+ * endpoint rather than reach into the realtime manager directly — the
+ * worker may run in its own process (SM_EMBED_WORKER=0) and the API is
+ * the canonical dispatch surface.
+ *
+ * The agent-side handler is currently a stub (see apps/agent/internal/
+ * executor/executor.go:case "redeploy_service"); it acks the command
+ * but doesn't yet pull/recreate. The dispatch round-trip is wired now
+ * so the panel surfaces "redeploy dispatched" and so the per-runtime
+ * handlers (docker pull+recreate; kubectl rollout restart) have a
+ * stable command shape to land against.
+ */
+async function dispatchRedeployToBoundAgents(
+  query: QueryFn,
+  buildId: string,
+  serviceId: string,
+  imageRef: string,
+  logger: Logger
+): Promise<void> {
+  const apiUrl = process.env.INTERNAL_API_URL?.trim() ?? `http://127.0.0.1:${process.env.PORT ?? "8092"}`;
+  const internalToken = (process.env.INTERNAL_API_TOKEN?.trim() || "dev-token");
+
+  const { rows } = await query(
+    `SELECT agent_id FROM agent_services WHERE service_id = $1`,
+    [serviceId]
+  );
+  if (rows.length === 0) {
+    await appendBuildLog(query, buildId, "no agents bound to this service — skipping redeploy dispatch\n");
+    return;
+  }
+
+  await appendBuildLog(
+    query,
+    buildId,
+    banner(`redeploy_service → ${rows.length} bound agent(s)`)
+  );
+
+  for (const row of rows) {
+    const agentId = String(row.agent_id);
+    const commandId = crypto.randomUUID();
+    const job = {
+      agentId,
+      commandId,
+      payload: {
+        type: "redeploy_service",
+        commandId,
+        serviceId,
+        imageRef,
+        buildId
+      }
+    };
+    try {
+      const res = await fetch(`${apiUrl}/api/v1/internal/agent-commands`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${internalToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(job)
+      });
+      const bodyText = await res.text();
+      if (!res.ok) {
+        await appendBuildLog(
+          query,
+          buildId,
+          `  ${agentId.slice(0, 32)}: dispatch ${res.status} — ${bodyText.slice(0, 200)}\n`
+        );
+        logger.warn("redeploy dispatch non-2xx", { buildId, agentId, status: res.status });
+        continue;
+      }
+      // /agent-commands responds with { delivered, queued }.
+      let parsed: { delivered?: boolean; queued?: boolean } = {};
+      try {
+        parsed = JSON.parse(bodyText);
+      } catch {
+        /* ignore */
+      }
+      const where = parsed.delivered ? "delivered (online)" : parsed.queued ? "queued (offline)" : "accepted";
+      await appendBuildLog(query, buildId, `  ${agentId.slice(0, 32)}: ${where}\n`);
+    } catch (err) {
+      await appendBuildLog(
+        query,
+        buildId,
+        `  ${agentId.slice(0, 32)}: dispatch failed — ${(err as Error).message}\n`
+      );
+      logger.warn("redeploy dispatch error", { buildId, agentId, err: (err as Error).message });
+    }
+  }
+}
 
 async function safelyFailBuild(query: QueryFn, buildId: string, reason: string): Promise<void> {
   try {

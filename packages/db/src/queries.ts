@@ -584,14 +584,17 @@ export async function touchApiCredentialLastUsed(
 // ---------------------------------------------------------------------------
 
 export type BuildStatus = "queued" | "running" | "success" | "failed" | "no_pipeline";
+export type BuildTrigger = "poll" | "manual";
 
 export interface ServiceBuildRow {
   id: string;
   tenantId: string;
   serviceId: string;
+  /** Empty string for manual builds whose SHA hasn't been resolved yet. */
   gitSha: string;
   branch: string;
   status: BuildStatus;
+  triggeredBy: BuildTrigger;
   imageRef: string | null;
   log: string;
   pipelineYaml: string | null;
@@ -615,9 +618,10 @@ function mapBuild(r: Record<string, unknown>): ServiceBuildRow {
     id: String(r.id),
     tenantId: String(r.tenant_id),
     serviceId: String(r.service_id),
-    gitSha: String(r.git_sha),
+    gitSha: String(r.git_sha ?? ""),
     branch: String(r.branch),
     status: String(r.status) as BuildStatus,
+    triggeredBy: (String(r.triggered_by ?? "poll") as BuildTrigger),
     imageRef: r.image_ref == null ? null : String(r.image_ref),
     log: String(r.log ?? ""),
     pipelineYaml: r.pipeline_yaml == null ? null : String(r.pipeline_yaml),
@@ -640,9 +644,10 @@ function mapArtifact(r: Record<string, unknown>): ServiceBuildArtifactRow {
 }
 
 /**
- * Insert a queued build. Returns null if a build for (service_id, git_sha)
- * already exists — the unique index on those columns enforces dedupe at
- * the DB layer so the poller can call this freely on every tick.
+ * Insert a queued build for the periodic poller. Caller must already have
+ * verified via getLatestBuildSha that this SHA hasn't been polled yet —
+ * the DB no longer enforces a unique index on (service_id, git_sha) since
+ * manual rebuilds at the same SHA are now legal.
  */
 export async function enqueueBuild(
   query: QueryFn,
@@ -652,16 +657,48 @@ export async function enqueueBuild(
     gitSha: string;
     branch: string;
   }
-): Promise<ServiceBuildRow | null> {
+): Promise<ServiceBuildRow> {
   const id = crypto.randomUUID();
   const { rows } = await query(
-    `INSERT INTO service_builds (id, tenant_id, service_id, git_sha, branch, status)
-     VALUES ($1, $2, $3, $4, $5, 'queued')
-     ON CONFLICT (service_id, git_sha) DO NOTHING
+    `INSERT INTO service_builds (id, tenant_id, service_id, git_sha, branch, status, triggered_by)
+     VALUES ($1, $2, $3, $4, $5, 'queued', 'poll')
      RETURNING *`,
     [id, data.tenantId, data.serviceId, data.gitSha, data.branch]
   );
-  return rows.length === 0 ? null : mapBuild(rows[0]);
+  return mapBuild(rows[0]);
+}
+
+/**
+ * Insert a queued MANUAL build. The SHA is left empty; the worker
+ * resolves HEAD via git ls-remote on claim and writes it back via
+ * updateBuildGitSha before running the actual build. Manual builds
+ * also dispatch a redeploy_service agent command on success.
+ */
+export async function enqueueManualBuild(
+  query: QueryFn,
+  data: {
+    tenantId: string;
+    serviceId: string;
+    branch: string;
+  }
+): Promise<ServiceBuildRow> {
+  const id = crypto.randomUUID();
+  const { rows } = await query(
+    `INSERT INTO service_builds (id, tenant_id, service_id, git_sha, branch, status, triggered_by)
+     VALUES ($1, $2, $3, '', $4, 'queued', 'manual')
+     RETURNING *`,
+    [id, data.tenantId, data.serviceId, data.branch]
+  );
+  return mapBuild(rows[0]);
+}
+
+/** Persist a SHA the worker resolved post-claim for a manual build. */
+export async function updateBuildGitSha(
+  query: QueryFn,
+  buildId: string,
+  gitSha: string
+): Promise<void> {
+  await query(`UPDATE service_builds SET git_sha = $2 WHERE id = $1`, [buildId, gitSha]);
 }
 
 /**
@@ -748,9 +785,11 @@ export async function getBuild(
 }
 
 /**
- * Returns the most recent build SHA we've seen for this service (any
- * status, including no_pipeline). Used by the poller to decide whether
- * to enqueue.
+ * Returns the most recent SHA the POLLER has enqueued for this service
+ * (any status — the poller treats success, failure, and no_pipeline
+ * identically: SHA seen, don't re-enqueue). Filtered to poll-triggered
+ * builds so manual rebuilds don't make the poller think it's caught up.
+ * Empty SHAs (in-flight manual builds) are skipped too.
  */
 export async function getLatestBuildSha(
   query: QueryFn,
@@ -759,6 +798,8 @@ export async function getLatestBuildSha(
   const { rows } = await query(
     `SELECT git_sha FROM service_builds
       WHERE service_id = $1
+        AND triggered_by = 'poll'
+        AND git_sha <> ''
       ORDER BY created_at DESC
       LIMIT 1`,
     [serviceId]

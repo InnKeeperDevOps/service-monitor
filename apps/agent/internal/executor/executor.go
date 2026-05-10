@@ -121,6 +121,19 @@ func (e *Executor) Execute(ctx context.Context, cmdType string, payload map[stri
 		return e.executeRunToolchain(ctx, payload)
 	case "receive_source_archive":
 		return e.executeReceiveSourceArchive(ctx, payload)
+	case "redeploy_service":
+		// Stub. Per-runtime handlers (docker pull + recreate;
+		// kubectl rollout restart) land in a follow-up. The dispatch
+		// round-trip is wired now so the panel surfaces "redeploy
+		// dispatched" and so the platform-side schema is stable.
+		serviceID, _ := payload["serviceId"].(string)
+		imageRef, _ := payload["imageRef"].(string)
+		buildID, _ := payload["buildId"].(string)
+		log.Printf("[agent:executor] redeploy_service service=%s image=%s build=%s — stub, no per-runtime handler yet", serviceID, imageRef, buildID)
+		return CommandResult{
+			Success: true,
+			Output:  fmt.Sprintf("redeploy_service acked (stub): service=%s image=%s build=%s", serviceID, imageRef, buildID),
+		}
 	default:
 		return CommandResult{Success: false, Output: fmt.Sprintf("unknown command type: %s", cmdType)}
 	}
