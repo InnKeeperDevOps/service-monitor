@@ -75,13 +75,64 @@ export const pipelineRuntimeSchema = z.object({
   command: z.array(z.string().min(1)).min(1)
 });
 
+// Domains route an external host to a port already declared in `ports[]`.
+// `protocol: https` is a *consumer-facing* protocol — the operator/ingress
+// is responsible for TLS termination (cert, ALPN, HSTS); the container
+// itself is reached over plain HTTP on the declared port. `protocol: http`
+// disables TLS termination at the ingress (typical for internal-only
+// hosts).
+export const pipelineDomainSchema = z.object({
+  /** External hostname. */
+  host: z
+    .string()
+    .min(1)
+    // RFC-1123-ish: labels of a-z0-9 + hyphens, separated by dots. Loose
+    // enough to allow leading wildcards (`*.foo.com`) and uppercase.
+    .regex(
+      /^(\*\.)?([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/,
+      "host must be a DNS-style hostname"
+    ),
+  /** Port number on the runtime container. MUST appear in `ports[]`. */
+  port: z.number().int().min(1).max(65535),
+  /** Consumer-facing protocol (TLS termination at the ingress). */
+  protocol: z.enum(["http", "https"])
+});
+
+// Per-environment overrides. Both fields are optional; omitting either
+// falls back to the top-level `instances` / `domains` defaults at deploy
+// time.
+export const pipelineEnvironmentSchema = z.object({
+  /** Replica count for this environment. */
+  instances: z.number().int().min(0).optional(),
+  /** Domains routed to this environment. */
+  domains: z.array(pipelineDomainSchema).default([])
+});
+
+// Environment names: lowercase alphanum + hyphen, max 63 chars (matches
+// k8s namespace/label naming so future operator wiring stays simple).
+const environmentNameRegex = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
 export const pipelineDefinitionSchema = z
   .object({
     version: z.literal(PIPELINE_VERSION),
     build: pipelineBuildSchema.optional(),
     artifacts: z.array(safeRelativePath).default([]),
     runtime: pipelineRuntimeSchema.optional(),
-    ports: z.array(pipelinePortSchema).default([])
+    ports: z.array(pipelinePortSchema).default([]),
+    /**
+     * Default replica count when no environment-specific override
+     * applies. 1 is the typical "single-instance dev service" default.
+     * 0 is allowed (scaled-to-zero / pre-deploy state).
+     */
+    instances: z.number().int().min(0).default(1),
+    /** Default domains routed to the runtime. */
+    domains: z.array(pipelineDomainSchema).default([]),
+    /**
+     * Per-environment overrides. Keys are environment names
+     * (e.g. "development", "staging", "production"). Each environment's
+     * fields fall back to the top-level defaults when omitted.
+     */
+    environments: z.record(pipelineEnvironmentSchema).default({})
   })
   .superRefine((def, ctx) => {
     // Cross-field validation: every runtime.copy.from MUST appear in
@@ -99,16 +150,86 @@ export const pipelineDefinitionSchema = z
         }
       }
     }
-    // If runtime is set, artifacts make sense too — otherwise the
-    // runtime image is just `runtime.image` with the entrypoint set.
-    // We don't reject that case (it's a legit "wrap an upstream image"
-    // pattern) — just lint it via the API surface later if needed.
+    // Cross-field validation: every domain.port (top-level OR per-env)
+    // must reference a port declared in ports[]. The k8s/ingress operator
+    // can't make up a port that wasn't exposed.
+    const declared = new Set(def.ports.map((p) => p.port));
+    if (declared.size > 0) {
+      for (const [i, d] of def.domains.entries()) {
+        if (!declared.has(d.port)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["domains", i, "port"],
+            message: `domain port ${d.port} is not declared in ports[]`
+          });
+        }
+      }
+      for (const [envName, env] of Object.entries(def.environments)) {
+        for (const [i, d] of env.domains.entries()) {
+          if (!declared.has(d.port)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["environments", envName, "domains", i, "port"],
+              message: `domain port ${d.port} is not declared in ports[]`
+            });
+          }
+        }
+      }
+    } else if (def.domains.length > 0 || someEnvHasDomains(def.environments)) {
+      // If domains exist anywhere, ports[] must be non-empty — otherwise
+      // there's nothing to route to.
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ports"],
+        message: "domains require at least one entry in ports[]"
+      });
+    }
+
+    // Environment names must match the simple k8s-style shape so the
+    // operator can use them verbatim as namespace suffixes / label
+    // values without further sanitisation.
+    for (const envName of Object.keys(def.environments)) {
+      if (!environmentNameRegex.test(envName)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["environments", envName],
+          message:
+            `environment name "${envName}" must be lowercase alphanumeric with hyphens (max 63 chars)`
+        });
+      }
+    }
   });
+
+function someEnvHasDomains(envs: Record<string, { domains: unknown[] }>): boolean {
+  for (const v of Object.values(envs)) {
+    if (Array.isArray(v.domains) && v.domains.length > 0) return true;
+  }
+  return false;
+}
 
 export type PipelinePort = z.infer<typeof pipelinePortSchema>;
 export type PipelineBuild = z.infer<typeof pipelineBuildSchema>;
 export type PipelineRuntime = z.infer<typeof pipelineRuntimeSchema>;
+export type PipelineDomain = z.infer<typeof pipelineDomainSchema>;
+export type PipelineEnvironment = z.infer<typeof pipelineEnvironmentSchema>;
 export type PipelineDefinition = z.infer<typeof pipelineDefinitionSchema>;
+
+/**
+ * Resolve the effective `instances` and `domains` for a given environment
+ * name. Top-level fields are the defaults; per-env overrides win when
+ * present. Returns the top-level defaults when the environment isn't in
+ * the map.
+ */
+export function resolveEnvironment(
+  def: PipelineDefinition,
+  envName: string
+): { instances: number; domains: PipelineDomain[] } {
+  const env = def.environments[envName];
+  return {
+    instances: env?.instances ?? def.instances,
+    domains: env?.domains.length ? env.domains : def.domains
+  };
+}
 
 export type PipelineParseResult =
   | { ok: true; pipeline: PipelineDefinition }

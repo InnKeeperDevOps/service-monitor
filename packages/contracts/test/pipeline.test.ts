@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePipelineYaml } from "../src/pipeline.js";
+import { parsePipelineYaml, resolveEnvironment } from "../src/pipeline.js";
 
 describe("parsePipelineYaml", () => {
   it("accepts a minimal valid pipeline", () => {
@@ -96,5 +96,156 @@ ports:
   - port: 80
 `);
     expect(r.ok).toBe(true);
+  });
+
+  describe("instances + domains + environments", () => {
+    const base = `
+version: 1
+runtime:
+  image: nginx:alpine
+  command: ["nginx", "-g", "daemon off;"]
+ports:
+  - port: 80
+    name: http
+  - port: 9090
+    name: metrics
+`;
+
+    it("defaults instances to 1 and domains/environments to empty", () => {
+      const r = parsePipelineYaml(base);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.pipeline.instances).toBe(1);
+      expect(r.pipeline.domains).toEqual([]);
+      expect(r.pipeline.environments).toEqual({});
+    });
+
+    it("accepts top-level instances + domains and per-env overrides", () => {
+      const r = parsePipelineYaml(`${base}
+instances: 1
+domains:
+  - host: dev.example.com
+    port: 80
+    protocol: https
+environments:
+  staging:
+    instances: 2
+    domains:
+      - host: staging.example.com
+        port: 80
+        protocol: https
+  production:
+    instances: 3
+    domains:
+      - host: example.com
+        port: 80
+        protocol: https
+      - host: metrics.example.com
+        port: 9090
+        protocol: https
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.pipeline.environments.staging?.instances).toBe(2);
+      expect(r.pipeline.environments.production?.domains).toHaveLength(2);
+    });
+
+    it("rejects domain.port that is not in ports[]", () => {
+      const r = parsePipelineYaml(`${base}
+domains:
+  - host: oops.example.com
+    port: 8080
+    protocol: https
+`);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toMatch(/8080.*ports/i);
+    });
+
+    it("rejects environments[*].domains[*].port that is not in ports[]", () => {
+      const r = parsePipelineYaml(`${base}
+environments:
+  production:
+    domains:
+      - host: oops.example.com
+        port: 8080
+        protocol: https
+`);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toMatch(/8080.*ports/i);
+    });
+
+    it("rejects environment names that aren't k8s-style", () => {
+      const r = parsePipelineYaml(`${base}
+environments:
+  PROD:
+    instances: 1
+`);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toMatch(/lowercase alphanumeric/);
+    });
+
+    it("rejects domains when ports[] is empty", () => {
+      const r = parsePipelineYaml(`
+version: 1
+runtime:
+  image: alpine
+  command: ["sh"]
+domains:
+  - host: nowhere.example.com
+    port: 80
+    protocol: https
+`);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toMatch(/ports\[\]/);
+    });
+
+    it("rejects malformed hostnames", () => {
+      const r = parsePipelineYaml(`${base}
+domains:
+  - host: "has spaces.example.com"
+    port: 80
+    protocol: https
+`);
+      expect(r.ok).toBe(false);
+    });
+
+    it("resolveEnvironment overlays per-env over defaults", () => {
+      const r = parsePipelineYaml(`${base}
+instances: 1
+domains:
+  - host: default.example.com
+    port: 80
+    protocol: https
+environments:
+  staging:
+    instances: 2
+  production:
+    domains:
+      - host: prod.example.com
+        port: 80
+        protocol: https
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+
+      // staging overrides instances but not domains -> falls back to default domains
+      const staging = resolveEnvironment(r.pipeline, "staging");
+      expect(staging.instances).toBe(2);
+      expect(staging.domains[0]?.host).toBe("default.example.com");
+
+      // production overrides domains but not instances -> falls back to default instances
+      const prod = resolveEnvironment(r.pipeline, "production");
+      expect(prod.instances).toBe(1);
+      expect(prod.domains[0]?.host).toBe("prod.example.com");
+
+      // unknown env -> all defaults
+      const unknown = resolveEnvironment(r.pipeline, "preview");
+      expect(unknown.instances).toBe(1);
+      expect(unknown.domains[0]?.host).toBe("default.example.com");
+    });
   });
 });
