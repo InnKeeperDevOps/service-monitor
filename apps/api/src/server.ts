@@ -46,7 +46,10 @@ import {
   type AgentToPlatformMessage,
   type AgentCommandJob,
   type LogIngestionJob,
-  type TenantSettings
+  type TenantSettings,
+  parsePipelineYaml,
+  selectPipeline,
+  resolveEnvironment
 } from "@sm/contracts";
 import { correlationIdPlugin } from "./correlationId.js";
 import {
@@ -123,6 +126,7 @@ import {
   listBuildArtifacts,
   listBuildsForService,
   listLoadBalancerStatusForTenant,
+  listMissingDeploysForAgent,
   listRunningServicesForAgent,
   upsertLoadBalancerStatus,
   type QueryFn,
@@ -794,6 +798,26 @@ export function buildServer(opts: BuildServerOptions = {}) {
                   })
                 )
               );
+              // Reconcile pass: dispatch redeploy_service for any
+              // bound services that have a successful build but no
+              // lb_status_report. Ensures freshly-bound or
+              // newly-restarted agents catch up to the latest images
+              // without waiting for the next git push.
+              const tenantForReconcile = agentTenantId;
+              setImmediate(() => {
+                reconcileAgentDeploys(tenantForReconcile, agentId)
+                  .then((r) => {
+                    if (r.dispatched > 0 || r.skipped.length > 0) {
+                      req.log?.info?.(
+                        { agentId, ...r },
+                        "agent reconcile dispatched"
+                      );
+                    }
+                  })
+                  .catch((err) =>
+                    req.log?.warn?.({ agentId, err: (err as Error).message }, "agent reconcile failed")
+                  );
+              });
             }
           }
         };
@@ -2440,6 +2464,104 @@ export function buildServer(opts: BuildServerOptions = {}) {
         externalHostname: r.externalHostname
       }));
       return { running };
+    }
+  );
+
+  /**
+   * Reconcile pass — for every service this agent is bound to, if no
+   * lb_status_report row exists yet, dispatch a redeploy_service for
+   * the latest successful build. Idempotent (already-reported services
+   * are skipped). Used both via this endpoint and on agent reconnect.
+   *
+   * The platform fans these out as agent-commands the same way the
+   * worker does after a build; this is just the "catch up" entry
+   * point for newly-bound agents that never saw the build dispatch.
+   */
+  async function reconcileAgentDeploys(
+    tenantId: string,
+    agentId: string
+  ): Promise<{ dispatched: number; skipped: string[] }> {
+    const q = await getBuildsQuery();
+    if (!q) return { dispatched: 0, skipped: [] };
+
+    const agent = await domainStore.getAgent(tenantId, agentId);
+    if (!agent) return { dispatched: 0, skipped: [] };
+    const env = agent.environment ?? "development";
+
+    const missing = await listMissingDeploysForAgent(q, tenantId, agentId);
+    let dispatched = 0;
+    const skipped: string[] = [];
+
+    const apiUrl =
+      process.env.INTERNAL_API_URL?.trim() ?? `http://127.0.0.1:${process.env.PORT ?? "8092"}`;
+    const internalToken = process.env.INTERNAL_API_TOKEN?.trim() || "dev-token";
+
+    for (const m of missing) {
+      // Parse the captured pipeline_yaml + pick the right pipeline
+      // for this service's pipelineName, then resolve env. If the
+      // yaml fails to parse (shouldn't — it parsed at build time)
+      // we skip rather than block other services.
+      const parsed = parsePipelineYaml(m.pipelineYaml);
+      if (!parsed.ok) {
+        skipped.push(`${m.serviceName}: kaiad.yaml parse failed (${parsed.reason})`);
+        continue;
+      }
+      const picked = selectPipeline(parsed, m.pipelineName ?? null);
+      if (!picked.ok) {
+        skipped.push(`${m.serviceName}: ${picked.reason}`);
+        continue;
+      }
+      const resolved = resolveEnvironment(picked.pipeline, env);
+      const commandId = crypto.randomUUID();
+      const job: AgentCommandJob = {
+        agentId,
+        commandId,
+        payload: {
+          type: "redeploy_service",
+          commandId,
+          serviceId: m.serviceId,
+          imageRef: m.imageRef,
+          buildId: m.buildId,
+          environment: env,
+          instances: resolved.instances,
+          domains: resolved.domains,
+          loadBalancer: resolved.loadBalancer,
+          namespace: resolved.namespace
+        }
+      };
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/internal/agent-commands`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${internalToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(job)
+        });
+        if (res.ok) dispatched += 1;
+        else skipped.push(`${m.serviceName}: dispatch ${res.status}`);
+      } catch (err) {
+        skipped.push(`${m.serviceName}: ${(err as Error).message}`);
+      }
+    }
+    return { dispatched, skipped };
+  }
+
+  app.post<{ Params: { agentId: string } }>(
+    "/api/v1/agents/:agentId/reconcile-deploys",
+    async (req, reply) => {
+      const session = await resolveSession(authStore, req.headers.authorization);
+      if (!session) {
+        return reply.status(401).send(
+          apiErrorSchema.parse({
+            code: "UNAUTHORIZED",
+            message: "Missing or invalid bearer token",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const result = await reconcileAgentDeploys(session.tenantId, req.params.agentId);
+      return result;
     }
   );
 

@@ -407,21 +407,24 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
         imageRef: built.imageRef,
         mode: "dockerfile"
       });
-      if (build.triggeredBy === "manual") {
-        await dispatchRedeployToBoundAgents(
-          query,
-          build.id,
-          build.serviceId,
-          built.imageRef,
-          pipeline,
-          logger
-        ).catch((err) => {
-          logger.warn("redeploy dispatch failed", {
-            buildId: build.id,
-            err: (err as Error).message
-          });
+      // Continuous deployment: every successful build (poll-triggered
+      // or manual) dispatches a redeploy to bound agents. The agent
+      // is the source of truth for "is this image actually deployed";
+      // sending the command on every build is idempotent (the agent
+      // re-runs apply with the same manifests when nothing changed).
+      await dispatchRedeployToBoundAgents(
+        query,
+        build.id,
+        build.serviceId,
+        built.imageRef,
+        pipeline,
+        logger
+      ).catch((err) => {
+        logger.warn("redeploy dispatch failed", {
+          buildId: build.id,
+          err: (err as Error).message
         });
-      }
+      });
       return;
     }
 
@@ -485,10 +488,11 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
     await finishBuild(query, build.id, { status: "success", imageRef });
     logger.info("build succeeded", { buildId: build.id, sha: build.gitSha.slice(0, 12), imageRef });
 
-    // Manual builds emit a redeploy_service command to every bound
-    // agent on success. Stub: the agent acknowledges the dispatch but
-    // doesn't yet pull/recreate (per-runtime handler is a follow-up).
-    if (build.triggeredBy === "manual" && imageRef) {
+    // Continuous deployment — every successful build dispatches a
+    // redeploy to bound agents. The agent applies idempotently when
+    // nothing changed, so re-dispatching on poll-triggered builds is
+    // safe and gives operators "push to main → deployed" semantics.
+    if (imageRef) {
       await dispatchRedeployToBoundAgents(
         query,
         build.id,

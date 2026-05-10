@@ -1005,6 +1005,80 @@ export async function listRunningServicesForAgent(
   return rows.map(mapLb);
 }
 
+/**
+ * For an agent's reconcile pass: list every (serviceId, latest
+ * successful build) pair where this agent is bound but no
+ * lb_status_report exists for the (service, env). The caller
+ * dispatches a redeploy_service for each row so the agent catches
+ * up to the latest image without waiting for a fresh build.
+ */
+export async function listMissingDeploysForAgent(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string
+): Promise<
+  Array<{
+    serviceId: string;
+    serviceName: string;
+    branch: string;
+    buildId: string;
+    gitSha: string;
+    imageRef: string;
+    pipelineYaml: string;
+    pipelineName: string | null;
+  }>
+> {
+  // For each (agent, bound service), pick the most recent successful
+  // build that produced an image. Then exclude services that already
+  // have a lb_status_report row keyed by this agent — those are
+  // "already deployed (or being attempted)".
+  //
+  // DISTINCT ON (service_id) + ORDER BY service_id, created_at DESC
+  // gives us the latest build per service in one round trip.
+  const { rows } = await query(
+    `WITH latest_builds AS (
+       SELECT DISTINCT ON (b.service_id)
+              b.service_id,
+              b.id          AS build_id,
+              b.git_sha,
+              b.image_ref,
+              b.pipeline_yaml
+         FROM service_builds b
+        WHERE b.tenant_id = $1
+          AND b.status    = 'success'
+          AND b.image_ref IS NOT NULL
+        ORDER BY b.service_id, b.created_at DESC
+     )
+     SELECT s.id            AS service_id,
+            s.name          AS service_name,
+            s.branch        AS branch,
+            s.pipeline_name AS pipeline_name,
+            lb.build_id,
+            lb.git_sha,
+            lb.image_ref,
+            lb.pipeline_yaml
+       FROM agent_services AS j
+       JOIN monitored_services s ON s.id = j.service_id
+       JOIN latest_builds lb     ON lb.service_id = s.id
+  LEFT JOIN service_loadbalancer_status st
+         ON st.service_id = s.id AND st.agent_id = $2
+      WHERE j.tenant_id = $1
+        AND j.agent_id  = $2
+        AND st.id IS NULL`,
+    [tenantId, agentId]
+  );
+  return rows.map((r) => ({
+    serviceId: String(r.service_id),
+    serviceName: String(r.service_name),
+    branch: String(r.branch),
+    buildId: String(r.build_id),
+    gitSha: String(r.git_sha),
+    imageRef: String(r.image_ref),
+    pipelineYaml: String(r.pipeline_yaml ?? ""),
+    pipelineName: r.pipeline_name == null ? null : String(r.pipeline_name)
+  }));
+}
+
 export async function listLoadBalancerStatusForTenant(
   query: QueryFn,
   tenantId: string
