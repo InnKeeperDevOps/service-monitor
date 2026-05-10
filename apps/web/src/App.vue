@@ -9,6 +9,7 @@ import {
   Key,
   LayoutDashboard,
   LogOut,
+  Network,
   Settings
 } from "lucide-vue-next";
 import "./tokens.css";
@@ -22,6 +23,7 @@ import ServicesPage from "./features/services/ServicesPage.vue";
 import SshKeysPage from "./features/ssh-keys/SshKeysPage.vue";
 import TenantsPage from "./features/tenants/TenantsPage.vue";
 import RegistryPage from "./features/registry/RegistryPage.vue";
+import LoadBalancersPage from "./features/load-balancers/LoadBalancersPage.vue";
 import SettingsPage from "./features/settings/SettingsPage.vue";
 import TenantConfigurationPage from "./features/tenants/TenantConfigurationPage.vue";
 import LoginPage from "./features/auth/LoginPage.vue";
@@ -34,6 +36,7 @@ type Route =
   | "services"
   | "sshKeys"
   | "registry"
+  | "loadBalancers"
   | "settings"
   | "tenants"
   | "tenantConfig"
@@ -45,6 +48,7 @@ const NAV_ITEMS: { route: Route; label: string; icon: Component; adminOnly?: boo
   { route: "services", label: "Services", icon: Box },
   { route: "incidents", label: "Incidents", icon: AlertTriangle },
   { route: "sshKeys", label: "SSH Keys", icon: Key },
+  { route: "loadBalancers", label: "Load Balancers", icon: Network },
   { route: "registry", label: "Registry", icon: Database, adminOnly: true },
   { route: "tenants", label: "Tenants", icon: Building2, adminOnly: true },
   { route: "settings", label: "Settings", icon: Settings, adminOnly: true }
@@ -64,6 +68,7 @@ function readNavFromHash(): { route: Route; tenantConfigTenantId: string | null 
     "services",
     "sshKeys",
     "registry",
+    "loadBalancers",
     "settings",
     "tenants",
     "login"
@@ -252,6 +257,7 @@ const navStyle: CSSProperties = {
       <ServicesPage v-else-if="route === 'services'" />
       <SshKeysPage v-else-if="route === 'sshKeys'" />
       <RegistryPage v-else-if="route === 'registry'" />
+      <LoadBalancersPage v-else-if="route === 'loadBalancers'" />
       <TenantsPage v-else-if="route === 'tenants'" @auth-user-updated="(u: AuthUser) => (user = u)" />
       <SettingsPage v-else-if="route === 'settings'" />
       <TenantConfigurationPage

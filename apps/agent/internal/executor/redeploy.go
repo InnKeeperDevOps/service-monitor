@@ -18,6 +18,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -366,7 +367,144 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 	if err != nil {
 		return CommandResult{Success: false, Output: out.String() + fmt.Sprintf("\nkubectl apply: %v\n", err)}
 	}
-	return CommandResult{Success: true, Output: out.String() + "\nredeploy ok\n"}
+
+	// Query Service / Ingress and push an lb_status_report so the
+	// platform's Load Balancers page can show domain → external IP.
+	// Best-effort: if the LB IP isn't assigned yet (still pending) or
+	// the agent's RBAC blocks the read, we still send what we have so
+	// the row exists with whatever fields the cluster did provide.
+	resourceName := k8sName(in.serviceID)
+	externalIP, externalHostname := queryK8sLbAddress(cctx, namespace, in.loadBalancer.typ, resourceName)
+	reporter, agentID := e.reporterAndID()
+	if reporter != nil {
+		report := buildLbStatusReport(agentID, in, externalIP, externalHostname)
+		if err := reporter(report); err != nil {
+			fmt.Fprintf(&out, "\nlb_status_report send failed: %v\n", err)
+		}
+	}
+
+	if externalIP != "" || externalHostname != "" {
+		fmt.Fprintf(&out, "\nlb endpoint: %s%s\n", externalIP, externalHostname)
+	} else {
+		out.WriteString("\nlb endpoint: (pending; cluster has not assigned an IP yet)\n")
+	}
+	return CommandResult{Success: true, Output: out.String() + "redeploy ok\n"}
+}
+
+// queryK8sLbAddress reads the Service/Ingress that redeployKubernetes
+// just applied and pulls out the assigned external IP / hostname from
+// status.loadBalancer.ingress. Returns ("", "") for the type=none /
+// type=cluster-ip cases or when nothing has been assigned yet.
+//
+// For nginx, the per-service Service stays ClusterIP; the address we
+// want is the Ingress's controller endpoint, so we read the Ingress
+// instead.
+func queryK8sLbAddress(ctx context.Context, namespace, lbType, name string) (string, string) {
+	var resource string
+	switch lbType {
+	case "k8s", "metallb":
+		resource = "svc"
+	case "nginx":
+		resource = "ingress"
+	default:
+		return "", ""
+	}
+	cmd := exec.CommandContext(ctx, "kubectl", "get", resource, name, "-n", namespace, "-o", "json")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", ""
+	}
+	var parsed struct {
+		Status struct {
+			LoadBalancer struct {
+				Ingress []struct {
+					IP       string `json:"ip"`
+					Hostname string `json:"hostname"`
+				} `json:"ingress"`
+			} `json:"loadBalancer"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return "", ""
+	}
+	if len(parsed.Status.LoadBalancer.Ingress) == 0 {
+		return "", ""
+	}
+	first := parsed.Status.LoadBalancer.Ingress[0]
+	return first.IP, first.Hostname
+}
+
+// buildLbStatusReport assembles the JSON payload the platform expects
+// to see on the realtime channel as msg.type = "lb_status_report".
+// Fields mirror the lbStatusReportSchema in @sm/contracts.
+func buildLbStatusReport(agentID string, in redeployInput, externalIP, externalHostname string) map[string]interface{} {
+	domains := make([]map[string]interface{}, 0, len(in.domains))
+	for _, d := range in.domains {
+		domains = append(domains, map[string]interface{}{
+			"host":     d.host,
+			"port":     d.port,
+			"protocol": d.protocol,
+		})
+	}
+	// Deduplicate ports the same way renderK8sManifests does.
+	seen := map[int]bool{}
+	var ports []map[string]interface{}
+	for _, d := range in.domains {
+		if seen[d.port] {
+			continue
+		}
+		seen[d.port] = true
+		ports = append(ports, map[string]interface{}{
+			"port":       d.port,
+			"protocol":   "TCP",
+			"targetPort": d.port,
+		})
+	}
+
+	detail := map[string]interface{}{}
+	switch in.loadBalancer.typ {
+	case "metallb":
+		if in.loadBalancer.addressPool != "" {
+			detail["addressPool"] = in.loadBalancer.addressPool
+		}
+	case "nginx":
+		ingressClass := in.loadBalancer.ingressClass
+		if ingressClass == "" {
+			ingressClass = "nginx"
+		}
+		detail["ingressClass"] = ingressClass
+		if in.loadBalancer.tlsSecret != "" {
+			detail["tlsSecret"] = in.loadBalancer.tlsSecret
+		}
+	case "k8s":
+		if len(in.loadBalancer.annotations) > 0 {
+			detail["annotations"] = in.loadBalancer.annotations
+		}
+	}
+
+	var ip interface{} = nil
+	var host interface{} = nil
+	if externalIP != "" {
+		ip = externalIP
+	}
+	if externalHostname != "" {
+		host = externalHostname
+	}
+
+	return map[string]interface{}{
+		"type":             "lb_status_report",
+		"agentId":          agentID,
+		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+		"serviceId":        in.serviceID,
+		"environment":      in.environment,
+		"buildId":          in.buildID,
+		"lbType":           in.loadBalancer.typ,
+		"externalIp":       ip,
+		"externalHostname": host,
+		"ports":            ports,
+		"domains":          domains,
+		"detail":           detail,
+	}
 }
 
 // renderK8sManifests builds Deployment + Service + (optional) Ingress

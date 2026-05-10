@@ -232,6 +232,26 @@ func NewClient(url string, agentID string, opts ...ClientOption) *Client {
 	return c
 }
 
+// SendPlatformMessage marshals payload to JSON and writes it on the
+// active realtime websocket. Used by command handlers (notably
+// redeploy_service) to push observation messages such as
+// `lb_status_report`. No-op when no connection is active — caller
+// should treat that as best-effort.
+func (c *Client) SendPlatformMessage(payload map[string]interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal platform message: %w", err)
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.activeConn == nil {
+		return fmt.Errorf("no active websocket")
+	}
+	t, _ := payload["type"].(string)
+	c.protoDebug("outbound %s bytes=%d", t, len(body))
+	return c.activeConn.WriteMessage(websocket.TextMessage, body)
+}
+
 func (c *Client) protoDebug(format string, args ...interface{}) {
 	if c.protocolDebug == nil {
 		return

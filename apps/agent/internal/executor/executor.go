@@ -39,12 +39,20 @@ type ProcessReconciler interface {
 	Reconcile(desired []managed.DesiredProcess)
 }
 
+// PlatformReporter is a callback that ships a free-form JSON payload to
+// the platform over the existing realtime websocket. Used by command
+// handlers (notably redeploy_service) to send observation messages
+// like lb_status_report alongside the regular command_ack.
+type PlatformReporter func(payload map[string]interface{}) error
+
 type Executor struct {
 	mu        sync.RWMutex
 	docker    *docker.Client
 	backend   RuntimeBackend
 	inventory *managed.Inventory
 	procSup   ProcessReconciler
+	reporter  PlatformReporter
+	agentID   string
 }
 
 const defaultPlanTimeout = 5 * time.Minute
@@ -68,6 +76,30 @@ func (e *Executor) SetProcessReconciler(sup ProcessReconciler) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.procSup = sup
+}
+
+// SetPlatformReporter wires the callback that command handlers use to
+// push observation messages (lb_status_report etc.) back to the
+// platform. Optional — handlers fall back gracefully when nil.
+func (e *Executor) SetPlatformReporter(r PlatformReporter) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reporter = r
+}
+
+// SetAgentID records the identity the agent uses on the wire so command
+// handlers can stamp `agentId` into reporter payloads without each
+// caller threading it through.
+func (e *Executor) SetAgentID(id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.agentID = id
+}
+
+func (e *Executor) reporterAndID() (PlatformReporter, string) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.reporter, e.agentID
 }
 
 // Configure updates Docker handle, runtime mode, and Kaiad tenant policy after the realtime hello.

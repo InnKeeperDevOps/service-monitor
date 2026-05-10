@@ -122,7 +122,10 @@ import {
   getBuildArtifact,
   listBuildArtifacts,
   listBuildsForService,
-  type QueryFn
+  listLoadBalancerStatusForTenant,
+  upsertLoadBalancerStatus,
+  type QueryFn,
+  type LoadBalancerStatusRow
 } from "@sm/db";
 
 const startedAt = Date.now();
@@ -997,6 +1000,37 @@ export function buildServer(opts: BuildServerOptions = {}) {
                   );
                 }
               }
+            }
+          }
+        }
+
+        if (msg.type === "lb_status_report") {
+          // Per-service load-balancer observation. The agent sends this
+          // after a successful redeploy_service so the panel's Load
+          // Balancers page can show domain → external IP : port.
+          const tenantId = agentTenantId;
+          if (tenantId) {
+            try {
+              const q = await getBuildsQuery();
+              if (q) {
+                await upsertLoadBalancerStatus(q, {
+                  tenantId,
+                  serviceId: msg.serviceId,
+                  agentId: msg.agentId,
+                  environment: msg.environment,
+                  lbType: msg.lbType,
+                  externalIp: msg.externalIp,
+                  externalHostname: msg.externalHostname,
+                  ports: msg.ports,
+                  domains: msg.domains,
+                  detail: msg.detail
+                });
+              }
+            } catch (err) {
+              req.log?.warn?.(
+                { err: (err as Error).message, serviceId: msg.serviceId, env: msg.environment },
+                "lb_status_report upsert failed"
+              );
             }
           }
         }
@@ -2146,6 +2180,43 @@ export function buildServer(opts: BuildServerOptions = {}) {
     return updated;
   });
 
+
+  // ── Load-balancer rollup ────────────────────────────────────────────
+  // Joins service_loadbalancer_status (filled by agents reporting
+  // post-redeploy) with the bound services + their resolved domains/
+  // ports. The panel's Load Balancers page calls this to render
+  // domain → external IP : port across every service this tenant has.
+  app.get("/api/v1/load-balancers", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply
+        .status(401)
+        .send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    const q = await getBuildsQuery();
+    if (!q) return { entries: [] };
+    const rows = await listLoadBalancerStatusForTenant(q, session.tenantId);
+    const services = await domainStore.listServices(session.tenantId);
+    const byId = new Map(services.map((s) => [s.id, s]));
+    const entries = rows.map((r: LoadBalancerStatusRow) => {
+      const svc = byId.get(r.serviceId);
+      return {
+        id: r.id,
+        serviceId: r.serviceId,
+        serviceName: svc?.name ?? r.serviceId,
+        agentId: r.agentId,
+        environment: r.environment,
+        lbType: r.lbType,
+        externalIp: r.externalIp,
+        externalHostname: r.externalHostname,
+        ports: r.ports,
+        domains: r.domains,
+        detail: r.detail,
+        observedAt: r.observedAt
+      };
+    });
+    return { entries };
+  });
 
   app.delete<{ Params: { id: string } }>("/api/v1/services/:id", async (req, reply) => {
     const session = await resolveSession(authStore, req.headers.authorization);

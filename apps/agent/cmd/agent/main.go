@@ -243,6 +243,12 @@ func main() {
 
 	var _ docker.LogSender = client
 
+	// Wire the reporter callback so command handlers (notably
+	// redeploy_service in k8s mode) can push lb_status_report messages
+	// over the same websocket the client owns.
+	exec.SetPlatformReporter(client.SendPlatformMessage)
+	exec.SetAgentID(agentID)
+
 	if err := client.RunContext(ctx); err != nil {
 		log.Fatalf("agent failed: %v", err)
 	}

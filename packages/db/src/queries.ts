@@ -878,6 +878,108 @@ export async function listBuildArtifacts(
   return rows.map(mapArtifact);
 }
 
+// ---------------------------------------------------------------------------
+// Load balancer / ingress status (one row per service+environment, upserted
+// by the agent after a successful redeploy_service)
+// ---------------------------------------------------------------------------
+
+export type LoadBalancerType = "none" | "k8s" | "metallb" | "nginx";
+
+export interface LoadBalancerStatusRow {
+  id: string;
+  tenantId: string;
+  serviceId: string;
+  agentId: string | null;
+  environment: string;
+  lbType: LoadBalancerType;
+  externalIp: string | null;
+  externalHostname: string | null;
+  ports: Array<{ port: number; name?: string; protocol?: string; targetPort?: number }>;
+  domains: Array<{ host: string; port: number; protocol: "http" | "https" }>;
+  detail: Record<string, unknown>;
+  observedAt: string;
+}
+
+function mapLb(r: Record<string, unknown>): LoadBalancerStatusRow {
+  return {
+    id: String(r.id),
+    tenantId: String(r.tenant_id),
+    serviceId: String(r.service_id),
+    agentId: r.agent_id == null ? null : String(r.agent_id),
+    environment: String(r.environment),
+    lbType: String(r.lb_type) as LoadBalancerType,
+    externalIp: r.external_ip == null ? null : String(r.external_ip),
+    externalHostname: r.external_hostname == null ? null : String(r.external_hostname),
+    ports: Array.isArray(r.ports) ? (r.ports as LoadBalancerStatusRow["ports"]) : [],
+    domains: Array.isArray(r.domains) ? (r.domains as LoadBalancerStatusRow["domains"]) : [],
+    detail: typeof r.detail === "object" && r.detail !== null
+      ? (r.detail as Record<string, unknown>)
+      : {},
+    observedAt: new Date(r.observed_at as string).toISOString()
+  };
+}
+
+export async function upsertLoadBalancerStatus(
+  query: QueryFn,
+  data: {
+    tenantId: string;
+    serviceId: string;
+    agentId: string | null;
+    environment: string;
+    lbType: LoadBalancerType;
+    externalIp: string | null;
+    externalHostname: string | null;
+    ports: LoadBalancerStatusRow["ports"];
+    domains: LoadBalancerStatusRow["domains"];
+    detail: Record<string, unknown>;
+  }
+): Promise<LoadBalancerStatusRow> {
+  const id = crypto.randomUUID();
+  const { rows } = await query(
+    `INSERT INTO service_loadbalancer_status
+       (id, tenant_id, service_id, agent_id, environment, lb_type,
+        external_ip, external_hostname, ports, domains, detail, observed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, now())
+     ON CONFLICT (service_id, environment) DO UPDATE SET
+       agent_id = EXCLUDED.agent_id,
+       lb_type = EXCLUDED.lb_type,
+       external_ip = EXCLUDED.external_ip,
+       external_hostname = EXCLUDED.external_hostname,
+       ports = EXCLUDED.ports,
+       domains = EXCLUDED.domains,
+       detail = EXCLUDED.detail,
+       observed_at = now()
+     RETURNING *`,
+    [
+      id,
+      data.tenantId,
+      data.serviceId,
+      data.agentId,
+      data.environment,
+      data.lbType,
+      data.externalIp,
+      data.externalHostname,
+      JSON.stringify(data.ports),
+      JSON.stringify(data.domains),
+      JSON.stringify(data.detail)
+    ]
+  );
+  return mapLb(rows[0]);
+}
+
+export async function listLoadBalancerStatusForTenant(
+  query: QueryFn,
+  tenantId: string
+): Promise<LoadBalancerStatusRow[]> {
+  const { rows } = await query(
+    `SELECT * FROM service_loadbalancer_status
+      WHERE tenant_id = $1
+      ORDER BY observed_at DESC`,
+    [tenantId]
+  );
+  return rows.map(mapLb);
+}
+
 export async function getBuildArtifact(
   query: QueryFn,
   buildId: string,

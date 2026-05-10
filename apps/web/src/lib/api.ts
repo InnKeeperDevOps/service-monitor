@@ -216,6 +216,21 @@ export type OAuthProviderConfigPayload = {
   scopes: string[];
 };
 
+export type LoadBalancerEntry = {
+  id: string;
+  serviceId: string;
+  serviceName: string;
+  agentId: string | null;
+  environment: string;
+  lbType: "none" | "k8s" | "metallb" | "nginx";
+  externalIp: string | null;
+  externalHostname: string | null;
+  ports: Array<{ port: number; name?: string; protocol?: string; targetPort?: number }>;
+  domains: Array<{ host: string; port: number; protocol: "http" | "https" }>;
+  detail: Record<string, unknown>;
+  observedAt: string;
+};
+
 export type BuildStatus = "queued" | "running" | "success" | "failed" | "no_pipeline";
 export type BuildTrigger = "poll" | "manual";
 
@@ -384,6 +399,9 @@ export const api = {
     apiFetch<void>(`/api/v1/services/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
+
+  listLoadBalancers: () =>
+    apiFetch<{ entries: LoadBalancerEntry[] }>("/api/v1/load-balancers"),
 
   // --- Service builds ---
 

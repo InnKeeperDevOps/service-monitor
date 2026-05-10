@@ -41,6 +41,51 @@ const commandAckSchema = z.object({
   output: z.string().optional()
 });
 
+/**
+ * Agent-side observation of the externally-facing endpoints for a
+ * service it deployed via redeploy_service. Sent right after a
+ * successful kubectl apply (in k8s mode) or `docker run` (in docker
+ * mode). Server upserts service_loadbalancer_status keyed by
+ * (service_id, environment).
+ *
+ * The agent reports as much as the cluster has assigned at the moment.
+ * For metallb / cloud LB, externalIp/externalHostname populate; for
+ * ingress-nginx the controller's external endpoint is reported in
+ * externalIp/externalHostname and the ingress class lives in detail.
+ * Fields that aren't applicable are null/empty.
+ */
+const lbStatusReportSchema = z.object({
+  type: z.literal("lb_status_report"),
+  agentId: z.string(),
+  ts: z.string(),
+  serviceId: z.string(),
+  environment: z.string(),
+  buildId: z.string().optional(),
+  lbType: z.enum(["none", "k8s", "metallb", "nginx"]),
+  externalIp: z.string().nullable(),
+  externalHostname: z.string().nullable(),
+  ports: z
+    .array(
+      z.object({
+        port: z.number().int(),
+        name: z.string().optional(),
+        protocol: z.string().optional(),
+        targetPort: z.number().int().optional()
+      })
+    )
+    .default([]),
+  domains: z
+    .array(
+      z.object({
+        host: z.string(),
+        port: z.number().int(),
+        protocol: z.enum(["http", "https"])
+      })
+    )
+    .default([]),
+  detail: z.record(z.unknown()).default({})
+});
+
 /** Periodic host and agent-process telemetry (CPU, memory, disk, network throughput). */
 export const hostStatsSchema = z.object({
   type: z.literal("host_stats"),
@@ -108,8 +153,11 @@ export const agentToPlatformMessageSchema = z.discriminatedUnion("type", [
   commandAckSchema,
   hostStatsSchema,
   appStatsSchema,
-  appLogErrorSchema
+  appLogErrorSchema,
+  lbStatusReportSchema
 ]);
+
+export type LbStatusReportMessage = z.infer<typeof lbStatusReportSchema>;
 
 /** Snapshot of an error group surfaced to the panel. */
 export const errorGroupSchema = z.object({

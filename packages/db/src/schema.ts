@@ -271,6 +271,46 @@ create index if not exists service_builds_status_idx
 -- in app code, which is enough — we don't need to enforce at DB level.
 drop index if exists service_builds_service_sha_uniq;
 
+-- Load balancer / ingress observation. The agent reports the
+-- assigned external IP (and / or hostname for cloud providers that
+-- give DNS names instead) for each Service/Ingress it deployed via
+-- redeploy_service. Keyed (service_id, environment) since one
+-- service can have a different LB per env.
+create table if not exists service_loadbalancer_status (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  service_id text not null references monitored_services(id) on delete cascade,
+  -- Which agent produced this observation. Useful when one service
+  -- is deployed across multiple agents (HA / multi-cluster) so we
+  -- can show which cluster the IP belongs to.
+  agent_id text references agents(id) on delete set null,
+  environment text not null,
+  -- Mirrors the loadBalancer.type from the resolved kaiad.yaml block:
+  -- 'none' | 'k8s' | 'metallb' | 'nginx'
+  lb_type text not null,
+  -- Externally-assigned IPv4/IPv6. NULL when none reported (e.g.
+  -- cluster gave hostname instead, or assignment still pending).
+  external_ip text,
+  -- Externally-assigned DNS hostname (AWS NLB-style). NULL when not
+  -- applicable.
+  external_hostname text,
+  -- Ports actually exposed on the LB. JSON array of
+  -- { port, name, protocol, target_port }.
+  ports jsonb not null default '[]'::jsonb,
+  -- Domain rules that point at this LB. JSON array of
+  -- { host, port, protocol }. Mirrored from the resolved kaiad.yaml
+  -- so the panel can show domain → IP without re-parsing yaml.
+  domains jsonb not null default '[]'::jsonb,
+  -- Free-form per-type detail. e.g. metallb → { addressPool }, nginx
+  -- → { ingressClass, tlsSecret }.
+  detail jsonb not null default '{}'::jsonb,
+  observed_at timestamptz not null default now(),
+  unique (service_id, environment)
+);
+
+create index if not exists service_loadbalancer_status_tenant_id_idx
+  on service_loadbalancer_status(tenant_id);
+
 create table if not exists service_build_artifacts (
   build_id text not null references service_builds(id) on delete cascade,
   name text not null,
