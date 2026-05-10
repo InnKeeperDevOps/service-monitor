@@ -381,17 +381,16 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
     //    comes from the Dockerfile. Skip the entire crane-assembly
     //    flow below.
     if (pipeline.dockerfile) {
-      if (!hostWs) {
-        const reason =
-          "KAIAD_BUILDS_HOST_DIR is not set; dockerfile mode requires a shared host bind mount.";
-        await appendBuildLog(query, build.id, `${reason}\n`);
-        await finishBuild(query, build.id, { status: "failed", failureReason: reason });
-        return;
-      }
+      // Dockerfile mode reads the build context with the docker CLI
+      // (which runs INSIDE the kaiad container), so the path passed
+      // to `docker build` must be the container-side workspace path
+      // — NOT the host path. The CLI tarballs and POSTs the context
+      // to the daemon; the daemon never reads it from its own
+      // filesystem.
       const built = await buildViaDockerfile({
         query,
         buildId: build.id,
-        hostWs,
+        ws,
         pipeline,
         serviceName: svc.name,
         sha: build.gitSha
@@ -1072,12 +1071,13 @@ function runProcStreaming(
 async function buildViaDockerfile(params: {
   query: QueryFn;
   buildId: string;
-  hostWs: string;
+  /** Container-side path to the cloned workspace. */
+  ws: string;
   pipeline: PipelineDefinition;
   serviceName: string;
   sha: string;
 }): Promise<{ ok: true; imageRef: string } | { ok: false; reason: string }> {
-  const { query, buildId, hostWs, pipeline, serviceName, sha } = params;
+  const { query, buildId, ws, pipeline, serviceName, sha } = params;
   const df = pipeline.dockerfile;
   if (!df) {
     return { ok: false, reason: "buildViaDockerfile called without pipeline.dockerfile" };
@@ -1091,10 +1091,11 @@ async function buildViaDockerfile(params: {
 
   await appendBuildLog(query, buildId, banner(`dockerfile mode — ${df.path} @ ${df.context}`));
 
-  // docker build expects host paths; resolve relative to the bind-
-  // mounted hostWs.
-  const ctxPath = path.posix.join(hostWs, df.context);
-  const dockerfilePath = path.posix.join(hostWs, df.path);
+  // The docker CLI runs in this container, reads the context from this
+  // container's filesystem, tarballs it, and POSTs to the host daemon.
+  // Container-side ws paths are what the CLI needs.
+  const ctxPath = path.posix.join(ws, df.context);
+  const dockerfilePath = path.posix.join(ws, df.path);
 
   const buildArgs: string[] = ["build", "-f", dockerfilePath, "-t", externalRef, "-t", externalLatestRef];
   for (const [k, v] of Object.entries(df.args)) {
