@@ -269,10 +269,99 @@ func (e *Executor) redeployDocker(
 		logf("started %s (%s)", name, shortID(id))
 	}
 
+	// Report the per-service endpoint to the platform so the panel's
+	// Load Balancers page can show domain → host:port for docker
+	// agents too. Docker mode has no cluster-side LB; the "external
+	// endpoint" is the docker host itself, surfaced via
+	// KAIAD_AGENT_EXTERNAL_HOST or os.Hostname() as a fallback.
+	reporter, agentID := e.reporterAndID()
+	if reporter != nil {
+		report := buildDockerLbStatusReport(agentID, in, publishPorts)
+		if err := reporter(report); err != nil {
+			fmt.Fprintf(&out, "lb_status_report send failed: %v\n", err)
+		}
+	}
+
 	return CommandResult{
 		Success: true,
 		Output: out.String() +
 			fmt.Sprintf("redeploy ok: %d replica(s) running %s\n", in.instances, in.imageRef),
+	}
+}
+
+// buildDockerLbStatusReport mirrors the k8s-mode reporter for docker
+// agents. The "external endpoint" is the docker host:
+//   - KAIAD_AGENT_EXTERNAL_HOST env var if the operator set it (the
+//     stable answer — e.g. "edge-01.example.com" or "203.0.113.5")
+//   - else os.Hostname() (best-effort; what the kernel reports)
+//
+// Domains are emitted only when port-publishing happened (instances=1)
+// since multi-replica docker has no fronting LB by default and the
+// kaiad.yaml domains have nothing to actually route to until one is
+// added externally.
+func buildDockerLbStatusReport(agentID string, in redeployInput, publishedPorts bool) map[string]interface{} {
+	host := strings.TrimSpace(os.Getenv("KAIAD_AGENT_EXTERNAL_HOST"))
+	if host == "" {
+		if hn, err := os.Hostname(); err == nil {
+			host = hn
+		}
+	}
+	var hostField interface{} = nil
+	if host != "" {
+		hostField = host
+	}
+
+	domains := make([]map[string]interface{}, 0, len(in.domains))
+	if publishedPorts {
+		for _, d := range in.domains {
+			domains = append(domains, map[string]interface{}{
+				"host":     d.host,
+				"port":     d.port,
+				"protocol": d.protocol,
+			})
+		}
+	}
+
+	seen := map[int]bool{}
+	var ports []map[string]interface{}
+	if publishedPorts {
+		for _, d := range in.domains {
+			if seen[d.port] {
+				continue
+			}
+			seen[d.port] = true
+			ports = append(ports, map[string]interface{}{
+				"port":       d.port,
+				"protocol":   "TCP",
+				"targetPort": d.port,
+			})
+		}
+	}
+
+	detail := map[string]interface{}{}
+	if !publishedPorts && in.instances > 1 {
+		detail["note"] = fmt.Sprintf(
+			"docker host-port publish skipped (instances=%d > 1); set up an external LB to route to these replicas",
+			in.instances,
+		)
+	}
+
+	return map[string]interface{}{
+		"type":             "lb_status_report",
+		"agentId":          agentID,
+		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+		"serviceId":        in.serviceID,
+		"environment":      in.environment,
+		"buildId":          in.buildID,
+		// Docker doesn't have a "type" in the k8s sense; use the
+		// kaiad.yaml-declared lbType so the panel groups consistently
+		// (most docker services declare "none").
+		"lbType":           in.loadBalancer.typ,
+		"externalIp":       nil,
+		"externalHostname": hostField,
+		"ports":            ports,
+		"domains":          domains,
+		"detail":           detail,
 	}
 }
 
