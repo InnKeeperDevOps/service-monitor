@@ -8,6 +8,7 @@ import {
 } from "./index.js";
 import { BUILT_IN_DETECTORS } from "@sm/domain";
 import { createLogIngestionProcessor, type IncidentStore, type LogIngestionResult } from "./log-ingestion.js";
+import { startBuildLoops, type BuildLoopHandles } from "./builds.js";
 
 export type RedisConnection = ReturnType<typeof createRedisConnectionFromEnv>;
 
@@ -123,21 +124,33 @@ export function wireBullmqWorkers(
 export function startQueueConsumersFromEnv(env: NodeJS.ProcessEnv = process.env): {
   connection: RedisConnection | null;
   workers: Worker[];
+  buildLoops: Promise<BuildLoopHandles | null>;
 } {
+  // Build pipeline runs whether or not Redis is up — the queue is the
+  // service_builds table itself, not BullMQ. Kick it off independently.
+  const buildLoops = startBuildLoops(env).catch((err) => {
+    console.error("[worker] build loops failed to start", err);
+    return null;
+  });
   if (env.REDIS_DISABLED === "1") {
-    return { connection: null, workers: [] };
+    return { connection: null, workers: [], buildLoops };
   }
   const connection = createRedisConnectionFromEnv(env);
   const workers = wireBullmqWorkers(connection, env);
-  return { connection, workers };
+  return { connection, workers, buildLoops };
 }
 
 export async function shutdownWorkersAndRedis(
   workers: Worker[],
-  connection: RedisConnection | null
+  connection: RedisConnection | null,
+  buildLoops?: Promise<BuildLoopHandles | null>
 ): Promise<void> {
   await Promise.all(workers.map((w) => w.close()));
   if (connection) {
     await connection.quit();
+  }
+  if (buildLoops) {
+    const handles = await buildLoops;
+    if (handles) await handles.stop();
   }
 }

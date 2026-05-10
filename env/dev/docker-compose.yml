@@ -4,6 +4,12 @@ services:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.unified
     user: "1000:1000"
+    # Add the host's `docker` group so UID 1000 in the container can
+    # access /var/run/docker.sock for the build pipeline. The default
+    # 983 matches this dev host (`getent group docker` → 983); override
+    # via DOCKER_GID env if your host differs (Debian's default is 999).
+    group_add:
+      - "${DOCKER_GID:-983}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -17,12 +23,36 @@ services:
       - DATABASE_URL=postgres://postgres:postgres@postgres:5432/service_monitor
       - REDIS_URL=redis://redis:6379
       - VITE_API_BASE=http://panel.dev.kaiad.dev
+      # Build pipeline: workspace dir paths the host docker daemon will
+      # see when the worker spawns build containers. The bind mount
+      # below makes /data/builds inside the container == this host path.
+      # The build worker writes to /data/builds/<id>/... and constructs
+      # `docker run -v <KAIAD_BUILDS_HOST_DIR>/<id>/workspace:/workspace`.
+      - KAIAD_BUILDS_HOST_DIR=${PWD}/data/kaiad-builds
+      # Internal hostname the build worker uses when crane-pushing the
+      # runtime image. registry:5000 is the compose-DNS name; pushing
+      # through this avoids the openresty/nginx round trip and works
+      # without configuring host /etc/hosts. The image ref recorded in
+      # the DB still uses the external host (KAIAD_REGISTRY_HOST below).
+      - KAIAD_REGISTRY_INTERNAL=registry:5000
+      - KAIAD_REGISTRY_HOST=panel.dev.kaiad.dev
     volumes:
       - ./data/kaiad:/data
       # Registry-auth keypair shared rw with kaiad (writes on first boot
       # if missing) and ro to the registry container (reads cert.pem
       # for JWT verification).
       - ./data/registry-auth:/data/registry-auth
+      # Build pipeline workspace + artifact root. Bound so the same
+      # path is reachable from the host docker daemon (which spawns
+      # the build containers via the socket below). The container
+      # writes to /data/builds/<id>/...; the host sees it at
+      # ${KAIAD_BUILDS_HOST_DIR} per the env var above.
+      - ./data/kaiad-builds:/data/builds
+      # Build pipeline engine: kaiad's worker shells out to `docker run`
+      # against the host daemon to execute build steps. Alternatives
+      # (kaniko, dind) still need this socket to launch their own
+      # containers, so they'd add work without adding isolation here.
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8092:8092"
     healthcheck:

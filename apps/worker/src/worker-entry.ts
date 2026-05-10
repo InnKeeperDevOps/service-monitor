@@ -14,7 +14,7 @@ const host = process.env.WORKER_HEALTH_HOST ?? "0.0.0.0";
 const port = resolveListenPort();
 const server = createHealthServer();
 
-const { connection, workers } = startQueueConsumersFromEnv(process.env);
+const { connection, workers, buildLoops } = startQueueConsumersFromEnv(process.env);
 
 if (process.env.REDIS_DISABLED === "1") {
   console.error("[worker] REDIS_DISABLED=1 — BullMQ workers not started");
@@ -40,7 +40,7 @@ async function shutdown(signal: string) {
   shuttingDown = true;
   console.error(`[worker] ${signal} — shutting down`);
   try {
-    await shutdownWorkersAndRedis(workers, connection);
+    await shutdownWorkersAndRedis(workers, connection, buildLoops);
   } catch (e) {
     console.error("[worker] shutdown error", e);
   }

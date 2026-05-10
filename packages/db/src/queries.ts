@@ -578,3 +578,261 @@ export async function touchApiCredentialLastUsed(
 ): Promise<void> {
   await query(`UPDATE api_credentials SET last_used_at = now() WHERE id = $1`, [id]);
 }
+
+// ---------------------------------------------------------------------------
+// Build pipeline (service_builds, service_build_artifacts)
+// ---------------------------------------------------------------------------
+
+export type BuildStatus = "queued" | "running" | "success" | "failed" | "no_pipeline";
+
+export interface ServiceBuildRow {
+  id: string;
+  tenantId: string;
+  serviceId: string;
+  gitSha: string;
+  branch: string;
+  status: BuildStatus;
+  imageRef: string | null;
+  log: string;
+  pipelineYaml: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface ServiceBuildArtifactRow {
+  buildId: string;
+  name: string;
+  sizeBytes: number;
+  sha256: string;
+  relPath: string;
+  createdAt: string;
+}
+
+function mapBuild(r: Record<string, unknown>): ServiceBuildRow {
+  return {
+    id: String(r.id),
+    tenantId: String(r.tenant_id),
+    serviceId: String(r.service_id),
+    gitSha: String(r.git_sha),
+    branch: String(r.branch),
+    status: String(r.status) as BuildStatus,
+    imageRef: r.image_ref == null ? null : String(r.image_ref),
+    log: String(r.log ?? ""),
+    pipelineYaml: r.pipeline_yaml == null ? null : String(r.pipeline_yaml),
+    failureReason: r.failure_reason == null ? null : String(r.failure_reason),
+    createdAt: new Date(r.created_at as string).toISOString(),
+    startedAt: r.started_at == null ? null : new Date(r.started_at as string).toISOString(),
+    finishedAt: r.finished_at == null ? null : new Date(r.finished_at as string).toISOString()
+  };
+}
+
+function mapArtifact(r: Record<string, unknown>): ServiceBuildArtifactRow {
+  return {
+    buildId: String(r.build_id),
+    name: String(r.name),
+    sizeBytes: Number(r.size_bytes),
+    sha256: String(r.sha256),
+    relPath: String(r.rel_path),
+    createdAt: new Date(r.created_at as string).toISOString()
+  };
+}
+
+/**
+ * Insert a queued build. Returns null if a build for (service_id, git_sha)
+ * already exists — the unique index on those columns enforces dedupe at
+ * the DB layer so the poller can call this freely on every tick.
+ */
+export async function enqueueBuild(
+  query: QueryFn,
+  data: {
+    tenantId: string;
+    serviceId: string;
+    gitSha: string;
+    branch: string;
+  }
+): Promise<ServiceBuildRow | null> {
+  const id = crypto.randomUUID();
+  const { rows } = await query(
+    `INSERT INTO service_builds (id, tenant_id, service_id, git_sha, branch, status)
+     VALUES ($1, $2, $3, $4, $5, 'queued')
+     ON CONFLICT (service_id, git_sha) DO NOTHING
+     RETURNING *`,
+    [id, data.tenantId, data.serviceId, data.gitSha, data.branch]
+  );
+  return rows.length === 0 ? null : mapBuild(rows[0]);
+}
+
+/**
+ * Atomically claim the next queued build (FIFO by created_at). Sets
+ * status='running' and started_at=now() in the same UPDATE so two
+ * builders racing for the same row get exactly one winner.
+ */
+export async function claimNextBuild(query: QueryFn): Promise<ServiceBuildRow | null> {
+  const { rows } = await query(
+    `UPDATE service_builds
+        SET status = 'running', started_at = now()
+      WHERE id = (
+        SELECT id FROM service_builds
+         WHERE status = 'queued'
+         ORDER BY created_at ASC
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING *`,
+    []
+  );
+  return rows.length === 0 ? null : mapBuild(rows[0]);
+}
+
+export async function appendBuildLog(
+  query: QueryFn,
+  buildId: string,
+  chunk: string
+): Promise<void> {
+  if (chunk.length === 0) return;
+  await query(`UPDATE service_builds SET log = log || $2 WHERE id = $1`, [buildId, chunk]);
+}
+
+export async function setBuildPipelineYaml(
+  query: QueryFn,
+  buildId: string,
+  yamlText: string
+): Promise<void> {
+  await query(`UPDATE service_builds SET pipeline_yaml = $2 WHERE id = $1`, [buildId, yamlText]);
+}
+
+export async function finishBuild(
+  query: QueryFn,
+  buildId: string,
+  data: { status: BuildStatus; imageRef?: string | null; failureReason?: string | null }
+): Promise<void> {
+  await query(
+    `UPDATE service_builds
+        SET status = $2,
+            image_ref = COALESCE($3, image_ref),
+            failure_reason = COALESCE($4, failure_reason),
+            finished_at = now()
+      WHERE id = $1`,
+    [buildId, data.status, data.imageRef ?? null, data.failureReason ?? null]
+  );
+}
+
+export async function listBuildsForService(
+  query: QueryFn,
+  tenantId: string,
+  serviceId: string,
+  limit = 50
+): Promise<ServiceBuildRow[]> {
+  const { rows } = await query(
+    `SELECT * FROM service_builds
+      WHERE tenant_id = $1 AND service_id = $2
+      ORDER BY created_at DESC
+      LIMIT $3`,
+    [tenantId, serviceId, limit]
+  );
+  return rows.map(mapBuild);
+}
+
+export async function getBuild(
+  query: QueryFn,
+  tenantId: string,
+  buildId: string
+): Promise<ServiceBuildRow | undefined> {
+  const { rows } = await query(
+    `SELECT * FROM service_builds WHERE tenant_id = $1 AND id = $2`,
+    [tenantId, buildId]
+  );
+  return rows.length === 0 ? undefined : mapBuild(rows[0]);
+}
+
+/**
+ * Returns the most recent build SHA we've seen for this service (any
+ * status, including no_pipeline). Used by the poller to decide whether
+ * to enqueue.
+ */
+export async function getLatestBuildSha(
+  query: QueryFn,
+  serviceId: string
+): Promise<string | null> {
+  const { rows } = await query(
+    `SELECT git_sha FROM service_builds
+      WHERE service_id = $1
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [serviceId]
+  );
+  return rows.length === 0 ? null : String(rows[0].git_sha);
+}
+
+export async function listAllServicesForPoller(
+  query: QueryFn
+): Promise<
+  Array<{
+    id: string;
+    tenantId: string;
+    name: string;
+    gitRepoUrl: string;
+    sshKeyId: string | null;
+    branch: string;
+  }>
+> {
+  const { rows } = await query(
+    `SELECT id, tenant_id, name, git_repo_url, ssh_key_id, branch
+       FROM monitored_services`,
+    []
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    tenantId: String(r.tenant_id),
+    name: String(r.name),
+    gitRepoUrl: String(r.git_repo_url),
+    sshKeyId: r.ssh_key_id == null ? null : String(r.ssh_key_id),
+    branch: String(r.branch)
+  }));
+}
+
+export async function recordBuildArtifact(
+  query: QueryFn,
+  data: {
+    buildId: string;
+    name: string;
+    sizeBytes: number;
+    sha256: string;
+    relPath: string;
+  }
+): Promise<void> {
+  await query(
+    `INSERT INTO service_build_artifacts (build_id, name, size_bytes, sha256, rel_path)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (build_id, name) DO UPDATE
+       SET size_bytes = EXCLUDED.size_bytes,
+           sha256 = EXCLUDED.sha256,
+           rel_path = EXCLUDED.rel_path`,
+    [data.buildId, data.name, data.sizeBytes, data.sha256, data.relPath]
+  );
+}
+
+export async function listBuildArtifacts(
+  query: QueryFn,
+  buildId: string
+): Promise<ServiceBuildArtifactRow[]> {
+  const { rows } = await query(
+    `SELECT * FROM service_build_artifacts WHERE build_id = $1 ORDER BY name`,
+    [buildId]
+  );
+  return rows.map(mapArtifact);
+}
+
+export async function getBuildArtifact(
+  query: QueryFn,
+  buildId: string,
+  name: string
+): Promise<ServiceBuildArtifactRow | undefined> {
+  const { rows } = await query(
+    `SELECT * FROM service_build_artifacts WHERE build_id = $1 AND name = $2`,
+    [buildId, name]
+  );
+  return rows.length === 0 ? undefined : mapArtifact(rows[0]);
+}

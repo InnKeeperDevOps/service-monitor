@@ -114,7 +114,14 @@ import {
 } from "./store.js";
 import { createNamedQueue, createRedisConnectionFromEnv } from "@sm/queue";
 import { buildRealtimeAgentHello } from "./agentHelloPayload.js";
-import { ensureCoreSchema } from "@sm/db";
+import {
+  ensureCoreSchema,
+  getBuild,
+  getBuildArtifact,
+  listBuildArtifacts,
+  listBuildsForService,
+  type QueryFn
+} from "@sm/db";
 
 const startedAt = Date.now();
 
@@ -2144,6 +2151,122 @@ export function buildServer(opts: BuildServerOptions = {}) {
     return reply.status(204).send();
   });
 
+  // ── Build pipeline (read-only API) ───────────────────────────────────────
+  // The worker INSERTs and UPDATEs these rows directly via @sm/db; this
+  // surface is panel-side reads only. We keep the routes scoped under
+  // /services/:id/... because every build is per-service — there's no
+  // global "all builds" query mode we want to expose.
+  //
+  // Lazy pool: build endpoints only need the DB when called, and the
+  // memory store fallback never has builds anyway. We open one process-
+  // wide Pool on first hit and reuse it.
+  let buildsQueryFn: QueryFn | null | undefined;
+  async function getBuildsQuery(): Promise<QueryFn | null> {
+    if (buildsQueryFn !== undefined) return buildsQueryFn;
+    const url = process.env.DATABASE_URL;
+    if (!url?.trim()) {
+      buildsQueryFn = null;
+      return null;
+    }
+    try {
+      const { Pool } = await import("pg");
+      const pool = new Pool({ connectionString: url });
+      await ensureCoreSchema(pool);
+      buildsQueryFn = async (sql: string, params: unknown[]) => {
+        const r = await pool.query(sql, params as unknown[]);
+        return { rows: r.rows as Record<string, unknown>[] };
+      };
+      return buildsQueryFn;
+    } catch (err) {
+      app.log.error({ err }, "builds query pool init failed");
+      buildsQueryFn = null;
+      return null;
+    }
+  }
+
+  app.get<{ Params: { id: string } }>("/api/v1/services/:id/builds", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply
+        .status(401)
+        .send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+    }
+    const svc = await domainStore.getService(session.tenantId, req.params.id);
+    if (!svc) {
+      return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Service not found", correlationId: (req as any).correlationId }));
+    }
+    const q = await getBuildsQuery();
+    if (!q) return { builds: [] };
+    const builds = await listBuildsForService(q, session.tenantId, req.params.id);
+    return { builds };
+  });
+
+  app.get<{ Params: { id: string; buildId: string } }>(
+    "/api/v1/services/:id/builds/:buildId",
+    async (req, reply) => {
+      const session = await resolveSession(authStore, req.headers.authorization);
+      if (!session) {
+        return reply
+          .status(401)
+          .send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+      }
+      const svc = await domainStore.getService(session.tenantId, req.params.id);
+      if (!svc) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Service not found", correlationId: (req as any).correlationId }));
+      }
+      const q = await getBuildsQuery();
+      if (!q) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Build not found", correlationId: (req as any).correlationId }));
+      }
+      const build = await getBuild(q, session.tenantId, req.params.buildId);
+      if (!build || build.serviceId !== req.params.id) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Build not found", correlationId: (req as any).correlationId }));
+      }
+      const artifacts = await listBuildArtifacts(q, build.id);
+      return { build, artifacts };
+    }
+  );
+
+  app.get<{ Params: { id: string; buildId: string; name: string } }>(
+    "/api/v1/services/:id/builds/:buildId/artifacts/:name",
+    async (req, reply) => {
+      const session = await resolveSession(authStore, req.headers.authorization);
+      if (!session) {
+        return reply
+          .status(401)
+          .send(apiErrorSchema.parse({ code: "UNAUTHORIZED", message: "Missing or invalid bearer token", correlationId: (req as any).correlationId }));
+      }
+      const q = await getBuildsQuery();
+      if (!q) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Artifact not found", correlationId: (req as any).correlationId }));
+      }
+      const build = await getBuild(q, session.tenantId, req.params.buildId);
+      if (!build || build.serviceId !== req.params.id) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Artifact not found", correlationId: (req as any).correlationId }));
+      }
+      const artifact = await getBuildArtifact(q, build.id, req.params.name);
+      if (!artifact) {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Artifact not found", correlationId: (req as any).correlationId }));
+      }
+      // Stream the file from disk. Path is constructed safely from the
+      // recorded rel_path (sanitized at insert time) so a crafted artifact
+      // name can't escape KAIAD_DATA_DIR/builds/<id>/.
+      const dataDir = process.env.KAIAD_DATA_DIR ?? "/data";
+      const fsMod = await import("node:fs/promises");
+      const pathMod = await import("node:path");
+      const filePath = pathMod.join(dataDir, "builds", build.id, artifact.relPath);
+      try {
+        const data = await fsMod.readFile(filePath);
+        reply.header("Content-Type", "application/octet-stream");
+        reply.header("Content-Disposition", `attachment; filename="${artifact.name.replace(/[^A-Za-z0-9._-]/g, "_")}"`);
+        reply.header("Content-Length", String(data.length));
+        return reply.send(data);
+      } catch {
+        return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Artifact file missing on disk", correlationId: (req as any).correlationId }));
+      }
+    }
+  );
+
   // --- Many-to-many agent ↔ service binding ------------------------------
   // The data layer keeps these as a join table so a service can run on
   // multiple agents (HA, multi-cluster) and an agent can be observing many
@@ -2321,7 +2444,7 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
       }
       try {
         const mod = await import("@sm/worker/runtime");
-        const { connection: wc, workers: wi } = mod.startQueueConsumersFromEnv(process.env);
+        const { connection: wc, workers: wi, buildLoops } = mod.startQueueConsumersFromEnv(process.env);
         if (wi.length > 0) {
           console.error(`[api] Embedded worker: ${wi.length} BullMQ consumer(s) started`);
         } else {
@@ -2329,7 +2452,7 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
         }
         const prev = shutdownFn;
         shutdownFn = async () => {
-          await mod.shutdownWorkersAndRedis(wi, wc).catch(() => {});
+          await mod.shutdownWorkersAndRedis(wi, wc, buildLoops).catch(() => {});
           await prev();
         };
       } catch (err) {

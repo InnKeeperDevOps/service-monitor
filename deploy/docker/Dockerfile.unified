@@ -79,11 +79,28 @@ FROM node:22-slim AS runtime
 WORKDIR /app
 
 RUN corepack enable
-# wget is in busybox-tools but base node:22-slim only has curl-style
-# /usr/bin/wget if installed; the push-on-boot script uses wget for
-# /ready polling and the JWT exchange.
-RUN apt-get update && apt-get install -y --no-install-recommends wget \
+# wget        — push-on-boot script: /ready polling + JWT exchange.
+# curl        — used to fetch the docker CLI tarball below.
+# git         — build worker: git ls-remote + clone.
+# openssh-client — git over SSH against the service's configured key.
+# ca-certificates — required for HTTPS git pulls and the docker tarball fetch.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      wget \
+      curl \
+      git \
+      openssh-client \
+      ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
+# Docker CLI binary (no daemon — the daemon is on the host, accessed
+# via the socket bind-mounted by compose). Static-linked, ~50 MB.
+# Pin the version so a hostile mirror can't surprise us.
+ARG DOCKER_CLI_VERSION=26.1.4
+RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
+      | tar -xz -C /tmp \
+ && mv /tmp/docker/docker /usr/local/bin/docker \
+ && rm -rf /tmp/docker \
+ && docker --version
 
 # Copy built artifacts and node_modules
 COPY --from=build /build/package.json /build/pnpm-lock.yaml /build/pnpm-workspace.yaml /build/turbo.json ./

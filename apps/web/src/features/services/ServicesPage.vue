@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { Box } from "lucide-vue-next";
 import { api, type Agent, type MonitoredService, type SshKey } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
+import BuildsForServiceSection from "./BuildsForServiceSection.vue";
 
 type ServiceForm = {
   name: string;
@@ -156,6 +157,16 @@ const inputStyle = {
 } as const;
 
 const noKey = computed(() => services.value.some((s) => !s.sshKeyId));
+
+// Set of service IDs whose Builds row is expanded.
+const buildsOpen = ref<Set<string>>(new Set());
+
+function toggleBuilds(id: string) {
+  const next = new Set(buildsOpen.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  buildsOpen.value = next;
+}
 </script>
 
 <template>
@@ -300,7 +311,8 @@ const noKey = computed(() => services.value.some((s) => !s.sshKeyId));
         </tr>
       </thead>
       <tbody>
-        <tr v-for="(svc, idx) in services" :key="svc.id || idx">
+        <template v-for="(svc, idx) in services" :key="svc.id || idx">
+        <tr>
           <td :style="{ padding: '0.5rem' }">
             <span :style="{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }">
               <Box :size="14" /> {{ svc.name }}
@@ -313,10 +325,12 @@ const noKey = computed(() => services.value.some((s) => !s.sshKeyId));
           </td>
           <td :style="{ padding: '0.5rem', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }">Default</td>
           <td :style="{ padding: '0.5rem', fontSize: '0.85rem' }">
-            <div v-if="canManage" :style="{ display: 'inline-flex', gap: '0.3rem' }">
+            <div :style="{ display: 'inline-flex', gap: '0.3rem' }">
               <button
                 :style="{
-                  background: 'var(--color-surface)',
+                  background: buildsOpen.has(svc.id)
+                    ? 'var(--color-bg)'
+                    : 'var(--color-surface)',
                   border: '1px solid var(--color-border)',
                   padding: '0.2rem 0.5rem',
                   borderRadius: '4px',
@@ -324,23 +338,43 @@ const noKey = computed(() => services.value.some((s) => !s.sshKeyId));
                   fontSize: '0.8rem',
                   color: 'var(--color-text-primary)'
                 }"
-                @click="handleEdit(svc)"
-              >Edit</button>
-              <button
-                :style="{
-                  background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border)',
-                  padding: '0.2rem 0.5rem',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '0.8rem',
-                  color: 'var(--color-danger)'
-                }"
-                @click="handleDelete(svc)"
-              >Delete</button>
+                @click="toggleBuilds(svc.id)"
+              >{{ buildsOpen.has(svc.id) ? 'Hide builds' : 'Builds' }}</button>
+              <template v-if="canManage">
+                <button
+                  :style="{
+                    background: 'var(--color-surface)',
+                    border: '1px solid var(--color-border)',
+                    padding: '0.2rem 0.5rem',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                    color: 'var(--color-text-primary)'
+                  }"
+                  @click="handleEdit(svc)"
+                >Edit</button>
+                <button
+                  :style="{
+                    background: 'var(--color-surface)',
+                    border: '1px solid var(--color-border)',
+                    padding: '0.2rem 0.5rem',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                    color: 'var(--color-danger)'
+                  }"
+                  @click="handleDelete(svc)"
+                >Delete</button>
+              </template>
             </div>
           </td>
         </tr>
+        <tr v-if="buildsOpen.has(svc.id)">
+          <td colspan="6" :style="{ padding: '0 0.5rem 0.5rem' }">
+            <BuildsForServiceSection :service-id="svc.id" :service-name="svc.name" />
+          </td>
+        </tr>
+        </template>
       </tbody>
     </table>
   </section>

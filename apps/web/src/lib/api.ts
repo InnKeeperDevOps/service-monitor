@@ -214,6 +214,33 @@ export type OAuthProviderConfigPayload = {
   scopes: string[];
 };
 
+export type BuildStatus = "queued" | "running" | "success" | "failed" | "no_pipeline";
+
+export type ServiceBuild = {
+  id: string;
+  tenantId: string;
+  serviceId: string;
+  gitSha: string;
+  branch: string;
+  status: BuildStatus;
+  imageRef: string | null;
+  log: string;
+  pipelineYaml: string | null;
+  failureReason: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
+export type ServiceBuildArtifact = {
+  buildId: string;
+  name: string;
+  sizeBytes: number;
+  sha256: string;
+  relPath: string;
+  createdAt: string;
+};
+
 export type RegistryRepository = {
   name: string;
 };
@@ -350,6 +377,25 @@ export const api = {
     apiFetch<void>(`/api/v1/services/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
+
+  // --- Service builds ---
+
+  listServiceBuilds: (serviceId: string) =>
+    apiFetch<{ builds: ServiceBuild[] }>(
+      `/api/v1/services/${encodeURIComponent(serviceId)}/builds`
+    ),
+
+  getServiceBuild: (serviceId: string, buildId: string) =>
+    apiFetch<{ build: ServiceBuild; artifacts: ServiceBuildArtifact[] }>(
+      `/api/v1/services/${encodeURIComponent(serviceId)}/builds/${encodeURIComponent(buildId)}`
+    ),
+
+  /** Fully-qualified URL for downloading an artifact (Authorization header is on the API path). */
+  serviceBuildArtifactUrl: (serviceId: string, buildId: string, name: string): string => {
+    return `${API_BASE}/api/v1/services/${encodeURIComponent(serviceId)}/builds/${encodeURIComponent(
+      buildId
+    )}/artifacts/${encodeURIComponent(name)}`;
+  },
 
   // --- Registry management (panel-only; admin-gated) ---
 

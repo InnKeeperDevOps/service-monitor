@@ -214,4 +214,48 @@ create table if not exists remediation_plans (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Build pipeline. Each push to the watched branch (detected by the
+-- worker's git ls-remote loop) creates a row here. Status transitions:
+--   queued -> running -> success | failed | no_pipeline
+-- The "no_pipeline" status is a successful "skip" — repo had no
+-- kaiad.yaml at the build SHA. We still record the SHA so the poller
+-- does not re-enqueue it on the next tick. image_ref is set on success
+-- and is the immutable registry digest reference (reg/svc@sha256:...).
+create table if not exists service_builds (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  service_id text not null references monitored_services(id) on delete cascade,
+  git_sha text not null,
+  branch text not null,
+  status text not null check (status in ('queued','running','success','failed','no_pipeline')),
+  image_ref text,
+  log text not null default '',
+  pipeline_yaml text,
+  failure_reason text,
+  created_at timestamptz not null default now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);
+
+create index if not exists service_builds_service_id_idx
+  on service_builds(service_id, created_at desc);
+create index if not exists service_builds_status_idx
+  on service_builds(status, created_at);
+-- The poller uses (service_id, git_sha) to dedupe on every tick,
+-- so a unique index keeps the dedupe enforcement at the DB layer too.
+create unique index if not exists service_builds_service_sha_uniq
+  on service_builds(service_id, git_sha);
+
+create table if not exists service_build_artifacts (
+  build_id text not null references service_builds(id) on delete cascade,
+  name text not null,
+  size_bytes bigint not null,
+  sha256 text not null,
+  -- Path is relative to KAIAD_DATA_DIR/builds/<build_id>/. Stored
+  -- separately so the API can stream the file without parsing the name.
+  rel_path text not null,
+  created_at timestamptz not null default now(),
+  primary key (build_id, name)
+);
 `;
