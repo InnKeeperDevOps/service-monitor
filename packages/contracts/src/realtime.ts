@@ -63,6 +63,8 @@ const lbStatusReportSchema = z.object({
   /** k8s namespace or docker grouping the service was deployed into. */
   namespace: z.string().default(""),
   buildId: z.string().optional(),
+  /** Image reference the agent actually applied. */
+  imageRef: z.string().optional(),
   lbType: z.enum(["none", "k8s", "metallb", "nginx"]),
   externalIp: z.string().nullable(),
   externalHostname: z.string().nullable(),

@@ -898,6 +898,10 @@ export interface LoadBalancerStatusRow {
   ports: Array<{ port: number; name?: string; protocol?: string; targetPort?: number }>;
   domains: Array<{ host: string; port: number; protocol: "http" | "https" }>;
   detail: Record<string, unknown>;
+  /** Fully-qualified image reference the agent applied. */
+  imageRef: string | null;
+  /** Source build row id, if known. Lets the panel link the running version to its build log. */
+  buildId: string | null;
   observedAt: string;
 }
 
@@ -917,6 +921,8 @@ function mapLb(r: Record<string, unknown>): LoadBalancerStatusRow {
     detail: typeof r.detail === "object" && r.detail !== null
       ? (r.detail as Record<string, unknown>)
       : {},
+    imageRef: r.image_ref == null ? null : String(r.image_ref),
+    buildId: r.build_id == null ? null : String(r.build_id),
     observedAt: new Date(r.observed_at as string).toISOString()
   };
 }
@@ -935,14 +941,17 @@ export async function upsertLoadBalancerStatus(
     ports: LoadBalancerStatusRow["ports"];
     domains: LoadBalancerStatusRow["domains"];
     detail: Record<string, unknown>;
+    imageRef: string | null;
+    buildId: string | null;
   }
 ): Promise<LoadBalancerStatusRow> {
   const id = crypto.randomUUID();
   const { rows } = await query(
     `INSERT INTO service_loadbalancer_status
        (id, tenant_id, service_id, agent_id, environment, namespace, lb_type,
-        external_ip, external_hostname, ports, domains, detail, observed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, now())
+        external_ip, external_hostname, ports, domains, detail,
+        image_ref, build_id, observed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, now())
      ON CONFLICT (service_id, environment) DO UPDATE SET
        agent_id = EXCLUDED.agent_id,
        namespace = EXCLUDED.namespace,
@@ -952,6 +961,8 @@ export async function upsertLoadBalancerStatus(
        ports = EXCLUDED.ports,
        domains = EXCLUDED.domains,
        detail = EXCLUDED.detail,
+       image_ref = EXCLUDED.image_ref,
+       build_id = EXCLUDED.build_id,
        observed_at = now()
      RETURNING *`,
     [
@@ -966,10 +977,32 @@ export async function upsertLoadBalancerStatus(
       data.externalHostname,
       JSON.stringify(data.ports),
       JSON.stringify(data.domains),
-      JSON.stringify(data.detail)
+      JSON.stringify(data.detail),
+      data.imageRef,
+      data.buildId
     ]
   );
   return mapLb(rows[0]);
+}
+
+/**
+ * Returns the latest reported state for every service this agent is
+ * known to be running. Used by the Agents page to show "what version
+ * of each service is on this agent". One row per (service_id) — the
+ * agent is the source of truth for any service it's bound to.
+ */
+export async function listRunningServicesForAgent(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string
+): Promise<LoadBalancerStatusRow[]> {
+  const { rows } = await query(
+    `SELECT * FROM service_loadbalancer_status
+      WHERE tenant_id = $1 AND agent_id = $2
+      ORDER BY observed_at DESC`,
+    [tenantId, agentId]
+  );
+  return rows.map(mapLb);
 }
 
 export async function listLoadBalancerStatusForTenant(

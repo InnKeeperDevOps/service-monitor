@@ -378,6 +378,7 @@ func buildDockerLbStatusReport(agentID string, in redeployInput, namespace strin
 		"environment":      in.environment,
 		"namespace":        namespace,
 		"buildId":          in.buildID,
+		"imageRef":         in.imageRef,
 		// Docker doesn't have a "type" in the k8s sense; use the
 		// kaiad.yaml-declared lbType so the panel groups consistently
 		// (most docker services declare "none").
@@ -638,6 +639,7 @@ func buildLbStatusReport(agentID string, in redeployInput, namespace, externalIP
 		"environment":      in.environment,
 		"namespace":        namespace,
 		"buildId":          in.buildID,
+		"imageRef":         in.imageRef,
 		"lbType":           in.loadBalancer.typ,
 		"externalIp":       ip,
 		"externalHostname": host,

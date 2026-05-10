@@ -123,6 +123,7 @@ import {
   listBuildArtifacts,
   listBuildsForService,
   listLoadBalancerStatusForTenant,
+  listRunningServicesForAgent,
   upsertLoadBalancerStatus,
   type QueryFn,
   type LoadBalancerStatusRow
@@ -1024,7 +1025,9 @@ export function buildServer(opts: BuildServerOptions = {}) {
                   externalHostname: msg.externalHostname,
                   ports: msg.ports,
                   domains: msg.domains,
-                  detail: msg.detail
+                  detail: msg.detail,
+                  imageRef: msg.imageRef ?? null,
+                  buildId: msg.buildId ?? null
                 });
               }
             } catch (err) {
@@ -2404,6 +2407,41 @@ export function buildServer(opts: BuildServerOptions = {}) {
     const services = await domainStore.listServicesForAgent(session.tenantId, req.params.agentId);
     return listServicesForAgentResponseSchema.parse({ services });
   });
+
+  // Running-version snapshot per agent. The agents page joins this
+  // with the bound-services list to render "service X currently
+  // running build abc12345 / image panel.dev.kaiad.dev/...:abc12345"
+  // inline. Returns the most recent lb_status_report row per
+  // (service, env), filtered to this agent.
+  app.get<{ Params: { agentId: string } }>(
+    "/api/v1/agents/:agentId/running-services",
+    async (req, reply) => {
+      const session = await resolveSession(authStore, req.headers.authorization);
+      if (!session) {
+        return reply.status(401).send(
+          apiErrorSchema.parse({
+            code: "UNAUTHORIZED",
+            message: "Missing or invalid bearer token",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const q = await getBuildsQuery();
+      if (!q) return { running: [] };
+      const rows = await listRunningServicesForAgent(q, session.tenantId, req.params.agentId);
+      const running = rows.map((r) => ({
+        serviceId: r.serviceId,
+        environment: r.environment,
+        namespace: r.namespace,
+        imageRef: r.imageRef,
+        buildId: r.buildId,
+        observedAt: r.observedAt,
+        externalIp: r.externalIp,
+        externalHostname: r.externalHostname
+      }));
+      return { running };
+    }
+  );
 
   app.post<{ Params: { agentId: string; serviceId: string } }>(
     "/api/v1/agents/:agentId/services/:serviceId",

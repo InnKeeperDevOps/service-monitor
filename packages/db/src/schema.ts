@@ -314,6 +314,10 @@ create table if not exists service_loadbalancer_status (
 
 -- Idempotent ALTER for existing dev DBs that pre-date the namespace column.
 alter table service_loadbalancer_status add column if not exists namespace text not null default '';
+-- The image the agent actually applied + the source build that produced
+-- it. Used by the panel's Agents page to show "what's running here".
+alter table service_loadbalancer_status add column if not exists image_ref text;
+alter table service_loadbalancer_status add column if not exists build_id text;
 
 create index if not exists service_loadbalancer_status_tenant_id_idx
   on service_loadbalancer_status(tenant_id);

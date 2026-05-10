@@ -384,6 +384,20 @@ export const api = {
       `/api/v1/agents/${encodeURIComponent(agentId)}/services`
     ),
 
+  listRunningServicesForAgent: (agentId: string) =>
+    apiFetch<{
+      running: Array<{
+        serviceId: string;
+        environment: string;
+        namespace: string;
+        imageRef: string | null;
+        buildId: string | null;
+        observedAt: string;
+        externalIp: string | null;
+        externalHostname: string | null;
+      }>;
+    }>(`/api/v1/agents/${encodeURIComponent(agentId)}/running-services`),
+
   attachServiceToAgent: (agentId: string, serviceId: string) =>
     apiFetch<{ bound: boolean; agentId: string; serviceId: string }>(
       `/api/v1/agents/${encodeURIComponent(agentId)}/services/${encodeURIComponent(serviceId)}`,

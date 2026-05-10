@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, type CSSProperties } from "vue";
+import { computed, onMounted, ref, watch, type CSSProperties } from "vue";
 import { api, type MonitoredService } from "../../lib/api.js";
 
 const props = defineProps<{
@@ -12,6 +12,47 @@ const emit = defineEmits<{ change: [] }>();
 const pickerValue = ref("");
 const busy = ref<string | null>(null);
 const error = ref<string | null>(null);
+
+// Snapshot of "what version of each service is currently running on
+// this agent" — populated by the agent's lb_status_report after every
+// successful redeploy. Map keyed by serviceId; one entry per env in
+// the service_loadbalancer_status table.
+type RunningEntry = {
+  serviceId: string;
+  environment: string;
+  namespace: string;
+  imageRef: string | null;
+  buildId: string | null;
+  observedAt: string;
+};
+const running = ref<RunningEntry[]>([]);
+
+async function loadRunning() {
+  try {
+    const r = await api.listRunningServicesForAgent(props.agentId);
+    running.value = r.running;
+  } catch {
+    // Non-fatal — section still renders the bound list.
+    running.value = [];
+  }
+}
+
+onMounted(loadRunning);
+watch(() => props.agentId, loadRunning);
+
+function runningForService(serviceId: string): RunningEntry[] {
+  return running.value.filter((r) => r.serviceId === serviceId);
+}
+
+function shortSha(ref: string | null): string {
+  if (!ref) return "—";
+  // Pull a short SHA out of "host/repo:abcd1234..." or
+  // "host/repo@sha256:abcd...". Falls back to the last 12 chars.
+  const colon = ref.lastIndexOf(":");
+  const tag = colon >= 0 ? ref.slice(colon + 1) : ref;
+  if (tag.length > 12) return tag.slice(0, 12);
+  return tag;
+}
 
 const bound = computed(() =>
   props.allServices.filter((s) => s.agents?.some((a) => a.agentId === props.agentId))
@@ -113,7 +154,11 @@ function btn(variant: "primary" | "muted" | "danger" = "muted"): CSSProperties {
         v-for="(svc, i) in bound"
         :key="svc.id"
         role="listitem"
-        :style="{ ...rowStyle, ...(i === 0 ? { borderTop: 'none' } : {}) }"
+        :style="{
+          ...rowStyle,
+          ...(i === 0 ? { borderTop: 'none' } : {}),
+          flexWrap: 'wrap'
+        }"
       >
         <span :style="{ fontWeight: 600, minWidth: '160px' }">{{ svc.name }}</span>
         <span
@@ -122,7 +167,8 @@ function btn(variant: "primary" | "muted" | "danger" = "muted"): CSSProperties {
             flex: 1,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap'
+            whiteSpace: 'nowrap',
+            minWidth: '160px'
           }"
           :title="svc.gitRepoUrl"
         >{{ svc.gitRepoUrl }}</span>
@@ -134,6 +180,50 @@ function btn(variant: "primary" | "muted" | "danger" = "muted"): CSSProperties {
           :style="btn('danger')"
           @click="handleDetach(svc.id)"
         >{{ busy === svc.id ? "Detaching…" : "Detach" }}</button>
+
+        <!-- Running-version rows: one per (service, env). Empty list
+             means the agent has never reported a successful redeploy
+             for this service yet. -->
+        <div
+          v-if="runningForService(svc.id).length > 0"
+          :style="{
+            flexBasis: '100%',
+            paddingLeft: '0.25rem',
+            paddingTop: '0.2rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.15rem'
+          }"
+        >
+          <div
+            v-for="r in runningForService(svc.id)"
+            :key="`${r.serviceId}-${r.environment}`"
+            :style="{
+              fontSize: '0.78rem',
+              color: 'var(--color-text-secondary)',
+              fontFamily: 'var(--font-mono)'
+            }"
+            :title="r.imageRef ?? ''"
+          >
+            running
+            <span :style="{ color: 'var(--color-text-primary)' }">{{ shortSha(r.imageRef) }}</span>
+            <span :style="{ marginLeft: '0.5rem' }">env={{ r.environment }}</span>
+            <span v-if="r.namespace" :style="{ marginLeft: '0.5rem' }">ns={{ r.namespace }}</span>
+            <span :style="{ marginLeft: '0.5rem' }">
+              · {{ new Date(r.observedAt).toLocaleString() }}
+            </span>
+          </div>
+        </div>
+        <div
+          v-else
+          :style="{
+            flexBasis: '100%',
+            paddingLeft: '0.25rem',
+            fontSize: '0.78rem',
+            color: 'var(--color-text-secondary)',
+            fontStyle: 'italic'
+          }"
+        >no version reported yet · trigger a build to deploy</div>
       </div>
     </div>
 
