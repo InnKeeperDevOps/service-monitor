@@ -26,6 +26,37 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// ─── Local mirror of the API's SSH key encryption ──────────────────────────
+// MUST match apps/api/src/postgresDomainStore.ts.{encryptSshKey,decryptSshKey}.
+// The dev fallback ("dev-fallback-key" → sha256) keeps the worker working
+// in compose without an explicit KAIAD_ENCRYPTION_KEY; production must set
+// the env var and have it match the API's value.
+function getEncryptionKey(): Buffer {
+  const rawKey = process.env.KAIAD_ENCRYPTION_KEY;
+  if (!rawKey) {
+    return crypto.createHash("sha256").update("dev-fallback-key").digest();
+  }
+  if (rawKey.length === 64) return Buffer.from(rawKey, "hex");
+  return crypto.createHash("sha256").update(rawKey).digest();
+}
+
+function decryptSshKey(stored: string): string | null {
+  const parts = stored.split(":");
+  if (parts.length !== 3) return null;
+  try {
+    const keyBytes = getEncryptionKey();
+    const iv = Buffer.from(parts[0], "base64");
+    const encrypted = Buffer.from(parts[1], "base64");
+    const tag = Buffer.from(parts[2], "base64");
+    const decipher = crypto.createDecipheriv("aes-256-gcm", keyBytes, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return decrypted.toString("utf8");
+  } catch {
+    return null;
+  }
+}
 import { Pool } from "pg";
 import {
   appendBuildLog,
@@ -68,6 +99,12 @@ const KAIAD_DATA_DIR = process.env.KAIAD_DATA_DIR ?? "/data";
 // the worker outside a docker compose context (unit tests, CI, etc.) —
 // in that case the build step is skipped.
 const BUILDS_HOST_DIR = process.env.KAIAD_BUILDS_HOST_DIR ?? null;
+
+// Basic-auth credential for crane → /registry/token. Defaults match the
+// dev compose stack's admin shortcut. Override in production via env so
+// the worker pushes with a real admin credential.
+const REGISTRY_PUSH_USER = process.env.KAIAD_REGISTRY_PUSH_USER ?? "admin";
+const REGISTRY_PUSH_PASSWORD = process.env.KAIAD_REGISTRY_PUSH_PASSWORD ?? "dev-token";
 
 type Logger = {
   info: (msg: string, ctx?: unknown) => void;
@@ -515,6 +552,30 @@ async function buildRuntimeImage(params: {
 
   await appendBuildLog(query, buildId, banner("runtime image (crane assembly)"));
 
+  // 0) Per-build docker config with Basic auth so crane runs the
+  //    /registry/token round-trip per push and gets a JWT scoped to
+  //    THIS repo. The container-wide ~/.docker/config.json is set up
+  //    by push-agent-on-boot.sh with a `registrytoken` Bearer scoped
+  //    only to `kaiad-agent`, which would 401 here. We don't touch
+  //    that config — we use a separate DOCKER_CONFIG dir per build.
+  const dockerCfgDir = path.join(rootDir, "docker-config");
+  await fs.mkdir(dockerCfgDir, { recursive: true });
+  const basic = Buffer.from(`${REGISTRY_PUSH_USER}:${REGISTRY_PUSH_PASSWORD}`).toString("base64");
+  await fs.writeFile(
+    path.join(dockerCfgDir, "config.json"),
+    JSON.stringify(
+      {
+        auths: {
+          [REGISTRY_INTERNAL]: { auth: basic },
+          [REGISTRY_HOST]: { auth: basic }
+        }
+      },
+      null,
+      2
+    )
+  );
+  const craneEnv = { ...process.env, DOCKER_CONFIG: dockerCfgDir };
+
   // 1) Build the artifact layer tarball.
   const layerRoot = path.join(rootDir, "layer-root");
   await fs.mkdir(layerRoot, { recursive: true });
@@ -556,6 +617,7 @@ async function buildRuntimeImage(params: {
     outTar
   ];
   const appendRes = await runProcStreaming("crane", appendArgs, {
+    env: craneEnv,
     onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
     timeoutMs: BUILD_TIMEOUT_MS
   });
@@ -577,6 +639,7 @@ async function buildRuntimeImage(params: {
     mutateArgs.push(`--exposed-ports=${p.port}/${p.protocol.toLowerCase()}`);
   }
   const mutateRes = await runProcStreaming("crane", mutateArgs, {
+    env: craneEnv,
     onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
     timeoutMs: BUILD_TIMEOUT_MS
   });
@@ -592,6 +655,7 @@ async function buildRuntimeImage(params: {
     internalRef
   ];
   const pushRes = await runProcStreaming("crane", pushArgs, {
+    env: craneEnv,
     onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
     timeoutMs: BUILD_TIMEOUT_MS
   });
@@ -606,6 +670,7 @@ async function buildRuntimeImage(params: {
     "latest"
   ];
   const tagRes = await runProcStreaming("crane", tagArgs, {
+    env: craneEnv,
     onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
     timeoutMs: BUILD_TIMEOUT_MS
   });
@@ -703,9 +768,21 @@ async function sshAuthEnvForKey(
   if (String(row.type) === "local_path" && row.local_path) {
     identity = String(row.local_path);
   } else if (row.private_key_encrypted) {
+    // The API encrypts uploaded keys before storage with AES-256-GCM
+    // (see apps/api/src/postgresDomainStore.ts). The stored value is
+    // `<iv-b64>:<ciphertext-b64>:<tag-b64>` — decrypt with the same
+    // KAIAD_ENCRYPTION_KEY so we can hand a real OpenSSH key to ssh.
+    const decrypted = decryptSshKey(String(row.private_key_encrypted));
+    if (!decrypted) {
+      // Refuse to write garbage that ssh would reject anyway. Caller
+      // sees a clearer "permission denied" with this in the build log.
+      throw new Error(
+        "ssh key decrypt failed (KAIAD_ENCRYPTION_KEY mismatch with the API that uploaded it?)"
+      );
+    }
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "kaiad-ssh-"));
     keyFile = path.join(dir, "id");
-    let body = String(row.private_key_encrypted);
+    let body = decrypted;
     // OpenSSH refuses keys without a trailing newline.
     if (!body.endsWith("\n")) body += "\n";
     await fs.writeFile(keyFile, body, { mode: 0o600 });
