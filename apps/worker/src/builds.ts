@@ -520,11 +520,15 @@ async function captureArtifacts(
  *                                                    will appear at)
  *   tar -C layer-root -cf layer.tar .
  *   crane append --base <runtime.image> --new_layer layer.tar
- *                --new_tag <ref> --output out.tar
- *   crane mutate out.tar --entrypoint=<...> --exposed-ports=<...>
- *                --output final.tar
- *   crane push final.tar <ref>          # pushed to registry:5000
- *   crane tag <ref> latest               # moves :latest pointer
+ *                --new_tag <ref>          # pushes directly to registry
+ *   crane mutate <ref> --entrypoint=<...> --exposed-ports=<...>
+ *                --tag <ref>              # mutates in-registry, overwrite tag
+ *   crane tag <ref> latest                # moves :latest pointer
+ *
+ * Note crane mutate's first positional is an image REFERENCE, not a
+ * tarball — feeding it a /path/to/tarball ends up interpreted as
+ * `index.docker.io/path/to/tarball:latest` and 401s. The append step
+ * therefore must push first.
  */
 async function buildRuntimeImage(params: {
   query: QueryFn;
@@ -602,8 +606,12 @@ async function buildRuntimeImage(params: {
   // EXTERNAL hostname agents pull from. The actual blobs are the same.
   const externalRef = `${REGISTRY_HOST}/${serviceName}:${sha}`;
 
-  // 2) crane append — produces an OCI tarball with the layer added.
-  const outTar = path.join(rootDir, "out.tar");
+  // 2) crane append — pushes directly to the registry as <ref>. We
+  //    skip --output because crane mutate (next step) requires an
+  //    image reference, not a tarball, so the tarball path would
+  //    just need to be re-pushed anyway. Pushing here primes the
+  //    registry with the layered image, then mutate overwrites the
+  //    tag with one that has the right entrypoint + ports.
   const appendArgs = [
     ...(REGISTRY_INSECURE ? ["--insecure"] : []),
     "append",
@@ -612,9 +620,7 @@ async function buildRuntimeImage(params: {
     "--new_layer",
     layerTar,
     "--new_tag",
-    internalRef,
-    "--output",
-    outTar
+    internalRef
   ];
   const appendRes = await runProcStreaming("crane", appendArgs, {
     env: craneEnv,
@@ -625,14 +631,14 @@ async function buildRuntimeImage(params: {
     return { ok: false, reason: `crane append exited with code ${appendRes.code}` };
   }
 
-  // 3) crane mutate — set entrypoint + exposed ports.
-  const finalTar = path.join(rootDir, "final.tar");
+  // 3) crane mutate — pull the just-pushed image, set entrypoint +
+  //    exposed ports, push back to the same tag.
   const mutateArgs: string[] = [
     ...(REGISTRY_INSECURE ? ["--insecure"] : []),
     "mutate",
-    outTar,
-    "--output",
-    finalTar,
+    internalRef,
+    "--tag",
+    internalRef,
     `--entrypoint=${runtime.command.join(",")}`
   ];
   for (const p of pipeline.ports) {
@@ -645,22 +651,6 @@ async function buildRuntimeImage(params: {
   });
   if (mutateRes.code !== 0) {
     return { ok: false, reason: `crane mutate exited with code ${mutateRes.code}` };
-  }
-
-  // 4) crane push (immutable :<sha> tag), then crane tag → :latest.
-  const pushArgs = [
-    ...(REGISTRY_INSECURE ? ["--insecure"] : []),
-    "push",
-    finalTar,
-    internalRef
-  ];
-  const pushRes = await runProcStreaming("crane", pushArgs, {
-    env: craneEnv,
-    onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
-    timeoutMs: BUILD_TIMEOUT_MS
-  });
-  if (pushRes.code !== 0) {
-    return { ok: false, reason: `crane push exited with code ${pushRes.code}` };
   }
 
   const tagArgs = [
