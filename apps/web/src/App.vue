@@ -24,6 +24,7 @@ import SshKeysPage from "./features/ssh-keys/SshKeysPage.vue";
 import TenantsPage from "./features/tenants/TenantsPage.vue";
 import RegistryPage from "./features/registry/RegistryPage.vue";
 import LoadBalancersPage from "./features/load-balancers/LoadBalancersPage.vue";
+import AgentDetailPage from "./features/agents/AgentDetailPage.vue";
 import SettingsPage from "./features/settings/SettingsPage.vue";
 import TenantConfigurationPage from "./features/tenants/TenantConfigurationPage.vue";
 import LoginPage from "./features/auth/LoginPage.vue";
@@ -33,6 +34,7 @@ type Route =
   | "dashboard"
   | "incidents"
   | "agents"
+  | "agentDetail"
   | "services"
   | "sshKeys"
   | "registry"
@@ -54,11 +56,19 @@ const NAV_ITEMS: { route: Route; label: string; icon: Component; adminOnly?: boo
   { route: "settings", label: "Settings", icon: Settings, adminOnly: true }
 ];
 
-function readNavFromHash(): { route: Route; tenantConfigTenantId: string | null } {
+function readNavFromHash(): {
+  route: Route;
+  tenantConfigTenantId: string | null;
+  agentDetailAgentId: string | null;
+} {
   const raw = window.location.hash.replace(/^#/, "").split("?")[0];
   if (raw.startsWith("tenant-config/")) {
     const id = decodeURIComponent(raw.slice("tenant-config/".length).trim());
-    return { route: "tenantConfig", tenantConfigTenantId: id || null };
+    return { route: "tenantConfig", tenantConfigTenantId: id || null, agentDetailAgentId: null };
+  }
+  if (raw.startsWith("agent/")) {
+    const id = decodeURIComponent(raw.slice("agent/".length).trim());
+    return { route: "agentDetail", tenantConfigTenantId: null, agentDetailAgentId: id || null };
   }
   const base = (raw.split("/")[0] || "dashboard") as Route;
   const allowed: Route[] = [
@@ -74,9 +84,9 @@ function readNavFromHash(): { route: Route; tenantConfigTenantId: string | null 
     "login"
   ];
   if (allowed.includes(base)) {
-    return { route: base, tenantConfigTenantId: null };
+    return { route: base, tenantConfigTenantId: null, agentDetailAgentId: null };
   }
-  return { route: "dashboard", tenantConfigTenantId: null };
+  return { route: "dashboard", tenantConfigTenantId: null, agentDetailAgentId: null };
 }
 
 function hasToken(): boolean {
@@ -86,6 +96,7 @@ function hasToken(): boolean {
 const setupStatus = ref<boolean | null>(null);
 const route = ref<Route>(hasToken() ? readNavFromHash().route : "login");
 const tenantConfigTenantId = ref<string | null>(hasToken() ? readNavFromHash().tenantConfigTenantId : null);
+const agentDetailAgentId = ref<string | null>(hasToken() ? readNavFromHash().agentDetailAgentId : null);
 const user = ref<AuthUser | null>(null);
 const meResolved = ref(false);
 
@@ -124,11 +135,13 @@ function onHashChange() {
     window.location.hash = "login";
     route.value = "login";
     tenantConfigTenantId.value = null;
+    agentDetailAgentId.value = null;
     return;
   }
   const nav = readNavFromHash();
   route.value = nav.route;
   tenantConfigTenantId.value = nav.tenantConfigTenantId;
+  agentDetailAgentId.value = nav.agentDetailAgentId;
 }
 
 function handleTenantSwitch(u: AuthUser) {
@@ -143,7 +156,11 @@ function logout() {
 }
 
 function isActive(itemRoute: Route): boolean {
-  return route.value === itemRoute || (itemRoute === "tenants" && route.value === "tenantConfig");
+  return (
+    route.value === itemRoute ||
+    (itemRoute === "tenants" && route.value === "tenantConfig") ||
+    (itemRoute === "agents" && route.value === "agentDetail")
+  );
 }
 
 onMounted(() => {
@@ -254,6 +271,10 @@ const navStyle: CSSProperties = {
       <DashboardPage v-if="route === 'dashboard'" />
       <IncidentsPage v-else-if="route === 'incidents'" />
       <AgentsPage v-else-if="route === 'agents'" />
+      <AgentDetailPage
+        v-else-if="route === 'agentDetail' && agentDetailAgentId"
+        :agent-id="agentDetailAgentId"
+      />
       <ServicesPage v-else-if="route === 'services'" />
       <SshKeysPage v-else-if="route === 'sshKeys'" />
       <RegistryPage v-else-if="route === 'registry'" />
