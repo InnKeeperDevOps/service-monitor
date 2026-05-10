@@ -213,6 +213,93 @@ domains:
       expect(r.ok).toBe(false);
     });
 
+    it("loadBalancer defaults to type=none", () => {
+      const r = parsePipelineYaml(base);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.pipeline.loadBalancer).toEqual({ type: "none" });
+    });
+
+    it("accepts each loadBalancer type with its optional fields", () => {
+      const r = parsePipelineYaml(`${base}
+loadBalancer:
+  type: k8s
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+environments:
+  staging:
+    loadBalancer:
+      type: metallb
+      addressPool: staging-pool
+  production:
+    loadBalancer:
+      type: nginx
+      ingressClass: nginx-prod
+      tlsSecret: prod-tls
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.pipeline.loadBalancer.type).toBe("k8s");
+      expect(r.pipeline.environments.staging?.loadBalancer).toEqual({
+        type: "metallb",
+        addressPool: "staging-pool"
+      });
+      expect(r.pipeline.environments.production?.loadBalancer).toEqual({
+        type: "nginx",
+        ingressClass: "nginx-prod",
+        tlsSecret: "prod-tls"
+      });
+    });
+
+    it("rejects unknown loadBalancer type", () => {
+      const r = parsePipelineYaml(`${base}
+loadBalancer:
+  type: traefik
+`);
+      expect(r.ok).toBe(false);
+    });
+
+    it("nginx loadBalancer fills in ingressClass default", () => {
+      const r = parsePipelineYaml(`${base}
+loadBalancer:
+  type: nginx
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const lb = r.pipeline.loadBalancer;
+      // narrow before reading
+      if (lb.type !== "nginx") throw new Error("expected nginx");
+      expect(lb.ingressClass).toBe("nginx");
+    });
+
+    it("resolveEnvironment includes loadBalancer with overlay precedence", () => {
+      const r = parsePipelineYaml(`${base}
+loadBalancer:
+  type: k8s
+environments:
+  staging:
+    instances: 2
+  production:
+    loadBalancer:
+      type: metallb
+      addressPool: prod
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+
+      // staging inherits the default LB
+      const staging = resolveEnvironment(r.pipeline, "staging");
+      expect(staging.loadBalancer.type).toBe("k8s");
+
+      // production overrides
+      const prod = resolveEnvironment(r.pipeline, "production");
+      expect(prod.loadBalancer).toEqual({ type: "metallb", addressPool: "prod" });
+
+      // unknown env -> all defaults
+      const unknown = resolveEnvironment(r.pipeline, "preview");
+      expect(unknown.loadBalancer.type).toBe("k8s");
+    });
+
     it("resolveEnvironment overlays per-env over defaults", () => {
       const r = parsePipelineYaml(`${base}
 instances: 1

@@ -98,14 +98,57 @@ export const pipelineDomainSchema = z.object({
   protocol: z.enum(["http", "https"])
 });
 
-// Per-environment overrides. Both fields are optional; omitting either
-// falls back to the top-level `instances` / `domains` defaults at deploy
-// time.
+// External load-balancer hint for the deploying operator. Different
+// clusters expose services very differently — MetalLB does ARP/BGP
+// LoadBalancer IPs on bare metal, ingress-nginx terminates HTTPS via
+// Ingress resources, default k8s emits Service.type=LoadBalancer and
+// lets the cloud provider handle the rest. The operator generates
+// the right manifests based on `type`. v1: this is metadata stored
+// on the build row; the operator consumer is a follow-up.
+export const pipelineLoadBalancerSchema = z.discriminatedUnion("type", [
+  // Cluster-internal only — no external surface. Default.
+  z.object({
+    type: z.literal("none")
+  }),
+  // Service.type=LoadBalancer with no special annotations. The cloud
+  // provider's controller (AWS ELB / GCP NLB / etc.) provisions the
+  // external LB. Falls flat on bare-metal clusters with no provider —
+  // use `metallb` there instead.
+  z.object({
+    type: z.literal("k8s"),
+    /** Free-form annotations applied to the Service. */
+    annotations: z.record(z.string()).default({})
+  }),
+  // MetalLB (bare-metal IPAM controller). Service.type=LoadBalancer
+  // with a `metallb.universe.tf/address-pool` annotation when
+  // addressPool is set; otherwise MetalLB picks from any pool.
+  z.object({
+    type: z.literal("metallb"),
+    /** Address pool name. Sets the metallb.universe.tf/address-pool annotation. */
+    addressPool: z.string().min(1).optional()
+  }),
+  // ingress-nginx. Service.type=ClusterIP; Ingress resource per host
+  // with `ingressClassName: nginx` (or whatever `ingressClass` overrides
+  // it to). When tlsSecret is set, the Ingress includes a `tls:` block
+  // referencing it; otherwise the operator picks (e.g. cert-manager).
+  z.object({
+    type: z.literal("nginx"),
+    /** ingressClassName. Defaults to "nginx". */
+    ingressClass: z.string().min(1).default("nginx"),
+    /** Existing TLS Secret to reference in the Ingress's tls block. */
+    tlsSecret: z.string().min(1).optional()
+  })
+]);
+
+// Per-environment overrides. All fields are optional; omitting any falls
+// back to the top-level default at deploy time.
 export const pipelineEnvironmentSchema = z.object({
   /** Replica count for this environment. */
   instances: z.number().int().min(0).optional(),
   /** Domains routed to this environment. */
-  domains: z.array(pipelineDomainSchema).default([])
+  domains: z.array(pipelineDomainSchema).default([]),
+  /** Load-balancer override for this environment. */
+  loadBalancer: pipelineLoadBalancerSchema.optional()
 });
 
 // Environment names: lowercase alphanum + hyphen, max 63 chars (matches
@@ -127,6 +170,11 @@ export const pipelineDefinitionSchema = z
     instances: z.number().int().min(0).default(1),
     /** Default domains routed to the runtime. */
     domains: z.array(pipelineDomainSchema).default([]),
+    /**
+     * Default load balancer. Per-env can override; otherwise the
+     * operator uses this. Defaults to {type: "none"} (cluster-internal).
+     */
+    loadBalancer: pipelineLoadBalancerSchema.default({ type: "none" }),
     /**
      * Per-environment overrides. Keys are environment names
      * (e.g. "development", "staging", "production"). Each environment's
@@ -211,23 +259,28 @@ export type PipelinePort = z.infer<typeof pipelinePortSchema>;
 export type PipelineBuild = z.infer<typeof pipelineBuildSchema>;
 export type PipelineRuntime = z.infer<typeof pipelineRuntimeSchema>;
 export type PipelineDomain = z.infer<typeof pipelineDomainSchema>;
+export type PipelineLoadBalancer = z.infer<typeof pipelineLoadBalancerSchema>;
 export type PipelineEnvironment = z.infer<typeof pipelineEnvironmentSchema>;
 export type PipelineDefinition = z.infer<typeof pipelineDefinitionSchema>;
 
 /**
- * Resolve the effective `instances` and `domains` for a given environment
- * name. Top-level fields are the defaults; per-env overrides win when
- * present. Returns the top-level defaults when the environment isn't in
- * the map.
+ * Resolve the effective deployment fields for a given environment name.
+ * Top-level fields are the defaults; per-env overrides win when present.
+ * Returns the top-level defaults when the environment isn't in the map.
  */
 export function resolveEnvironment(
   def: PipelineDefinition,
   envName: string
-): { instances: number; domains: PipelineDomain[] } {
+): {
+  instances: number;
+  domains: PipelineDomain[];
+  loadBalancer: PipelineLoadBalancer;
+} {
   const env = def.environments[envName];
   return {
     instances: env?.instances ?? def.instances,
-    domains: env?.domains.length ? env.domains : def.domains
+    domains: env?.domains.length ? env.domains : def.domains,
+    loadBalancer: env?.loadBalancer ?? def.loadBalancer
   };
 }
 
