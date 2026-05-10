@@ -1198,7 +1198,8 @@ async function dispatchRedeployToBoundAgents(
         environment: agentEnv,
         instances: resolved.instances,
         domains: resolved.domains,
-        loadBalancer: resolved.loadBalancer
+        loadBalancer: resolved.loadBalancer,
+        namespace: resolved.namespace
       }
     };
     try {

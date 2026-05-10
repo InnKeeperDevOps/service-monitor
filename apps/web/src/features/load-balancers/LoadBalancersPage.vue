@@ -38,6 +38,7 @@ type FlatRow = {
   serviceName: string;
   serviceId: string;
   environment: string;
+  namespace: string;
   lbType: LoadBalancerEntry["lbType"];
   domain: string;
   port: number;
@@ -66,6 +67,7 @@ const rows = computed<FlatRow[]>(() => {
         serviceName: e.serviceName,
         serviceId: e.serviceId,
         environment: e.environment,
+        namespace: e.namespace,
         lbType: e.lbType,
         domain: "—",
         port: e.ports[0]?.port ?? 0,
@@ -81,6 +83,7 @@ const rows = computed<FlatRow[]>(() => {
           serviceName: e.serviceName,
           serviceId: e.serviceId,
           environment: e.environment,
+          namespace: e.namespace,
           lbType: e.lbType,
           domain: d.host,
           port: d.port,
@@ -205,6 +208,7 @@ function endpointColor(kind: FlatRow["externalKind"]): string {
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Port</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Service</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Env</th>
+            <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Namespace</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">LB</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Observed</th>
           </tr>
@@ -243,6 +247,15 @@ function endpointColor(kind: FlatRow["externalKind"]): string {
             <td :style="{ padding: '0.45rem 0.75rem' }">{{ r.serviceName }}</td>
             <td :style="{ padding: '0.45rem 0.75rem' }">
               <Badge variant="muted">{{ r.environment }}</Badge>
+            </td>
+            <td
+              :style="{
+                padding: '0.45rem 0.75rem',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--color-text-secondary)'
+              }"
+            >
+              {{ r.namespace || "—" }}
             </td>
             <td
               :style="{ padding: '0.45rem 0.75rem', color: 'var(--color-text-secondary)' }"

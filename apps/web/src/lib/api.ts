@@ -222,6 +222,7 @@ export type LoadBalancerEntry = {
   serviceName: string;
   agentId: string | null;
   environment: string;
+  namespace: string;
   lbType: "none" | "k8s" | "metallb" | "nginx";
   externalIp: string | null;
   externalHostname: string | null;

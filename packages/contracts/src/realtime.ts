@@ -60,6 +60,8 @@ const lbStatusReportSchema = z.object({
   ts: z.string(),
   serviceId: z.string(),
   environment: z.string(),
+  /** k8s namespace or docker grouping the service was deployed into. */
+  namespace: z.string().default(""),
   buildId: z.string().optional(),
   lbType: z.enum(["none", "k8s", "metallb", "nginx"]),
   externalIp: z.string().nullable(),
@@ -425,7 +427,13 @@ const redeployServiceCommandSchema = z.object({
   environment: z.string(),
   instances: z.number().int().min(0),
   domains: z.array(redeployDomainSchema).default([]),
-  loadBalancer: redeployLoadBalancerSchema.default({ type: "none" })
+  loadBalancer: redeployLoadBalancerSchema.default({ type: "none" }),
+  /**
+   * Kubernetes namespace (k8s mode) or docker grouping name (docker
+   * mode). Empty string means "fall back to runtime default":
+   * k8s mode → agent pod's own namespace; docker mode → "kaiad".
+   */
+  namespace: z.string().default("")
 });
 
 /** Uses `z.union` (not `discriminatedUnion`) so variants may apply `.superRefine` (e.g. receive_source_archive url xor path). */

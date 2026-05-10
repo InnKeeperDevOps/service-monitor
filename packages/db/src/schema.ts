@@ -304,9 +304,16 @@ create table if not exists service_loadbalancer_status (
   -- Free-form per-type detail. e.g. metallb → { addressPool }, nginx
   -- → { ingressClass, tlsSecret }.
   detail jsonb not null default '{}'::jsonb,
+  -- k8s namespace or docker project name the service was deployed to.
+  -- Echoed verbatim from the agent's report; the same service in
+  -- different envs typically lands in different namespaces.
+  namespace text not null default '',
   observed_at timestamptz not null default now(),
   unique (service_id, environment)
 );
+
+-- Idempotent ALTER for existing dev DBs that pre-date the namespace column.
+alter table service_loadbalancer_status add column if not exists namespace text not null default '';
 
 create index if not exists service_loadbalancer_status_tenant_id_idx
   on service_loadbalancer_status(tenant_id);

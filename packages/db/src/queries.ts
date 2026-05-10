@@ -891,6 +891,7 @@ export interface LoadBalancerStatusRow {
   serviceId: string;
   agentId: string | null;
   environment: string;
+  namespace: string;
   lbType: LoadBalancerType;
   externalIp: string | null;
   externalHostname: string | null;
@@ -907,6 +908,7 @@ function mapLb(r: Record<string, unknown>): LoadBalancerStatusRow {
     serviceId: String(r.service_id),
     agentId: r.agent_id == null ? null : String(r.agent_id),
     environment: String(r.environment),
+    namespace: String(r.namespace ?? ""),
     lbType: String(r.lb_type) as LoadBalancerType,
     externalIp: r.external_ip == null ? null : String(r.external_ip),
     externalHostname: r.external_hostname == null ? null : String(r.external_hostname),
@@ -926,6 +928,7 @@ export async function upsertLoadBalancerStatus(
     serviceId: string;
     agentId: string | null;
     environment: string;
+    namespace: string;
     lbType: LoadBalancerType;
     externalIp: string | null;
     externalHostname: string | null;
@@ -937,11 +940,12 @@ export async function upsertLoadBalancerStatus(
   const id = crypto.randomUUID();
   const { rows } = await query(
     `INSERT INTO service_loadbalancer_status
-       (id, tenant_id, service_id, agent_id, environment, lb_type,
+       (id, tenant_id, service_id, agent_id, environment, namespace, lb_type,
         external_ip, external_hostname, ports, domains, detail, observed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, now())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, now())
      ON CONFLICT (service_id, environment) DO UPDATE SET
        agent_id = EXCLUDED.agent_id,
+       namespace = EXCLUDED.namespace,
        lb_type = EXCLUDED.lb_type,
        external_ip = EXCLUDED.external_ip,
        external_hostname = EXCLUDED.external_hostname,
@@ -956,6 +960,7 @@ export async function upsertLoadBalancerStatus(
       data.serviceId,
       data.agentId,
       data.environment,
+      data.namespace,
       data.lbType,
       data.externalIp,
       data.externalHostname,

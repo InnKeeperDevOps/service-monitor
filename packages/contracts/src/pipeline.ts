@@ -168,6 +168,14 @@ export const pipelineLoadBalancerSchema = z.discriminatedUnion("type", [
   })
 ]);
 
+// Kubernetes namespace / docker grouping name. Validated as an
+// RFC-1123-style label so it round-trips into k8s namespace names
+// directly. Same shape as environment + pipeline names.
+const namespaceRegex = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const namespaceSchema = z
+  .string()
+  .regex(namespaceRegex, "namespace must be lowercase alphanumeric with hyphens (max 63 chars)");
+
 // Per-environment overrides. All fields are optional; omitting any falls
 // back to the top-level default at deploy time.
 export const pipelineEnvironmentSchema = z.object({
@@ -176,7 +184,13 @@ export const pipelineEnvironmentSchema = z.object({
   /** Domains routed to this environment. */
   domains: z.array(pipelineDomainSchema).default([]),
   /** Load-balancer override for this environment. */
-  loadBalancer: pipelineLoadBalancerSchema.optional()
+  loadBalancer: pipelineLoadBalancerSchema.optional(),
+  /**
+   * Kubernetes namespace this environment deploys into (or docker
+   * "project name" — the agent uses it to scope container names and
+   * labels). Overrides the top-level default.
+   */
+  namespace: namespaceSchema.optional()
 });
 
 // Environment names: lowercase alphanum + hyphen, max 63 chars (matches
@@ -210,6 +224,12 @@ export const pipelineDefinitionSchema = z
      * operator uses this. Defaults to {type: "none"} (cluster-internal).
      */
     loadBalancer: pipelineLoadBalancerSchema.default({ type: "none" }),
+    /**
+     * Default kubernetes namespace / docker project name. Per-env can
+     * override. When unset, the agent picks: in k8s mode, the agent's
+     * own pod namespace; in docker mode, the literal "kaiad".
+     */
+    namespace: namespaceSchema.optional(),
     /**
      * Per-environment overrides. Keys are environment names
      * (e.g. "development", "staging", "production"). Each environment's
@@ -333,12 +353,19 @@ export function resolveEnvironment(
   instances: number;
   domains: PipelineDomain[];
   loadBalancer: PipelineLoadBalancer;
+  /**
+   * Resolved namespace. Empty string when no kaiad.yaml-level
+   * namespace was set anywhere — the agent picks a per-runtime
+   * default in that case (k8s: agent's pod ns; docker: "kaiad").
+   */
+  namespace: string;
 } {
   const env = def.environments[envName];
   return {
     instances: env?.instances ?? def.instances,
     domains: env?.domains.length ? env.domains : def.domains,
-    loadBalancer: env?.loadBalancer ?? def.loadBalancer
+    loadBalancer: env?.loadBalancer ?? def.loadBalancer,
+    namespace: env?.namespace ?? def.namespace ?? ""
   };
 }
 
@@ -365,6 +392,7 @@ const innerPipelineSchema = z
     instances: z.number().int().min(0).default(1),
     domains: z.array(pipelineDomainSchema).default([]),
     loadBalancer: pipelineLoadBalancerSchema.default({ type: "none" }),
+    namespace: namespaceSchema.optional(),
     environments: z.record(pipelineEnvironmentSchema).default({})
   })
   // Same cross-field checks as the top-level pipelineDefinitionSchema.

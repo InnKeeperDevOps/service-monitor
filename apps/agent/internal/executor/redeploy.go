@@ -37,12 +37,22 @@ import (
 const LabelServiceID = "kaiad.dev/service-id"
 const LabelBuildID = "kaiad.dev/build-id"
 const LabelEnvironment = "kaiad.dev/environment"
+const LabelNamespace = "kaiad.dev/namespace"
+
+// DefaultDockerNamespace is the docker-mode fallback when kaiad.yaml
+// declares no namespace. Used as the container-name prefix and label
+// so kaiad-managed containers cluster naturally in `docker ps`.
+const DefaultDockerNamespace = "kaiad"
 
 type redeployInput struct {
 	commandID    string
 	serviceID    string
 	buildID      string
 	environment  string
+	// namespace is the k8s namespace for k8s mode or the docker
+	// "project name" for docker mode. Empty means "use the runtime's
+	// default" (k8s: agent pod's own ns; docker: "kaiad").
+	namespace    string
 	imageRef     string
 	instances    int
 	domains      []domainSpec
@@ -89,6 +99,9 @@ func parseRedeployPayload(payload map[string]interface{}) (redeployInput, error)
 		in.environment = s
 	} else {
 		in.environment = "development"
+	}
+	if s, ok := payload["namespace"].(string); ok {
+		in.namespace = s
 	}
 	if n, ok := payload["instances"].(float64); ok && n >= 0 {
 		in.instances = int(n)
@@ -198,14 +211,21 @@ func (e *Executor) redeployDocker(
 	}
 	logf("pulled %s", in.imageRef)
 
+	namespace := strings.TrimSpace(in.namespace)
+	if namespace == "" {
+		namespace = DefaultDockerNamespace
+	}
+
 	// 2) Find this service's existing containers and remove them.
+	//    Scope by (service-id, namespace) so two services using the
+	//    same id in different namespaces don't trample each other.
 	existing, err := dc.ListContainersAll(ctx)
 	if err != nil {
 		return CommandResult{Success: false, Output: out.String() + fmt.Sprintf("list containers: %v\n", err)}
 	}
 	var toRemove []docker.ContainerInfo
 	for _, c := range existing {
-		if c.Labels[LabelServiceID] == in.serviceID {
+		if c.Labels[LabelServiceID] == in.serviceID && c.Labels[LabelNamespace] == namespace {
 			toRemove = append(toRemove, c)
 		}
 	}
@@ -246,10 +266,14 @@ func (e *Executor) redeployDocker(
 		LabelServiceID:   in.serviceID,
 		LabelBuildID:     in.buildID,
 		LabelEnvironment: in.environment,
+		LabelNamespace:   namespace,
 	}
 
 	for i := 0; i < in.instances; i++ {
-		name := fmt.Sprintf("kaiad-%s-%d", shortServiceName(in.serviceID), i)
+		// <namespace>-<svc-uuid-short>-<replica> so all containers in
+		// one namespace cluster in `docker ps` and the namespace
+		// shows up in the container name.
+		name := fmt.Sprintf("%s-%s-%d", namespace, shortServiceName(in.serviceID), i)
 		// docker create rejects names that already exist; remove any
 		// stale name from a prior run that wasn't caught by label scan.
 		_ = dc.RemoveContainer(ctx, name)
@@ -276,7 +300,7 @@ func (e *Executor) redeployDocker(
 	// KAIAD_AGENT_EXTERNAL_HOST or os.Hostname() as a fallback.
 	reporter, agentID := e.reporterAndID()
 	if reporter != nil {
-		report := buildDockerLbStatusReport(agentID, in, publishPorts)
+		report := buildDockerLbStatusReport(agentID, in, namespace, publishPorts)
 		if err := reporter(report); err != nil {
 			fmt.Fprintf(&out, "lb_status_report send failed: %v\n", err)
 		}
@@ -299,7 +323,7 @@ func (e *Executor) redeployDocker(
 // since multi-replica docker has no fronting LB by default and the
 // kaiad.yaml domains have nothing to actually route to until one is
 // added externally.
-func buildDockerLbStatusReport(agentID string, in redeployInput, publishedPorts bool) map[string]interface{} {
+func buildDockerLbStatusReport(agentID string, in redeployInput, namespace string, publishedPorts bool) map[string]interface{} {
 	host := strings.TrimSpace(os.Getenv("KAIAD_AGENT_EXTERNAL_HOST"))
 	if host == "" {
 		if hn, err := os.Hostname(); err == nil {
@@ -352,6 +376,7 @@ func buildDockerLbStatusReport(agentID string, in redeployInput, publishedPorts 
 		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
 		"serviceId":        in.serviceID,
 		"environment":      in.environment,
+		"namespace":        namespace,
 		"buildId":          in.buildID,
 		// Docker doesn't have a "type" in the k8s sense; use the
 		// kaiad.yaml-declared lbType so the panel groups consistently
@@ -417,7 +442,14 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 		}
 	}
 
-	namespace := os.Getenv("KAIAD_AGENT_NAMESPACE")
+	// Namespace selection priority: kaiad.yaml-resolved (in.namespace) →
+	// KAIAD_AGENT_NAMESPACE env → in-cluster service-account ns →
+	// "default". The yaml-resolved value lets a single agent deploy
+	// services into multiple namespaces based on their environment.
+	namespace := strings.TrimSpace(in.namespace)
+	if namespace == "" {
+		namespace = os.Getenv("KAIAD_AGENT_NAMESPACE")
+	}
 	if namespace == "" {
 		// Standard in-cluster path.
 		if b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
@@ -426,6 +458,24 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 	}
 	if namespace == "" {
 		namespace = "default"
+	}
+
+	// Make sure the namespace exists. `kubectl create ns --dry-run=client
+	// -o yaml | kubectl apply -f -` is idempotent — apply is a no-op
+	// when the ns already exists, and creates it when it doesn't.
+	// Failure here isn't fatal; the subsequent apply will surface a
+	// clearer error if the namespace doesn't exist and we couldn't
+	// create it (e.g. agent SA lacks namespaces.create cluster perm).
+	ensureCtx, ensureCancel := context.WithTimeout(ctx, 10*time.Second)
+	dryRun := exec.CommandContext(ensureCtx, "kubectl", "create", "ns", namespace, "--dry-run=client", "-o", "yaml")
+	dryOut, dryErr := dryRun.Output()
+	ensureCancel()
+	if dryErr == nil {
+		applyCtx, applyCancel := context.WithTimeout(ctx, 10*time.Second)
+		applyNs := exec.CommandContext(applyCtx, "kubectl", "apply", "-f", "-")
+		applyNs.Stdin = strings.NewReader(string(dryOut))
+		_, _ = applyNs.CombinedOutput()
+		applyCancel()
 	}
 
 	yaml := renderK8sManifests(in, namespace)
@@ -466,7 +516,7 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 	externalIP, externalHostname := queryK8sLbAddress(cctx, namespace, in.loadBalancer.typ, resourceName)
 	reporter, agentID := e.reporterAndID()
 	if reporter != nil {
-		report := buildLbStatusReport(agentID, in, externalIP, externalHostname)
+		report := buildLbStatusReport(agentID, in, namespace, externalIP, externalHostname)
 		if err := reporter(report); err != nil {
 			fmt.Fprintf(&out, "\nlb_status_report send failed: %v\n", err)
 		}
@@ -526,7 +576,7 @@ func queryK8sLbAddress(ctx context.Context, namespace, lbType, name string) (str
 // buildLbStatusReport assembles the JSON payload the platform expects
 // to see on the realtime channel as msg.type = "lb_status_report".
 // Fields mirror the lbStatusReportSchema in @sm/contracts.
-func buildLbStatusReport(agentID string, in redeployInput, externalIP, externalHostname string) map[string]interface{} {
+func buildLbStatusReport(agentID string, in redeployInput, namespace, externalIP, externalHostname string) map[string]interface{} {
 	domains := make([]map[string]interface{}, 0, len(in.domains))
 	for _, d := range in.domains {
 		domains = append(domains, map[string]interface{}{
@@ -586,6 +636,7 @@ func buildLbStatusReport(agentID string, in redeployInput, externalIP, externalH
 		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
 		"serviceId":        in.serviceID,
 		"environment":      in.environment,
+		"namespace":        namespace,
 		"buildId":          in.buildID,
 		"lbType":           in.loadBalancer.typ,
 		"externalIp":       ip,
