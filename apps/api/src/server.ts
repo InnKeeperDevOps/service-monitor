@@ -94,6 +94,12 @@ import {
   type RegistryAccess,
   type RegistryAuthConfig
 } from "./registryAuth.js";
+import {
+  deleteTag as registryDeleteTag,
+  listRepositories as registryListRepositories,
+  listTags as registryListTags,
+  type RegistryAdminConfig
+} from "./registryAdmin.js";
 import { createMemoryAuthStore, seedDevUser } from "./memoryAuthStore.js";
 import { createPostgresAuthStore } from "./postgresAuthStore.js";
 import { readConfig, writeConfig, type KaiadConfig } from "./configPersistence.js";
@@ -555,6 +561,124 @@ export function buildServer(opts: BuildServerOptions = {}) {
       issued_at: tokenInfo.issuedAt
     };
   });
+
+  // ── Registry-management API (panel-only) ───────────────────
+  // The registry's HTTP surface (/v2/_catalog, /v2/<name>/tags/list, …)
+  // is technically reachable from the browser, but the JWT it requires
+  // would have to be minted by the kaiad API anyway. Rather than expose
+  // a "give me an admin token" endpoint to the panel, we proxy the few
+  // operations the Registry page needs and sign the upstream JWTs
+  // server-side with a fixed `kaiad-internal-admin` subject.
+  const registryAdminConfig: RegistryAdminConfig = {
+    baseUrl:
+      process.env.KAIAD_REGISTRY_ADMIN_URL ||
+      `http://${process.env.KAIAD_REGISTRY_INTERNAL || "registry:5000"}`,
+    auth: registryAuthConfig
+  };
+
+  /**
+   * Reject unless the caller is an owner/admin kaiad session. Returns
+   * `null` on rejection (after sending the response) or the resolved
+   * session on success.
+   */
+  async function requireAdminSession(req: any, reply: any) {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Missing or invalid bearer token",
+          correlationId: req.correlationId
+        })
+      );
+      return null;
+    }
+    if (session.kind === "apiCredential" || (session.role !== "owner" && session.role !== "admin")) {
+      reply.status(403).send(
+        apiErrorSchema.parse({
+          code: "FORBIDDEN",
+          message: "Owner or admin session required",
+          correlationId: req.correlationId
+        })
+      );
+      return null;
+    }
+    return session;
+  }
+
+  app.get("/api/v1/registry/repositories", async (req, reply) => {
+    const session = await requireAdminSession(req, reply);
+    if (!session) return;
+    try {
+      const repositories = await registryListRepositories(registryAdminConfig);
+      return { repositories };
+    } catch (err) {
+      app.log.error({ err }, "registry list repositories failed");
+      return reply.status(502).send(
+        apiErrorSchema.parse({
+          code: "REGISTRY_UNAVAILABLE",
+          message: err instanceof Error ? err.message : "Registry call failed",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+  });
+
+  // Repo names can contain slashes (e.g. `library/alpine`). Fastify
+  // doesn't accept '/' inside a single :name param, so the panel must
+  // url-encode '/' as %2F. encodeURIComponent on the client handles it.
+  app.get<{ Params: { name: string } }>(
+    "/api/v1/registry/repositories/:name/tags",
+    async (req, reply) => {
+      const session = await requireAdminSession(req, reply);
+      if (!session) return;
+      const name = req.params.name;
+      try {
+        const tags = await registryListTags(registryAdminConfig, name);
+        return { name, tags };
+      } catch (err) {
+        app.log.error({ err, name }, "registry list tags failed");
+        return reply.status(502).send(
+          apiErrorSchema.parse({
+            code: "REGISTRY_UNAVAILABLE",
+            message: err instanceof Error ? err.message : "Registry call failed",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+    }
+  );
+
+  app.delete<{ Params: { name: string; tag: string } }>(
+    "/api/v1/registry/repositories/:name/tags/:tag",
+    async (req, reply) => {
+      const session = await requireAdminSession(req, reply);
+      if (!session) return;
+      const { name, tag } = req.params;
+      try {
+        const result = await registryDeleteTag(registryAdminConfig, name, tag);
+        if (!result.deleted) {
+          return reply.status(result.status === 404 ? 404 : 502).send(
+            apiErrorSchema.parse({
+              code: result.status === 404 ? "NOT_FOUND" : "REGISTRY_UNAVAILABLE",
+              message: result.message ?? "Delete failed",
+              correlationId: (req as any).correlationId
+            })
+          );
+        }
+        return { deleted: true, digest: result.digest };
+      } catch (err) {
+        app.log.error({ err, name, tag }, "registry delete tag failed");
+        return reply.status(502).send(
+          apiErrorSchema.parse({
+            code: "REGISTRY_UNAVAILABLE",
+            message: err instanceof Error ? err.message : "Registry call failed",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+    }
+  );
 
   // WebSocket routes must live in an async child plugin (Fastify 5 + @fastify/websocket);
   // otherwise upgrades fail with HTTP 500 for both TCP and injectWS.

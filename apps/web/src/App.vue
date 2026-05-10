@@ -5,6 +5,7 @@ import {
   Box,
   Building2,
   Cpu,
+  Database,
   Key,
   LayoutDashboard,
   LogOut,
@@ -20,6 +21,7 @@ import AgentsPage from "./features/agents/AgentsPage.vue";
 import ServicesPage from "./features/services/ServicesPage.vue";
 import SshKeysPage from "./features/ssh-keys/SshKeysPage.vue";
 import TenantsPage from "./features/tenants/TenantsPage.vue";
+import RegistryPage from "./features/registry/RegistryPage.vue";
 import SettingsPage from "./features/settings/SettingsPage.vue";
 import TenantConfigurationPage from "./features/tenants/TenantConfigurationPage.vue";
 import LoginPage from "./features/auth/LoginPage.vue";
@@ -31,6 +33,7 @@ type Route =
   | "agents"
   | "services"
   | "sshKeys"
+  | "registry"
   | "settings"
   | "tenants"
   | "tenantConfig"
@@ -42,6 +45,7 @@ const NAV_ITEMS: { route: Route; label: string; icon: Component; adminOnly?: boo
   { route: "services", label: "Services", icon: Box },
   { route: "incidents", label: "Incidents", icon: AlertTriangle },
   { route: "sshKeys", label: "SSH Keys", icon: Key },
+  { route: "registry", label: "Registry", icon: Database, adminOnly: true },
   { route: "tenants", label: "Tenants", icon: Building2, adminOnly: true },
   { route: "settings", label: "Settings", icon: Settings, adminOnly: true }
 ];
@@ -59,6 +63,7 @@ function readNavFromHash(): { route: Route; tenantConfigTenantId: string | null 
     "agents",
     "services",
     "sshKeys",
+    "registry",
     "settings",
     "tenants",
     "login"
@@ -246,6 +251,7 @@ const navStyle: CSSProperties = {
       <AgentsPage v-else-if="route === 'agents'" />
       <ServicesPage v-else-if="route === 'services'" />
       <SshKeysPage v-else-if="route === 'sshKeys'" />
+      <RegistryPage v-else-if="route === 'registry'" />
       <TenantsPage v-else-if="route === 'tenants'" @auth-user-updated="(u: AuthUser) => (user = u)" />
       <SettingsPage v-else-if="route === 'settings'" />
       <TenantConfigurationPage

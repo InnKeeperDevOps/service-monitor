@@ -214,6 +214,17 @@ export type OAuthProviderConfigPayload = {
   scopes: string[];
 };
 
+export type RegistryRepository = {
+  name: string;
+};
+
+export type RegistryTag = {
+  tag: string;
+  digest?: string;
+  sizeBytes?: number;
+  createdAt?: string;
+};
+
 export type AuthProviderEntry = {
   id: string;
   provider: string;
@@ -339,6 +350,22 @@ export const api = {
     apiFetch<void>(`/api/v1/services/${encodeURIComponent(id)}`, {
       method: "DELETE"
     }),
+
+  // --- Registry management (panel-only; admin-gated) ---
+
+  listRegistryRepositories: () =>
+    apiFetch<{ repositories: RegistryRepository[] }>("/api/v1/registry/repositories"),
+
+  listRegistryTags: (name: string) =>
+    apiFetch<{ name: string; tags: RegistryTag[] }>(
+      `/api/v1/registry/repositories/${encodeURIComponent(name)}/tags`
+    ),
+
+  deleteRegistryTag: (name: string, tag: string) =>
+    apiFetch<{ deleted: boolean; digest?: string }>(
+      `/api/v1/registry/repositories/${encodeURIComponent(name)}/tags/${encodeURIComponent(tag)}`,
+      { method: "DELETE" }
+    ),
 
   getSettings: () => getTenantSettings(),
   updateSettings: (data: TenantSettings) =>
