@@ -18,6 +18,7 @@ import {
   listSshKeysResponseSchema,
   healthResponseSchema,
   listAgentsResponseSchema,
+  updateAgentRequestSchema,
   hostStatsSchema,
   appStatsSchema,
   uiTelemetryEventSchema,
@@ -2034,11 +2035,17 @@ export function buildServer(opts: BuildServerOptions = {}) {
     if (session.role !== "owner" && session.role !== "admin") {
       return reply.status(403).send(apiErrorSchema.parse({ code: "FORBIDDEN", message: "Admin access required", correlationId: (req as any).correlationId }));
     }
-    const body = (req.body ?? {}) as { name?: string | null; allowedCapabilities?: string[] };
-    const updated = await domainStore.updateAgent(session.tenantId, req.params.id, {
-      name: typeof body.name === "string" ? body.name : body.name === null ? null : undefined,
-      allowedCapabilities: Array.isArray(body.allowedCapabilities) ? body.allowedCapabilities : undefined
-    });
+    const parsed = updateAgentRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "BAD_REQUEST",
+          message: parsed.error.issues[0]?.message ?? "Invalid agent update payload",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const updated = await domainStore.updateAgent(session.tenantId, req.params.id, parsed.data);
     if (!updated) {
       return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Agent not found", correlationId: (req as any).correlationId }));
     }

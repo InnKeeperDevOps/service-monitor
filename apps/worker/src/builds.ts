@@ -72,7 +72,7 @@ import {
   type QueryFn,
   type ServiceBuildRow
 } from "@sm/db";
-import { parsePipelineYaml, type PipelineDefinition } from "@sm/contracts";
+import { parsePipelineYaml, resolveEnvironment, type PipelineDefinition } from "@sm/contracts";
 
 // Tunables (env-overridable for tests).
 const POLL_INTERVAL_MS = parseInt(process.env.BUILD_POLL_INTERVAL_MS ?? "60000", 10);
@@ -425,14 +425,19 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
     // agent on success. Stub: the agent acknowledges the dispatch but
     // doesn't yet pull/recreate (per-runtime handler is a follow-up).
     if (build.triggeredBy === "manual" && imageRef) {
-      await dispatchRedeployToBoundAgents(query, build.id, build.serviceId, imageRef, logger).catch(
-        (err) => {
-          logger.warn("redeploy dispatch failed", {
-            buildId: build.id,
-            err: (err as Error).message
-          });
-        }
-      );
+      await dispatchRedeployToBoundAgents(
+        query,
+        build.id,
+        build.serviceId,
+        imageRef,
+        pipeline,
+        logger
+      ).catch((err) => {
+        logger.warn("redeploy dispatch failed", {
+          buildId: build.id,
+          err: (err as Error).message
+        });
+      });
     }
   } finally {
     // Best-effort cleanup. /tmp gets reaped on container restart anyway,
@@ -931,13 +936,20 @@ async function dispatchRedeployToBoundAgents(
   buildId: string,
   serviceId: string,
   imageRef: string,
+  pipeline: PipelineDefinition,
   logger: Logger
 ): Promise<void> {
   const apiUrl = process.env.INTERNAL_API_URL?.trim() ?? `http://127.0.0.1:${process.env.PORT ?? "8092"}`;
   const internalToken = (process.env.INTERNAL_API_TOKEN?.trim() || "dev-token");
 
+  // Join agent_services with agents so we know each bound agent's
+  // environment up-front. The operator/agent uses it to pick the
+  // right per-env block from the pipeline.
   const { rows } = await query(
-    `SELECT agent_id FROM agent_services WHERE service_id = $1`,
+    `SELECT a.id AS agent_id, a.environment
+       FROM agent_services s
+       JOIN agents a ON a.id = s.agent_id
+      WHERE s.service_id = $1`,
     [serviceId]
   );
   if (rows.length === 0) {
@@ -953,6 +965,8 @@ async function dispatchRedeployToBoundAgents(
 
   for (const row of rows) {
     const agentId = String(row.agent_id);
+    const agentEnv = String(row.environment ?? "development");
+    const resolved = resolveEnvironment(pipeline, agentEnv);
     const commandId = crypto.randomUUID();
     const job = {
       agentId,
@@ -962,7 +976,14 @@ async function dispatchRedeployToBoundAgents(
         commandId,
         serviceId,
         imageRef,
-        buildId
+        buildId,
+        // Per-agent resolved deployment metadata. Agents/operators in
+        // different environments get different instances/domains/
+        // loadBalancer values for the same image.
+        environment: agentEnv,
+        instances: resolved.instances,
+        domains: resolved.domains,
+        loadBalancer: resolved.loadBalancer
       }
     };
     try {
@@ -979,7 +1000,7 @@ async function dispatchRedeployToBoundAgents(
         await appendBuildLog(
           query,
           buildId,
-          `  ${agentId.slice(0, 32)}: dispatch ${res.status} — ${bodyText.slice(0, 200)}\n`
+          `  ${agentId.slice(0, 32)} [env=${agentEnv}]: dispatch ${res.status} — ${bodyText.slice(0, 200)}\n`
         );
         logger.warn("redeploy dispatch non-2xx", { buildId, agentId, status: res.status });
         continue;
@@ -992,7 +1013,11 @@ async function dispatchRedeployToBoundAgents(
         /* ignore */
       }
       const where = parsed.delivered ? "delivered (online)" : parsed.queued ? "queued (offline)" : "accepted";
-      await appendBuildLog(query, buildId, `  ${agentId.slice(0, 32)}: ${where}\n`);
+      await appendBuildLog(
+        query,
+        buildId,
+        `  ${agentId.slice(0, 32)} [env=${agentEnv} replicas=${resolved.instances}]: ${where}\n`
+      );
     } catch (err) {
       await appendBuildLog(
         query,

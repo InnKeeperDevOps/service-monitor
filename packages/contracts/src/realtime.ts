@@ -342,6 +342,23 @@ const runFixPlanCommandSchema = z.object({
  * follow-up. The dispatch round-trip is wired now so the panel shows
  * the command being delivered.
  */
+const redeployDomainSchema = z.object({
+  host: z.string(),
+  port: z.number().int().min(1).max(65535),
+  protocol: z.enum(["http", "https"])
+});
+
+const redeployLoadBalancerSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("none") }),
+  z.object({ type: z.literal("k8s"), annotations: z.record(z.string()).default({}) }),
+  z.object({ type: z.literal("metallb"), addressPool: z.string().min(1).optional() }),
+  z.object({
+    type: z.literal("nginx"),
+    ingressClass: z.string().min(1).default("nginx"),
+    tlsSecret: z.string().min(1).optional()
+  })
+]);
+
 const redeployServiceCommandSchema = z.object({
   type: z.literal("redeploy_service"),
   commandId: z.string(),
@@ -349,7 +366,18 @@ const redeployServiceCommandSchema = z.object({
   /** Fully-qualified image reference (host/repo:tag) the agent should pull. */
   imageRef: z.string(),
   /** Source build row id, for cross-referencing in agent logs. */
-  buildId: z.string()
+  buildId: z.string(),
+  /**
+   * Per-agent deployment metadata, resolved by the worker via
+   * resolveEnvironment(pipeline, agent.environment) before dispatch.
+   * The agent receives only the slice that applies to its environment;
+   * different agents bound to the same service get different values
+   * for the same image.
+   */
+  environment: z.string(),
+  instances: z.number().int().min(0),
+  domains: z.array(redeployDomainSchema).default([]),
+  loadBalancer: redeployLoadBalancerSchema.default({ type: "none" })
 });
 
 /** Uses `z.union` (not `discriminatedUnion`) so variants may apply `.superRefine` (e.g. receive_source_archive url xor path). */

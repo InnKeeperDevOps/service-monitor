@@ -100,7 +100,8 @@ describe("agents API", () => {
       name: "edge",
       version: "1.0.0",
       status: "online",
-      lastSeenAt: new Date().toISOString()
+      lastSeenAt: new Date().toISOString(),
+      environment: "development"
     });
     const res = await app.inject({ method: "GET", url: "/api/v1/agents", headers: AUTH });
     expect(res.statusCode).toBe(200);
@@ -236,7 +237,8 @@ describe("agents administration API", () => {
       status: "online",
       lastSeenAt: null,
       certFingerprint: null,
-      allowedCapabilities: []
+      allowedCapabilities: [],
+      environment: "development"
     });
     const res = await app.inject({
       method: "PATCH",
@@ -257,7 +259,8 @@ describe("agents administration API", () => {
       status: "online",
       lastSeenAt: null,
       certFingerprint: null,
-      allowedCapabilities: []
+      allowedCapabilities: [],
+      environment: "development"
     });
     const svc = await domainStore.createService("t-1", {
       name: "linked",

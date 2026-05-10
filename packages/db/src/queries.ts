@@ -209,6 +209,8 @@ export interface AgentRow {
   lastSeenAt: string | null;
   certFingerprint?: string | null;
   allowedCapabilities?: string[];
+  /** Deployment environment this agent serves (e.g. 'development', 'production'). */
+  environment: string;
 }
 
 function mapAgent(r: Record<string, unknown>): AgentRow {
@@ -231,6 +233,7 @@ function mapAgent(r: Record<string, unknown>): AgentRow {
     certFingerprint:
       r.cert_fingerprint == null ? null : String(r.cert_fingerprint),
     allowedCapabilities,
+    environment: String(r.environment ?? "development"),
   };
 }
 
@@ -286,7 +289,7 @@ export async function updateAgent(
   query: QueryFn,
   tenantId: string,
   agentId: string,
-  data: { name?: string | null; allowedCapabilities?: string[] }
+  data: { name?: string | null; allowedCapabilities?: string[]; environment?: string }
 ): Promise<AgentRow | undefined> {
   const sets: string[] = [];
   const params: unknown[] = [agentId, tenantId];
@@ -297,6 +300,10 @@ export async function updateAgent(
   if (data.allowedCapabilities !== undefined) {
     params.push(data.allowedCapabilities);
     sets.push(`allowed_capabilities = $${params.length}`);
+  }
+  if (data.environment !== undefined) {
+    params.push(data.environment);
+    sets.push(`environment = $${params.length}`);
   }
   if (sets.length === 0) {
     const { rows } = await query(

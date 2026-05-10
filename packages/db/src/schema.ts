@@ -57,6 +57,13 @@ create table if not exists agents (
   allowed_capabilities text[] default '{}'
 );
 
+-- Agents have a deployment environment so the operator can pick the
+-- right per-env block from a service's kaiad.yaml when redeploying.
+-- Defaults to 'development' for legacy rows; new agents are typically
+-- assigned via the panel after enrollment. Lowercase k8s-style names
+-- match pipelineEnvironmentSchema's regex.
+alter table agents add column if not exists environment text not null default 'development';
+
 create table if not exists agent_enrollment_tokens (
   id text primary key,
   tenant_id text not null references tenants(id) on delete cascade,

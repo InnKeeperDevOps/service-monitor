@@ -175,6 +175,8 @@ export type Agent = {
   lastSeenAt: string | null;
   certFingerprint?: string | null;
   allowedCapabilities?: string[];
+  /** Deployment environment (e.g. "development", "production") — keys into kaiad.yaml's environments map. */
+  environment: string;
   /** Present when API merges RealtimeManager session state. */
   websocketConnected?: boolean;
   /** Latest host_stats merged from RealtimeManager. */
@@ -311,7 +313,10 @@ export const api = {
   listAgents: () => apiFetch<{ agents: Agent[] }>("/api/v1/agents"),
   getAgent: (id: string) =>
     apiFetch<Agent>(`/api/v1/agents/${encodeURIComponent(id)}`),
-  updateAgent: (id: string, data: { name?: string | null; allowedCapabilities?: string[] }) =>
+  updateAgent: (
+    id: string,
+    data: { name?: string | null; allowedCapabilities?: string[]; environment?: string }
+  ) =>
     apiFetch<Agent>(`/api/v1/agents/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(data)

@@ -187,6 +187,21 @@ async function saveEdit(agentId: string) {
     savingId.value = null;
   }
 }
+async function onEnvironmentChange(agentId: string, value: string) {
+  // Worker dispatches per-agent resolved metadata using this field, so
+  // updates propagate immediately to the next manual build's redeploy.
+  savingId.value = agentId;
+  actionError.value = null;
+  try {
+    await api.updateAgent(agentId, { environment: value });
+    await fetchData();
+  } catch (e: unknown) {
+    actionError.value = (e as Error).message;
+  } finally {
+    savingId.value = null;
+  }
+}
+
 async function deleteAgent(agentId: string, displayName: string) {
   if (!window.confirm(`Remove agent "${displayName}"? Any services bound to it will be detached.`)) return;
   savingId.value = agentId;
@@ -283,6 +298,7 @@ function diskPct(t: AgentTelemetry | undefined): string {
             <th scope="col" :style="thStyle">Agent</th>
             <th scope="col" :style="thStyle">Live</th>
             <th scope="col" :style="thStyle">Status</th>
+            <th scope="col" :style="thStyle">Environment</th>
             <th scope="col" :style="thStyle">Version</th>
             <th scope="col" :style="thStyle">Last seen</th>
             <th scope="col" :style="thStyle">CPU</th>
@@ -357,6 +373,33 @@ function diskPct(t: AgentTelemetry | undefined): string {
               </td>
               <td :style="tdStyle">
                 <Badge :variant="badgeVariant(a.status)">{{ a.status }}</Badge>
+              </td>
+              <td :style="tdStyle">
+                <select
+                  v-if="!isViewer"
+                  :value="a.environment"
+                  :disabled="savingId === a.id"
+                  :aria-label="`Environment for agent ${a.id}`"
+                  :style="{
+                    padding: '0.2rem 0.4rem',
+                    fontSize: '0.82rem',
+                    background: 'var(--color-surface)',
+                    color: 'var(--color-text-primary)',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: '4px'
+                  }"
+                  @change="onEnvironmentChange(a.id, ($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="development">development</option>
+                  <option value="staging">staging</option>
+                  <option value="production">production</option>
+                  <!-- Surface custom values that aren't in the preset list. -->
+                  <option
+                    v-if="!['development','staging','production'].includes(a.environment)"
+                    :value="a.environment"
+                  >{{ a.environment }}</option>
+                </select>
+                <span v-else :style="{ fontSize: '0.85rem' }">{{ a.environment }}</span>
               </td>
               <td :style="{ ...tdStyle, fontSize: '0.85rem' }">{{ a.version ?? "—" }}</td>
               <td :style="tdStyle">
@@ -458,7 +501,7 @@ function diskPct(t: AgentTelemetry | undefined): string {
             </tr>
             <tr v-if="expanded[a.id]">
               <td
-                :colspan="14"
+                :colspan="15"
                 :style="{
                   ...tdStyle,
                   padding: '0.25rem 0.5rem 1rem 2rem',

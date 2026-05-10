@@ -24,7 +24,7 @@ export type DomainStore = {
   updateAgent(
     tenantId: string,
     agentId: string,
-    data: { name?: string | null; allowedCapabilities?: string[] }
+    data: { name?: string | null; allowedCapabilities?: string[]; environment?: string }
   ): Promise<Agent | undefined>;
   deleteAgent(tenantId: string, agentId: string): Promise<boolean>;
 
@@ -186,7 +186,8 @@ export function createMemoryDomainStore(): DomainStore {
         status: "online",
         lastSeenAt: now,
         certFingerprint: existing?.certFingerprint ?? null,
-        allowedCapabilities: existing?.allowedCapabilities ?? []
+        allowedCapabilities: existing?.allowedCapabilities ?? [],
+        environment: existing?.environment ?? "development"
       };
       agents.set(data.agentId, next);
     },
@@ -204,7 +205,8 @@ export function createMemoryDomainStore(): DomainStore {
         ...a,
         name: data.name === undefined ? a.name : data.name,
         allowedCapabilities:
-          data.allowedCapabilities === undefined ? a.allowedCapabilities : [...data.allowedCapabilities]
+          data.allowedCapabilities === undefined ? a.allowedCapabilities : [...data.allowedCapabilities],
+        environment: data.environment === undefined ? a.environment : data.environment
       };
       agents.set(agentId, next);
       return next;

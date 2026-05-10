@@ -22,6 +22,7 @@ describe("createMemoryDomainStore agent heartbeat and offline", () => {
       lastSeenAt: "2025-01-01T00:00:00.000Z",
       certFingerprint: null,
       allowedCapabilities: [],
+      environment: "development",
     });
     await store.markAgentOffline("t1", "a1");
     const a = await store.getAgent("t1", "a1");
@@ -38,6 +39,7 @@ describe("createMemoryDomainStore agent heartbeat and offline", () => {
       lastSeenAt: "2025-01-01T00:00:00.000Z",
       certFingerprint: null,
       allowedCapabilities: [],
+      environment: "development",
     });
     await store.markAgentOffline("t-other", "a1");
     const a = await store.getAgent("t1", "a1");
@@ -59,6 +61,7 @@ describe("createMemoryDomainStore agent heartbeat and offline", () => {
       lastSeenAt: "2025-01-01T00:00:00.000Z",
       certFingerprint: null,
       allowedCapabilities: [],
+      environment: "development",
     });
     await store.recordAgentHeartbeat("t2", {
       agentId: "shared-id",
@@ -80,6 +83,7 @@ describe("createMemoryDomainStore agent heartbeat and offline", () => {
       lastSeenAt: "2025-01-01T00:00:00.000Z",
       certFingerprint: null,
       allowedCapabilities: [],
+      environment: "development",
     });
     await store.recordAgentHeartbeat("t1", { agentId: "a1", version: null });
     const a = await store.getAgent("t1", "a1");

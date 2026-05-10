@@ -216,6 +216,14 @@ export const agentAppTelemetrySchema = z.object({
 
 export type AgentAppTelemetry = z.infer<typeof agentAppTelemetrySchema>;
 
+// Lowercase k8s-style names. Mirrors the regex used for kaiad.yaml
+// environment names so an agent's environment is a valid key into
+// pipelineDefinition.environments.
+const agentEnvironmentRegex = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const agentEnvironmentSchema = z
+  .string()
+  .regex(agentEnvironmentRegex, "environment must be lowercase alphanumeric with hyphens (max 63 chars)");
+
 /** Server may merge RealtimeManager session state into list responses. */
 export const agentSchema = z.object({
   id: z.string(),
@@ -226,9 +234,21 @@ export const agentSchema = z.object({
   lastSeenAt: z.string().datetime().nullable(),
   certFingerprint: z.string().nullable().optional(),
   allowedCapabilities: z.array(z.string()).optional(),
+  /**
+   * Deployment environment this agent serves. Matches the keys used
+   * inside `kaiad.yaml`'s `environments:` map so the operator picks
+   * the right per-env block when redeploying.
+   */
+  environment: agentEnvironmentSchema.default("development"),
   websocketConnected: z.boolean().optional(),
   telemetry: agentTelemetrySchema.optional(),
   apps: z.array(agentAppTelemetrySchema).optional()
+});
+
+export const updateAgentRequestSchema = z.object({
+  name: z.string().nullable().optional(),
+  allowedCapabilities: z.array(z.string()).optional(),
+  environment: agentEnvironmentSchema.optional()
 });
 
 export const listAgentsResponseSchema = z.object({
@@ -245,6 +265,7 @@ export type ListSshKeysResponse = z.infer<typeof listSshKeysResponseSchema>;
 export type Incident = z.infer<typeof incidentSchema>;
 export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
 export type AgentBinding = z.infer<typeof agentBindingSchema>;
+export type UpdateAgentRequest = z.infer<typeof updateAgentRequestSchema>;
 export type MonitoredService = z.infer<typeof monitoredServiceSchema>;
 export type CreateMonitoredServiceRequest = z.infer<typeof createMonitoredServiceRequestSchema>;
 export type UpdateMonitoredServiceRequest = z.infer<typeof updateMonitoredServiceRequestSchema>;
