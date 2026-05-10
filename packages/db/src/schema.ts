@@ -92,6 +92,12 @@ create table if not exists monitored_services (
 
 alter table monitored_services drop column if exists workflow_graph_id cascade;
 alter table monitored_services drop column if exists agent_runtime_backend cascade;
+-- pipeline_name picks one named entry from a multi-pipeline kaiad.yaml
+-- (services: { php: {...}, nginx: {...} }). Null for single-pipeline
+-- repos. Two MonitoredServices pointing at the same git repo + branch
+-- but different pipeline_names ARE the supported way to model a
+-- multi-image project.
+alter table monitored_services add column if not exists pipeline_name text;
 
 -- agent ↔ service binding is many-to-many. The join table is the single
 -- source of truth. The legacy monitored_services.agent_id column

@@ -344,6 +344,7 @@ export interface ServiceRow {
   branch: string;
   dockerImage?: string | null;
   composePath?: string | null;
+  pipelineName?: string | null;
 }
 
 function mapService(r: Record<string, unknown>): ServiceRow {
@@ -356,6 +357,7 @@ function mapService(r: Record<string, unknown>): ServiceRow {
     branch: r.branch as string,
     dockerImage: r.docker_image == null ? null : String(r.docker_image),
     composePath: r.compose_path == null ? null : String(r.compose_path),
+    pipelineName: r.pipeline_name == null ? null : String(r.pipeline_name),
   };
 }
 
@@ -395,14 +397,15 @@ export async function createService(
     branch: string;
     dockerImage?: string;
     composePath?: string;
+    pipelineName?: string | null;
   },
 ): Promise<ServiceRow> {
   const id = crypto.randomUUID();
   const { rows } = await query(
-    `INSERT INTO monitored_services (id, tenant_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO monitored_services (id, tenant_id, name, git_repo_url, ssh_key_id, branch, docker_image, compose_path, pipeline_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
-    [id, tenantId, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null],
+    [id, tenantId, data.name, data.gitRepoUrl, data.sshKeyId ?? null, data.branch, data.dockerImage ?? null, data.composePath ?? null, data.pipelineName ?? null],
   );
   return mapService(rows[0]);
 }
@@ -824,10 +827,11 @@ export async function listAllServicesForPoller(
     gitRepoUrl: string;
     sshKeyId: string | null;
     branch: string;
+    pipelineName: string | null;
   }>
 > {
   const { rows } = await query(
-    `SELECT id, tenant_id, name, git_repo_url, ssh_key_id, branch
+    `SELECT id, tenant_id, name, git_repo_url, ssh_key_id, branch, pipeline_name
        FROM monitored_services`,
     []
   );
@@ -837,7 +841,8 @@ export async function listAllServicesForPoller(
     name: String(r.name),
     gitRepoUrl: String(r.git_repo_url),
     sshKeyId: r.ssh_key_id == null ? null : String(r.ssh_key_id),
-    branch: String(r.branch)
+    branch: String(r.branch),
+    pipelineName: r.pipeline_name == null ? null : String(r.pipeline_name)
   }));
 }
 

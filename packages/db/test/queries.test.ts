@@ -378,7 +378,8 @@ describe("listServices", () => {
         sshKeyId: "k1",
         branch: "main",
         dockerImage: "acme/web:latest",
-        composePath: "compose.yml"
+        composePath: "compose.yml",
+        pipelineName: null
       },
     ]);
   });

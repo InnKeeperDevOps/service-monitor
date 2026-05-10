@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePipelineYaml, resolveEnvironment } from "../src/pipeline.js";
+import { parsePipelineYaml, resolveEnvironment, selectPipeline } from "../src/pipeline.js";
 
 describe("parsePipelineYaml", () => {
   it("accepts a minimal valid pipeline", () => {
@@ -333,6 +333,132 @@ environments:
       const unknown = resolveEnvironment(r.pipeline, "preview");
       expect(unknown.instances).toBe(1);
       expect(unknown.domains[0]?.host).toBe("default.example.com");
+    });
+  });
+
+  describe("multi-service kaiad.yaml", () => {
+    const multi = `
+version: 1
+services:
+  php:
+    build:
+      image: php:8-cli
+      steps: ["composer install"]
+    artifacts: ["app.tar"]
+    runtime:
+      image: php:8-fpm
+      layers: ["app.tar"]
+      command: ["php-fpm"]
+    ports:
+      - port: 9000
+  nginx:
+    build:
+      image: alpine
+      steps: ["echo build"]
+    artifacts: ["site.tar"]
+    runtime:
+      image: nginx:alpine
+      layers: ["site.tar"]
+      command: ["nginx", "-g", "daemon off;"]
+    ports:
+      - port: 80
+`;
+
+    it("parses a multi-pipeline file", () => {
+      const r = parsePipelineYaml(multi);
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.kind !== "multi") return;
+      expect(Object.keys(r.pipelines).sort()).toEqual(["nginx", "php"]);
+      expect(r.pipelines.php.runtime?.command).toEqual(["php-fpm"]);
+    });
+
+    it("rejects multi-pipeline with bad pipeline-name shape", () => {
+      const r = parsePipelineYaml(`
+version: 1
+services:
+  PHP:   # uppercase rejected
+    build: { image: a, steps: [b] }
+`);
+      expect(r.ok).toBe(false);
+    });
+
+    it("rejects empty services map", () => {
+      const r = parsePipelineYaml(`version: 1\nservices: {}\n`);
+      expect(r.ok).toBe(false);
+    });
+
+    it("selectPipeline picks by name from a multi", () => {
+      const r = parsePipelineYaml(multi);
+      const picked = selectPipeline(r, "php");
+      expect(picked.ok).toBe(true);
+      if (!picked.ok) return;
+      expect(picked.pipeline.runtime?.command).toEqual(["php-fpm"]);
+    });
+
+    it("selectPipeline complains when multi but no name given", () => {
+      const r = parsePipelineYaml(multi);
+      const picked = selectPipeline(r, null);
+      expect(picked.ok).toBe(false);
+      if (picked.ok) return;
+      expect(picked.reason).toMatch(/multi-pipeline/);
+    });
+
+    it("selectPipeline complains when name missing from services map", () => {
+      const r = parsePipelineYaml(multi);
+      const picked = selectPipeline(r, "missing");
+      expect(picked.ok).toBe(false);
+    });
+
+    it("selectPipeline on single returns the lone pipeline", () => {
+      const r = parsePipelineYaml(`
+version: 1
+build: { image: alpine, steps: [echo] }
+artifacts: []
+runtime: { image: alpine, command: [sh] }
+`);
+      const picked = selectPipeline(r, null);
+      expect(picked.ok).toBe(true);
+      if (!picked.ok) return;
+      expect(picked.pipeline.runtime?.command).toEqual(["sh"]);
+    });
+
+    it("selectPipeline on single rejects a stray pipelineName", () => {
+      const r = parsePipelineYaml(`
+version: 1
+build: { image: alpine, steps: [echo] }
+artifacts: []
+runtime: { image: alpine, command: [sh] }
+`);
+      const picked = selectPipeline(r, "php");
+      expect(picked.ok).toBe(false);
+    });
+  });
+
+  describe("runtime.layers", () => {
+    it("accepts layers when present in artifacts[]", () => {
+      const r = parsePipelineYaml(`
+version: 1
+artifacts: ["rootfs.tar"]
+runtime:
+  image: alpine
+  layers: ["rootfs.tar"]
+  command: ["sh"]
+`);
+      expect(r.ok).toBe(true);
+    });
+
+    it("rejects layers entry not in artifacts[]", () => {
+      const r = parsePipelineYaml(`
+version: 1
+artifacts: ["a.tar"]
+runtime:
+  image: alpine
+  layers: ["b.tar"]
+  command: ["sh"]
+`);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toMatch(/layers.*b\.tar/);
     });
   });
 });

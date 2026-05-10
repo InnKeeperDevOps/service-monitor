@@ -72,7 +72,12 @@ import {
   type QueryFn,
   type ServiceBuildRow
 } from "@sm/db";
-import { parsePipelineYaml, resolveEnvironment, type PipelineDefinition } from "@sm/contracts";
+import {
+  parsePipelineYaml,
+  resolveEnvironment,
+  selectPipeline,
+  type PipelineDefinition
+} from "@sm/contracts";
 
 // Tunables (env-overridable for tests).
 const POLL_INTERVAL_MS = parseInt(process.env.BUILD_POLL_INTERVAL_MS ?? "60000", 10);
@@ -359,7 +364,16 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
       await finishBuild(query, build.id, { status: "failed", failureReason: parsed.reason });
       return;
     }
-    const pipeline = parsed.pipeline;
+    // Multi-pipeline kaiad.yaml: pick the slice this MonitoredService is
+    // bound to via pipelineName. Single-pipeline yamls return their lone
+    // pipeline regardless of pipelineName.
+    const picked = selectPipeline(parsed, svc.pipelineName ?? null);
+    if (!picked.ok) {
+      await appendBuildLog(query, build.id, `${picked.reason}\n`);
+      await finishBuild(query, build.id, { status: "failed", failureReason: picked.reason });
+      return;
+    }
+    const pipeline = picked.pipeline;
 
     // 3) Run the build container, if defined. Requires KAIAD_BUILDS_HOST_DIR
     //    so the spawned container can see the same workspace.
@@ -626,55 +640,112 @@ async function buildRuntimeImage(params: {
   );
   const craneEnv = { ...process.env, DOCKER_CONFIG: dockerCfgDir };
 
-  // 1) Build the artifact layer tarball.
-  const layerRoot = path.join(rootDir, "layer-root");
-  await fs.mkdir(layerRoot, { recursive: true });
-  for (const c of runtime.copy) {
-    const src = path.join(artifactsDir, c.from);
-    // c.to is an absolute path inside the runtime image. Strip the
-    // leading slash so the tar entries are relative to the rootfs.
-    const dst = path.join(layerRoot, c.to.replace(/^\/+/, ""));
-    await fs.mkdir(path.dirname(dst), { recursive: true });
-    await fs.copyFile(src, dst);
-  }
-  const layerTar = path.join(rootDir, "layer.tar");
-  const tarRes = await runProcStreaming("tar", ["-C", layerRoot, "-cf", layerTar, "."], {
-    onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
-    timeoutMs: 60_000
-  });
-  if (tarRes.code !== 0) {
-    return { ok: false, reason: `tar exited with code ${tarRes.code}` };
-  }
-
   const internalRef = `${REGISTRY_INTERNAL}/${serviceName}:${sha}`;
   const internalLatestRef = `${REGISTRY_INTERNAL}/${serviceName}:latest`;
   // Image ref recorded in the DB / shown in the panel. Uses the
   // EXTERNAL hostname agents pull from. The actual blobs are the same.
   const externalRef = `${REGISTRY_HOST}/${serviceName}:${sha}`;
 
-  // 2) crane append — pushes directly to the registry as <ref>. We
-  //    skip --output because crane mutate (next step) requires an
-  //    image reference, not a tarball, so the tarball path would
-  //    just need to be re-pushed anyway. Pushing here primes the
-  //    registry with the layered image, then mutate overwrites the
-  //    tag with one that has the right entrypoint + ports.
-  const appendArgs = [
-    ...(REGISTRY_INSECURE ? ["--insecure"] : []),
-    "append",
-    "--base",
-    runtime.image,
-    "--new_layer",
-    layerTar,
-    "--new_tag",
-    internalRef
-  ];
-  const appendRes = await runProcStreaming("crane", appendArgs, {
-    env: craneEnv,
-    onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
-    timeoutMs: BUILD_TIMEOUT_MS
-  });
-  if (appendRes.code !== 0) {
-    return { ok: false, reason: `crane append exited with code ${appendRes.code}` };
+  // Collect every layer we need to append in order. crane append takes
+  // ONE new_layer per call, so multiple layers are chained through
+  // tarball outputs. The order is: copy-derived layer first (if any
+  // runtime.copy entries) then each entry in runtime.layers in order.
+  const layersToAppend: string[] = [];
+
+  if (runtime.copy.length > 0) {
+    const layerRoot = path.join(rootDir, "layer-root");
+    await fs.mkdir(layerRoot, { recursive: true });
+    for (const c of runtime.copy) {
+      const src = path.join(artifactsDir, c.from);
+      // c.to is an absolute path inside the runtime image. Strip the
+      // leading slash so the tar entries are relative to the rootfs.
+      const dst = path.join(layerRoot, c.to.replace(/^\/+/, ""));
+      await fs.mkdir(path.dirname(dst), { recursive: true });
+      await fs.copyFile(src, dst);
+    }
+    const copyLayerTar = path.join(rootDir, "copy-layer.tar");
+    const tarRes = await runProcStreaming("tar", ["-C", layerRoot, "-cf", copyLayerTar, "."], {
+      onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
+      timeoutMs: 60_000
+    });
+    if (tarRes.code !== 0) {
+      return { ok: false, reason: `tar (copy layer) exited with code ${tarRes.code}` };
+    }
+    layersToAppend.push(copyLayerTar);
+  }
+
+  for (const layerName of runtime.layers) {
+    layersToAppend.push(path.join(artifactsDir, layerName));
+  }
+
+  // Chain crane append calls through intermediate tarballs. Each call
+  // takes the previous result as `--base` and writes the next tarball
+  // via `--output`. After the last layer, `crane push` ships the
+  // final tarball to <internalRef>.
+  let prevBase: string = runtime.image; // first iteration uses the registry base
+  for (let i = 0; i < layersToAppend.length; i++) {
+    const stagePath = path.join(rootDir, `stage-${i}.tar`);
+    const appendArgs = [
+      ...(REGISTRY_INSECURE ? ["--insecure"] : []),
+      "append",
+      "--base",
+      prevBase,
+      "--new_layer",
+      layersToAppend[i],
+      "--new_tag",
+      internalRef,
+      "--output",
+      stagePath
+    ];
+    const appendRes = await runProcStreaming("crane", appendArgs, {
+      env: craneEnv,
+      onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
+      timeoutMs: BUILD_TIMEOUT_MS
+    });
+    if (appendRes.code !== 0) {
+      return {
+        ok: false,
+        reason: `crane append (stage ${i}) exited with code ${appendRes.code}`
+      };
+    }
+    prevBase = stagePath;
+  }
+
+  if (layersToAppend.length === 0) {
+    // No layers to add — just tag the base image as <internalRef> so
+    // mutate has something to operate on. crane copy is registry-to-
+    // registry, which is what we want.
+    const copyArgs = [
+      ...(REGISTRY_INSECURE ? ["--insecure"] : []),
+      "copy",
+      runtime.image,
+      internalRef
+    ];
+    const copyRes = await runProcStreaming("crane", copyArgs, {
+      env: craneEnv,
+      onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
+      timeoutMs: BUILD_TIMEOUT_MS
+    });
+    if (copyRes.code !== 0) {
+      return { ok: false, reason: `crane copy ${runtime.image} → <ref> exited ${copyRes.code}` };
+    }
+  } else {
+    // Push the final-stage tarball to the registry so mutate can pull
+    // it back by ref.
+    const pushArgs = [
+      ...(REGISTRY_INSECURE ? ["--insecure"] : []),
+      "push",
+      prevBase,
+      internalRef
+    ];
+    const pushRes = await runProcStreaming("crane", pushArgs, {
+      env: craneEnv,
+      onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
+      timeoutMs: BUILD_TIMEOUT_MS
+    });
+    if (pushRes.code !== 0) {
+      return { ok: false, reason: `crane push (final stage) exited with code ${pushRes.code}` };
+    }
   }
 
   // 3) crane mutate — pull the just-pushed image, set entrypoint +

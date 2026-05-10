@@ -62,6 +62,7 @@ export type DomainStore = {
       agentIds?: string[];
       dockerImage?: string;
       composePath?: string;
+      pipelineName?: string | null;
     }
   ): Promise<MonitoredService>;
   updateService(
@@ -80,6 +81,7 @@ export type DomainStore = {
       agentIds?: string[];
       dockerImage?: string;
       composePath?: string;
+      pipelineName?: string | null;
     }
   ): Promise<MonitoredService | undefined>;
   deleteService(tenantId: string, id: string): Promise<boolean>;
@@ -282,6 +284,7 @@ export function createMemoryDomainStore(): DomainStore {
         branch: data.branch,
         dockerImage: data.dockerImage ?? null,
         composePath: data.composePath ?? null,
+        pipelineName: data.pipelineName ?? null,
         agents: []
       };
       services.set(svc.id, svc);
@@ -299,6 +302,7 @@ export function createMemoryDomainStore(): DomainStore {
       if (patch.branch !== undefined) svc.branch = patch.branch;
       if (patch.dockerImage !== undefined) svc.dockerImage = patch.dockerImage;
       if (patch.composePath !== undefined) svc.composePath = patch.composePath;
+      if (patch.pipelineName !== undefined) svc.pipelineName = patch.pipelineName;
       if (patch.agentIds !== undefined) {
         // Replace the full set: drop bindings for this service that aren't in the
         // desired list, then add any missing ones.

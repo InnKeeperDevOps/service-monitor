@@ -131,7 +131,8 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
         sshKeyId: data.sshKeyId,
         branch: data.branch,
         dockerImage: data.dockerImage,
-        composePath: data.composePath
+        composePath: data.composePath,
+        pipelineName: data.pipelineName
       });
       if (data.agentIds && data.agentIds.length > 0) {
         await queries.setAgentBindings(queryFn, tenantId, row.id, data.agentIds);
@@ -152,6 +153,7 @@ export function createPostgresDomainStore(pool: Pool): DomainStore {
       if (patch.branch !== undefined) push("branch", patch.branch);
       if (patch.dockerImage !== undefined) push("docker_image", patch.dockerImage);
       if (patch.composePath !== undefined) push("compose_path", patch.composePath);
+      if (patch.pipelineName !== undefined) push("pipeline_name", patch.pipelineName);
       if (assignments.length > 0) {
         values.push(id, tenantId);
         const { rows } = await queryFn(

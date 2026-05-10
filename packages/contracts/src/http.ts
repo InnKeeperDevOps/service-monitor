@@ -136,6 +136,13 @@ export const monitoredServiceSchema = z.object({
   branch: z.string(),
   dockerImage: z.string().nullable().optional(),
   composePath: z.string().nullable().optional(),
+  /**
+   * For multi-pipeline kaiad.yaml files (services: { php: {...},
+   * nginx: {...} }), picks which pipeline this service represents.
+   * Null/undefined means "single-pipeline kaiad.yaml" — the only
+   * pipeline at the file root.
+   */
+  pipelineName: z.string().nullable().optional(),
   /** Agents currently bound to this service. Empty until at least one is attached. */
   agents: z.array(agentBindingSchema).default([])
 });
@@ -148,7 +155,8 @@ export const createMonitoredServiceRequestSchema = z.object({
   /** Initial agent bindings; safe to omit for unbound services. */
   agentIds: z.array(z.string()).default([]),
   dockerImage: z.string().min(1).optional(),
-  composePath: z.string().min(1).optional()
+  composePath: z.string().min(1).optional(),
+  pipelineName: z.string().min(1).nullable().optional()
 });
 
 export const updateMonitoredServiceRequestSchema = z.object({
@@ -163,7 +171,8 @@ export const updateMonitoredServiceRequestSchema = z.object({
    */
   agentIds: z.array(z.string()).optional(),
   dockerImage: z.string().min(1).optional(),
-  composePath: z.string().min(1).optional()
+  composePath: z.string().min(1).optional(),
+  pipelineName: z.string().min(1).nullable().optional()
 });
 
 export const listMonitoredServicesResponseSchema = z.object({

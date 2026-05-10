@@ -71,6 +71,15 @@ export const pipelineRuntimeSchema = z.object({
   image: z.string().min(1).default("scratch"),
   /** Files copied from /artifacts into the runtime image. */
   copy: z.array(pipelineCopySchema).default([]),
+  /**
+   * Tar archives produced by the build step that should be appended
+   * verbatim as filesystem layers. Each entry is the name of an
+   * artifact (must appear in `artifacts:`); the tar's contents are
+   * unpacked into the runtime image at the paths the tar declares.
+   * Used when copying many files (e.g. an entire PHP project tree)
+   * is more practical than enumerating each in `copy:`.
+   */
+  layers: z.array(safeRelativePath).default([]),
   /** Container entrypoint as an exec-form argv array. */
   command: z.array(z.string().min(1)).min(1)
 });
@@ -183,9 +192,9 @@ export const pipelineDefinitionSchema = z
     environments: z.record(pipelineEnvironmentSchema).default({})
   })
   .superRefine((def, ctx) => {
-    // Cross-field validation: every runtime.copy.from MUST appear in
-    // artifacts[]. Catches typos early instead of producing an empty
-    // file in the runtime image.
+    // Cross-field validation: every runtime.copy.from / runtime.layers
+    // MUST appear in artifacts[]. Catches typos early instead of
+    // producing an empty file in the runtime image.
     if (def.runtime) {
       const captured = new Set(def.artifacts);
       for (const c of def.runtime.copy) {
@@ -194,6 +203,15 @@ export const pipelineDefinitionSchema = z
             code: z.ZodIssueCode.custom,
             path: ["runtime", "copy"],
             message: `runtime.copy.from "${c.from}" is not listed in artifacts[]`
+          });
+        }
+      }
+      for (const l of def.runtime.layers) {
+        if (!captured.has(l)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["runtime", "layers"],
+            message: `runtime.layers entry "${l}" is not listed in artifacts[]`
           });
         }
       }
@@ -284,14 +302,117 @@ export function resolveEnvironment(
   };
 }
 
+// Multi-service form: a single repo houses multiple deployable images
+// (e.g. a php-fpm container plus an nginx container), each with its own
+// build/runtime/ports. The MonitoredService picks one via its
+// `pipelineName` field.
+//
+// Pipeline names follow the same k8s-style shape as environment names so
+// they round-trip cleanly into image refs / labels.
+const pipelineNameRegex = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+// Inner-pipeline schema (no `version` field — that lives at the
+// multi-file root and is shared by every pipeline). All other fields
+// match pipelineDefinitionSchema; we keep these in sync by hand because
+// zod doesn't have a clean .pick()/.omit() story for refined schemas.
+const innerPipelineSchema = z
+  .object({
+    build: pipelineBuildSchema.optional(),
+    artifacts: z.array(safeRelativePath).default([]),
+    runtime: pipelineRuntimeSchema.optional(),
+    ports: z.array(pipelinePortSchema).default([]),
+    instances: z.number().int().min(0).default(1),
+    domains: z.array(pipelineDomainSchema).default([]),
+    loadBalancer: pipelineLoadBalancerSchema.default({ type: "none" }),
+    environments: z.record(pipelineEnvironmentSchema).default({})
+  })
+  // Same cross-field checks as the top-level pipelineDefinitionSchema.
+  .superRefine((def, ctx) => {
+    if (def.runtime) {
+      const captured = new Set(def.artifacts);
+      for (const c of def.runtime.copy) {
+        if (!captured.has(c.from)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["runtime", "copy"],
+            message: `runtime.copy.from "${c.from}" is not listed in artifacts[]`
+          });
+        }
+      }
+      for (const l of def.runtime.layers) {
+        if (!captured.has(l)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["runtime", "layers"],
+            message: `runtime.layers entry "${l}" is not listed in artifacts[]`
+          });
+        }
+      }
+    }
+    const declared = new Set(def.ports.map((p) => p.port));
+    if (declared.size > 0) {
+      for (const [i, d] of def.domains.entries()) {
+        if (!declared.has(d.port)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["domains", i, "port"],
+            message: `domain port ${d.port} is not declared in ports[]`
+          });
+        }
+      }
+    } else if (def.domains.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ports"],
+        message: "domains require at least one entry in ports[]"
+      });
+    }
+  });
+
+export const pipelineFileMultiSchema = z.object({
+  version: z.literal(PIPELINE_VERSION),
+  /** Map of pipeline name → its (version-less) inner definition. */
+  services: z.record(innerPipelineSchema)
+}).superRefine((file, ctx) => {
+  for (const name of Object.keys(file.services)) {
+    if (!pipelineNameRegex.test(name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["services", name],
+        message: `pipeline name "${name}" must be lowercase alphanumeric with hyphens (max 63 chars)`
+      });
+    }
+  }
+  if (Object.keys(file.services).length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["services"],
+      message: "services map is empty — at least one pipeline is required"
+    });
+  }
+});
+
+export type PipelineFileMulti = z.infer<typeof pipelineFileMultiSchema>;
+
 export type PipelineParseResult =
-  | { ok: true; pipeline: PipelineDefinition }
+  | { ok: true; kind: "single"; pipeline: PipelineDefinition }
+  | { ok: true; kind: "multi"; pipelines: Record<string, PipelineDefinition> }
   | { ok: false; reason: string };
 
+function liftInner(name: string, inner: z.infer<typeof innerPipelineSchema>): PipelineDefinition {
+  // Version is shared at the file root; lift it onto each inner pipeline
+  // so consumers downstream get a uniform PipelineDefinition shape and
+  // don't need to track the multi/single distinction.
+  return { version: PIPELINE_VERSION, ...inner } as PipelineDefinition;
+}
+
 /**
- * Parse the YAML text of a kaiad.yaml file, then zod-validate the
- * resulting object. Returns a discriminated-union result so callers
- * can record the failure reason on the build row instead of throwing.
+ * Parse the YAML text of a kaiad.yaml file. Returns either a single-
+ * pipeline result (legacy / simple repos) or a multi-pipeline result
+ * (one repo, several deployable images). Detection is by presence of
+ * a top-level `services:` mapping — repos that need multiple pipelines
+ * write `services: { php: ..., nginx: ... }` instead of inlining
+ * `build`/`runtime`/`ports` at the root.
  */
 export function parsePipelineYaml(text: string): PipelineParseResult {
   let raw: unknown;
@@ -303,11 +424,66 @@ export function parsePipelineYaml(text: string): PipelineParseResult {
   if (raw === null || typeof raw !== "object") {
     return { ok: false, reason: "kaiad.yaml: root must be a mapping" };
   }
-  const parsed = pipelineDefinitionSchema.safeParse(raw);
+  const obj = raw as Record<string, unknown>;
+  if (obj.services && typeof obj.services === "object" && !Array.isArray(obj.services)) {
+    const parsed = pipelineFileMultiSchema.safeParse(obj);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      const path = first.path.length > 0 ? first.path.join(".") : "<root>";
+      return { ok: false, reason: `kaiad.yaml: ${path}: ${first.message}` };
+    }
+    const lifted: Record<string, PipelineDefinition> = {};
+    for (const [name, inner] of Object.entries(parsed.data.services)) {
+      lifted[name] = liftInner(name, inner);
+    }
+    return { ok: true, kind: "multi", pipelines: lifted };
+  }
+  const parsed = pipelineDefinitionSchema.safeParse(obj);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
     const path = first.path.length > 0 ? first.path.join(".") : "<root>";
     return { ok: false, reason: `kaiad.yaml: ${path}: ${first.message}` };
   }
-  return { ok: true, pipeline: parsed.data };
+  return { ok: true, kind: "single", pipeline: parsed.data };
+}
+
+/**
+ * Pick the right pipeline from a parse result, given the service's
+ * configured pipelineName (or null if the service hasn't been wired
+ * to a specific pipeline yet). Returns the chosen PipelineDefinition
+ * or a clear error message.
+ */
+export function selectPipeline(
+  result: PipelineParseResult,
+  pipelineName: string | null | undefined
+): { ok: true; pipeline: PipelineDefinition } | { ok: false; reason: string } {
+  if (!result.ok) return result;
+  if (result.kind === "single") {
+    if (pipelineName) {
+      return {
+        ok: false,
+        reason:
+          `service has pipelineName="${pipelineName}" but kaiad.yaml is single-pipeline; ` +
+          `either remove the service's pipelineName or make kaiad.yaml multi-pipeline (services: {…})`
+      };
+    }
+    return { ok: true, pipeline: result.pipeline };
+  }
+  // multi
+  if (!pipelineName) {
+    const names = Object.keys(result.pipelines).join(", ");
+    return {
+      ok: false,
+      reason: `kaiad.yaml is multi-pipeline (services: ${names}); set the service's pipelineName to choose one`
+    };
+  }
+  const pipeline = result.pipelines[pipelineName];
+  if (!pipeline) {
+    const names = Object.keys(result.pipelines).join(", ");
+    return {
+      ok: false,
+      reason: `kaiad.yaml does not contain pipeline "${pipelineName}" (available: ${names})`
+    };
+  }
+  return { ok: true, pipeline };
 }
