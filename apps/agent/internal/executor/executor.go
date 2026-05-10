@@ -155,6 +155,8 @@ func (e *Executor) Execute(ctx context.Context, cmdType string, payload map[stri
 		return e.executeReceiveSourceArchive(ctx, payload)
 	case "redeploy_service":
 		return e.executeRedeployService(ctx, backend, dc, payload)
+	case "teardown_service":
+		return e.executeTeardownService(ctx, backend, dc, payload)
 	default:
 		return CommandResult{Success: false, Output: fmt.Sprintf("unknown command type: %s", cmdType)}
 	}

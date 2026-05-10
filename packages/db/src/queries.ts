@@ -1006,6 +1006,28 @@ export async function listRunningServicesForAgent(
 }
 
 /**
+ * Look up + delete the lb_status_report row for one (service, agent)
+ * pair. Returns the row that was deleted (so the caller has the last
+ * known namespace/env to send in the teardown_service command), or
+ * null if nothing was tracked.
+ */
+export async function popLoadBalancerStatusForAgentService(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string,
+  serviceId: string
+): Promise<LoadBalancerStatusRow | null> {
+  const { rows } = await query(
+    `DELETE FROM service_loadbalancer_status
+      WHERE tenant_id = $1 AND agent_id = $2 AND service_id = $3
+      RETURNING *`,
+    [tenantId, agentId, serviceId]
+  );
+  if (rows.length === 0) return null;
+  return mapLb(rows[0]);
+}
+
+/**
  * For an agent's reconcile pass: list every (serviceId, latest
  * successful build) pair where this agent is bound but no
  * lb_status_report exists for the (service, env). The caller

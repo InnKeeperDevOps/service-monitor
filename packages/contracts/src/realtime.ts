@@ -438,6 +438,22 @@ const redeployServiceCommandSchema = z.object({
   namespace: z.string().default("")
 });
 
+/**
+ * Tells the agent to remove a service it previously deployed. Sent by
+ * the platform when a binding is removed via DELETE /api/v1/agents/:id/
+ * services/:serviceId. The agent matches by labels (docker) or by the
+ * synthesized resource name (k8s) — `namespace` carries the last-known
+ * namespace from service_loadbalancer_status so the agent looks in the
+ * right place.
+ */
+const teardownServiceCommandSchema = z.object({
+  type: z.literal("teardown_service"),
+  commandId: z.string(),
+  serviceId: z.string(),
+  environment: z.string().default(""),
+  namespace: z.string().default("")
+});
+
 /** Uses `z.union` (not `discriminatedUnion`) so variants may apply `.superRefine` (e.g. receive_source_archive url xor path). */
 export const platformToAgentMessageSchema = z.union([
   runStepCommandSchema,
@@ -449,7 +465,8 @@ export const platformToAgentMessageSchema = z.union([
   runToolchainCommandSchema,
   receiveSourceArchiveCommandSchema,
   runFixPlanCommandSchema,
-  redeployServiceCommandSchema
+  redeployServiceCommandSchema,
+  teardownServiceCommandSchema
 ]);
 
 export type AgentToPlatformMessage = z.infer<typeof agentToPlatformMessageSchema>;

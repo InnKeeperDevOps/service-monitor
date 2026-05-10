@@ -128,6 +128,7 @@ import {
   listLoadBalancerStatusForTenant,
   listMissingDeploysForAgent,
   listRunningServicesForAgent,
+  popLoadBalancerStatusForAgentService,
   upsertLoadBalancerStatus,
   type QueryFn,
   type LoadBalancerStatusRow
@@ -2612,6 +2613,58 @@ export function buildServer(opts: BuildServerOptions = {}) {
       if (!removed) {
         return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Binding not found", correlationId: (req as any).correlationId }));
       }
+
+      // Tear down what the agent had deployed for this service. We
+      // pop the last-known status row so the agent gets the right
+      // namespace/env to clean up, then dispatch the teardown_service
+      // command. Failures are logged but don't fail the detach — the
+      // binding is gone either way and an operator can manually
+      // clean up if the agent is offline.
+      try {
+        const q = await getBuildsQuery();
+        if (q) {
+          const last = await popLoadBalancerStatusForAgentService(
+            q,
+            session.tenantId,
+            req.params.agentId,
+            req.params.serviceId
+          );
+          const apiUrl =
+            process.env.INTERNAL_API_URL?.trim() ?? `http://127.0.0.1:${process.env.PORT ?? "8092"}`;
+          const internalToken = process.env.INTERNAL_API_TOKEN?.trim() || "dev-token";
+          const commandId = crypto.randomUUID();
+          const job: AgentCommandJob = {
+            agentId: req.params.agentId,
+            commandId,
+            payload: {
+              type: "teardown_service",
+              commandId,
+              serviceId: req.params.serviceId,
+              environment: last?.environment ?? "",
+              namespace: last?.namespace ?? ""
+            }
+          };
+          fetch(`${apiUrl}/api/v1/internal/agent-commands`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${internalToken}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(job)
+          }).catch((err) =>
+            req.log?.warn?.(
+              { err: (err as Error).message, agentId: req.params.agentId, serviceId: req.params.serviceId },
+              "teardown_service dispatch failed"
+            )
+          );
+        }
+      } catch (err) {
+        req.log?.warn?.(
+          { err: (err as Error).message, agentId: req.params.agentId, serviceId: req.params.serviceId },
+          "teardown popLoadBalancerStatus failed"
+        );
+      }
+
       return reply.status(204).send();
     }
   );

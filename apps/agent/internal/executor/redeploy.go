@@ -152,6 +152,119 @@ func parseRedeployPayload(payload map[string]interface{}) (redeployInput, error)
 	return in, nil
 }
 
+// executeTeardownService is the inverse of redeploy_service — removes
+// the workload the agent had previously deployed for this service.
+// Triggered by the platform when an operator detaches the service from
+// this agent (or deletes the service entirely).
+//
+// Docker: stop+remove every container labeled
+//   kaiad.dev/service-id=<id> AND kaiad.dev/namespace=<ns>
+// K8s: kubectl -n <ns> delete deployment/service/ingress for the
+//   synthesized resource name (k8sName). All with --ignore-not-found
+//   so the operation is idempotent — replays after a partial failure
+//   are no-ops once the resources are gone.
+//
+// Best-effort: even if some resources don't exist or RBAC blocks part
+// of the cleanup, we still ack so the platform can drop the
+// service_loadbalancer_status row. Anything we couldn't clean up
+// shows up in the command_ack output for an operator to chase down.
+func (e *Executor) executeTeardownService(
+	ctx context.Context,
+	backend RuntimeBackend,
+	dc *docker.Client,
+	payload map[string]interface{},
+) CommandResult {
+	serviceID, _ := payload["serviceId"].(string)
+	if serviceID == "" {
+		return CommandResult{Success: false, Output: "teardown_service: payload missing serviceId"}
+	}
+	namespace, _ := payload["namespace"].(string)
+	environment, _ := payload["environment"].(string)
+	log.Printf(
+		"[agent:executor] teardown_service backend=%s service=%s ns=%s env=%s",
+		backend, serviceID, namespace, environment,
+	)
+	switch backend {
+	case RuntimeDocker:
+		return teardownDocker(ctx, dc, serviceID, namespace)
+	case RuntimeKubernetes:
+		return teardownKubernetes(ctx, serviceID, namespace)
+	case RuntimeShell:
+		return CommandResult{Success: true, Output: "teardown_service: shell mode — nothing to remove"}
+	default:
+		return CommandResult{
+			Success: false,
+			Output:  fmt.Sprintf("teardown_service: unsupported runtime backend %q", backend),
+		}
+	}
+}
+
+func teardownDocker(ctx context.Context, dc *docker.Client, serviceID, namespace string) CommandResult {
+	if dc == nil {
+		return CommandResult{Success: false, Output: "teardown_service: docker client unavailable"}
+	}
+	if namespace == "" {
+		namespace = DefaultDockerNamespace
+	}
+	existing, err := dc.ListContainersAll(ctx)
+	if err != nil {
+		return CommandResult{Success: false, Output: fmt.Sprintf("list containers: %v", err)}
+	}
+	var out strings.Builder
+	removed := 0
+	for _, c := range existing {
+		if c.Labels[LabelServiceID] != serviceID {
+			continue
+		}
+		// If the platform sent a namespace, scope the cleanup to that
+		// namespace — protects against tearing down the same service
+		// id across multiple namespaces accidentally. When the
+		// platform doesn't know a namespace yet (legacy row, agent
+		// just attached) we fall through and remove anything matching
+		// the service id.
+		if namespace != DefaultDockerNamespace && c.Labels[LabelNamespace] != "" && c.Labels[LabelNamespace] != namespace {
+			continue
+		}
+		if err := dc.RemoveContainer(ctx, c.ID); err != nil {
+			fmt.Fprintf(&out, "remove %s: %v\n", shortID(c.ID), err)
+			continue
+		}
+		fmt.Fprintf(&out, "removed %s (%s)\n", c.Names, shortID(c.ID))
+		removed++
+	}
+	fmt.Fprintf(&out, "teardown ok: %d container(s) removed\n", removed)
+	return CommandResult{Success: true, Output: out.String()}
+}
+
+func teardownKubernetes(ctx context.Context, serviceID, namespace string) CommandResult {
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		return CommandResult{Success: false, Output: "teardown_service: kubectl not on PATH"}
+	}
+	if namespace == "" {
+		// Best-effort fallback so we at least try the agent's own ns.
+		if b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+			namespace = strings.TrimSpace(string(b))
+		}
+		if namespace == "" {
+			namespace = "default"
+		}
+	}
+	name := k8sName(serviceID)
+	var out strings.Builder
+	for _, kind := range []string{"deployment", "service", "ingress"} {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		cmd := exec.CommandContext(cctx, "kubectl", "delete", kind, name, "-n", namespace, "--ignore-not-found=true")
+		combined, err := cmd.CombinedOutput()
+		cancel()
+		fmt.Fprintf(&out, "%s/%s: %s", kind, name, strings.TrimSpace(string(combined)))
+		if err != nil {
+			fmt.Fprintf(&out, " (err: %v)", err)
+		}
+		out.WriteString("\n")
+	}
+	return CommandResult{Success: true, Output: out.String()}
+}
+
 // executeRedeployService is the entry point — dispatches by runtime backend.
 func (e *Executor) executeRedeployService(
 	ctx context.Context,

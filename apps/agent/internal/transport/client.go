@@ -606,7 +606,7 @@ func (c *Client) handleIncoming(ctx context.Context, errCh chan<- error, data []
 		return
 	}
 	switch envelope.Type {
-	case "run_step", "docker_op", "cancel_run", "sync_desired_state", "run_cursor_plan", "run_claude_plan", "run_toolchain", "receive_source_archive", "run_fix_plan", "redeploy_service":
+	case "run_step", "docker_op", "cancel_run", "sync_desired_state", "run_cursor_plan", "run_claude_plan", "run_toolchain", "receive_source_archive", "run_fix_plan", "redeploy_service", "teardown_service":
 	default:
 		c.protoDebug("inbound ignored unknown command type=%s", envelope.Type)
 		return
