@@ -347,7 +347,7 @@ func buildDockerLbStatusReport(agentID string, in redeployInput, namespace strin
 	}
 
 	seen := map[int]bool{}
-	var ports []map[string]interface{}
+	ports := make([]map[string]interface{}, 0)
 	if publishedPorts {
 		for _, d := range in.domains {
 			if seen[d.port] {
@@ -501,6 +501,30 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+
+	// Push the lb_status_report unconditionally on the way out — even
+	// when kubectl apply / get fails. This gives the panel's Load
+	// Balancers page a row with the configured slice (lbType, ports,
+	// domains, namespace) so operators can see WHAT they tried to
+	// deploy without waiting for a successful round-trip. externalIp
+	// and externalHostname stay nil (rendered as "(pending)") when
+	// the cluster hasn't actually assigned them.
+	resourceName := k8sName(in.serviceID)
+	var externalIP, externalHostname string
+	defer func() {
+		reporter, agentID := e.reporterAndID()
+		if reporter == nil {
+			return
+		}
+		report := buildLbStatusReport(agentID, in, namespace, externalIP, externalHostname)
+		if err := reporter(report); err != nil {
+			// Best-effort. We've already returned the CommandResult
+			// to the transport at this point so the agent log is the
+			// best place to surface the failure.
+			log.Printf("[agent:executor] lb_status_report send failed: %v", err)
+		}
+	}()
+
 	cmd := exec.CommandContext(cctx, "kubectl", "apply", "-n", namespace, "-f", manifestPath)
 	combined, err := cmd.CombinedOutput()
 	out.Write(combined)
@@ -508,20 +532,7 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 		return CommandResult{Success: false, Output: out.String() + fmt.Sprintf("\nkubectl apply: %v\n", err)}
 	}
 
-	// Query Service / Ingress and push an lb_status_report so the
-	// platform's Load Balancers page can show domain → external IP.
-	// Best-effort: if the LB IP isn't assigned yet (still pending) or
-	// the agent's RBAC blocks the read, we still send what we have so
-	// the row exists with whatever fields the cluster did provide.
-	resourceName := k8sName(in.serviceID)
-	externalIP, externalHostname := queryK8sLbAddress(cctx, namespace, in.loadBalancer.typ, resourceName)
-	reporter, agentID := e.reporterAndID()
-	if reporter != nil {
-		report := buildLbStatusReport(agentID, in, namespace, externalIP, externalHostname)
-		if err := reporter(report); err != nil {
-			fmt.Fprintf(&out, "\nlb_status_report send failed: %v\n", err)
-		}
-	}
+	externalIP, externalHostname = queryK8sLbAddress(cctx, namespace, in.loadBalancer.typ, resourceName)
 
 	if externalIP != "" || externalHostname != "" {
 		fmt.Fprintf(&out, "\nlb endpoint: %s%s\n", externalIP, externalHostname)
@@ -588,7 +599,7 @@ func buildLbStatusReport(agentID string, in redeployInput, namespace, externalIP
 	}
 	// Deduplicate ports the same way renderK8sManifests does.
 	seen := map[int]bool{}
-	var ports []map[string]interface{}
+	ports := make([]map[string]interface{}, 0)
 	for _, d := range in.domains {
 		if seen[d.port] {
 			continue
