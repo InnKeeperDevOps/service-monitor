@@ -375,6 +375,57 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
     }
     const pipeline = picked.pipeline;
 
+    // ── Dockerfile mode (alternative to build/runtime/artifacts) ──
+    //    `docker build -t <ref>` against the host daemon, then `docker
+    //    push`. Image config (entrypoint, exposed ports, env, etc.)
+    //    comes from the Dockerfile. Skip the entire crane-assembly
+    //    flow below.
+    if (pipeline.dockerfile) {
+      if (!hostWs) {
+        const reason =
+          "KAIAD_BUILDS_HOST_DIR is not set; dockerfile mode requires a shared host bind mount.";
+        await appendBuildLog(query, build.id, `${reason}\n`);
+        await finishBuild(query, build.id, { status: "failed", failureReason: reason });
+        return;
+      }
+      const built = await buildViaDockerfile({
+        query,
+        buildId: build.id,
+        hostWs,
+        pipeline,
+        serviceName: svc.name,
+        sha: build.gitSha
+      });
+      if (!built.ok) {
+        await finishBuild(query, build.id, { status: "failed", failureReason: built.reason });
+        return;
+      }
+      await appendBuildLog(query, build.id, `done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s\n`);
+      await finishBuild(query, build.id, { status: "success", imageRef: built.imageRef });
+      logger.info("build succeeded", {
+        buildId: build.id,
+        sha: build.gitSha.slice(0, 12),
+        imageRef: built.imageRef,
+        mode: "dockerfile"
+      });
+      if (build.triggeredBy === "manual") {
+        await dispatchRedeployToBoundAgents(
+          query,
+          build.id,
+          build.serviceId,
+          built.imageRef,
+          pipeline,
+          logger
+        ).catch((err) => {
+          logger.warn("redeploy dispatch failed", {
+            buildId: build.id,
+            err: (err as Error).message
+          });
+        });
+      }
+      return;
+    }
+
     // 3) Run the build container, if defined. Requires KAIAD_BUILDS_HOST_DIR
     //    so the spawned container can see the same workspace.
     if (pipeline.build) {
@@ -1005,6 +1056,78 @@ function runProcStreaming(
 }
 
 // ─── Misc helpers ──────────────────────────────────────────────────────────
+
+// ─── Dockerfile-mode build ────────────────────────────────────────────────
+
+/**
+ * `docker build` + `docker push` against the host daemon. The image
+ * itself (entrypoint, env, exposed ports, etc.) is what the Dockerfile
+ * declares — we don't post-process with crane.
+ *
+ * Push goes to the EXTERNAL hostname (panel.dev.kaiad.dev), not the
+ * compose-internal `registry:5000`, because the host docker daemon
+ * can't resolve compose DNS. The host's openresty terminates TLS and
+ * forwards to the registry container.
+ */
+async function buildViaDockerfile(params: {
+  query: QueryFn;
+  buildId: string;
+  hostWs: string;
+  pipeline: PipelineDefinition;
+  serviceName: string;
+  sha: string;
+}): Promise<{ ok: true; imageRef: string } | { ok: false; reason: string }> {
+  const { query, buildId, hostWs, pipeline, serviceName, sha } = params;
+  const df = pipeline.dockerfile;
+  if (!df) {
+    return { ok: false, reason: "buildViaDockerfile called without pipeline.dockerfile" };
+  }
+
+  // Image refs use the EXTERNAL host so the daemon can resolve via DNS.
+  // The internal/external blobs are the same — registry just stores by
+  // digest under whichever repo namespace the manifest lives at.
+  const externalRef = `${REGISTRY_HOST}/${serviceName}:${sha}`;
+  const externalLatestRef = `${REGISTRY_HOST}/${serviceName}:latest`;
+
+  await appendBuildLog(query, buildId, banner(`dockerfile mode — ${df.path} @ ${df.context}`));
+
+  // docker build expects host paths; resolve relative to the bind-
+  // mounted hostWs.
+  const ctxPath = path.posix.join(hostWs, df.context);
+  const dockerfilePath = path.posix.join(hostWs, df.path);
+
+  const buildArgs: string[] = ["build", "-f", dockerfilePath, "-t", externalRef, "-t", externalLatestRef];
+  for (const [k, v] of Object.entries(df.args)) {
+    buildArgs.push("--build-arg", `${k}=${v}`);
+  }
+  if (df.target) {
+    buildArgs.push("--target", df.target);
+  }
+  buildArgs.push(ctxPath);
+
+  const buildRes = await runProcStreaming("docker", buildArgs, {
+    onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
+    timeoutMs: BUILD_TIMEOUT_MS
+  });
+  if (buildRes.code !== 0) {
+    return { ok: false, reason: `docker build exited with code ${buildRes.code}` };
+  }
+
+  // Push the immutable :sha tag and the moving :latest tag. The daemon
+  // uses the kaiad container's ~/.docker/config.json for auth — the
+  // X-Registry-Auth header is set by the docker CLI from there.
+  for (const ref of [externalRef, externalLatestRef]) {
+    const pushRes = await runProcStreaming("docker", ["push", ref], {
+      onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
+      timeoutMs: BUILD_TIMEOUT_MS
+    });
+    if (pushRes.code !== 0) {
+      return { ok: false, reason: `docker push ${ref} exited with code ${pushRes.code}` };
+    }
+  }
+
+  return { ok: true, imageRef: externalRef };
+}
 
 // ─── Manual-build redeploy dispatch ────────────────────────────────────────
 

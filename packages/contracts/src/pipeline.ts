@@ -63,6 +63,25 @@ export const pipelineBuildSchema = z.object({
   env: z.record(z.string()).default({})
 });
 
+// Alternative build mode: just point at a Dockerfile. Kaiad runs
+// `docker build` on the host daemon and pushes the result to the
+// built-in registry. Mutually exclusive with build/artifacts/runtime —
+// the Dockerfile already encodes everything those would describe.
+//
+// `ports`, `instances`, `domains`, `environments`, `loadBalancer` still
+// apply: those are deployment-time metadata, independent of how the
+// image is produced.
+export const pipelineDockerfileSchema = z.object({
+  /** Path to the Dockerfile, relative to the repo root. */
+  path: z.string().min(1).default("Dockerfile"),
+  /** Build context, relative to the repo root. */
+  context: z.string().min(1).default("."),
+  /** --build-arg map. */
+  args: z.record(z.string()).default({}),
+  /** --target stage for multi-stage builds. */
+  target: z.string().min(1).optional()
+});
+
 export const pipelineRuntimeSchema = z.object({
   /**
    * Base image for the pushed runtime image. Defaults to "scratch" so
@@ -170,6 +189,13 @@ export const pipelineDefinitionSchema = z
     build: pipelineBuildSchema.optional(),
     artifacts: z.array(safeRelativePath).default([]),
     runtime: pipelineRuntimeSchema.optional(),
+    /**
+     * Alternative build mode — exclusive with build/artifacts/runtime.
+     * When set, kaiad runs `docker build` on the host daemon and pushes
+     * the resulting image to its built-in registry. Image config
+     * (entrypoint, exposed ports, env, etc.) comes from the Dockerfile.
+     */
+    dockerfile: pipelineDockerfileSchema.optional(),
     ports: z.array(pipelinePortSchema).default([]),
     /**
      * Default replica count when no environment-specific override
@@ -192,6 +218,19 @@ export const pipelineDefinitionSchema = z
     environments: z.record(pipelineEnvironmentSchema).default({})
   })
   .superRefine((def, ctx) => {
+    // dockerfile mode is mutually exclusive with the build/artifacts/
+    // runtime trio: the Dockerfile already describes everything those
+    // express. Allowing both would silently let one win and confuse
+    // the user.
+    if (def.dockerfile) {
+      if (def.build || def.runtime || def.artifacts.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dockerfile"],
+          message: "dockerfile: is exclusive with build/artifacts/runtime — pick one mode"
+        });
+      }
+    }
     // Cross-field validation: every runtime.copy.from / runtime.layers
     // MUST appear in artifacts[]. Catches typos early instead of
     // producing an empty file in the runtime image.
@@ -276,6 +315,7 @@ function someEnvHasDomains(envs: Record<string, { domains: unknown[] }>): boolea
 export type PipelinePort = z.infer<typeof pipelinePortSchema>;
 export type PipelineBuild = z.infer<typeof pipelineBuildSchema>;
 export type PipelineRuntime = z.infer<typeof pipelineRuntimeSchema>;
+export type PipelineDockerfile = z.infer<typeof pipelineDockerfileSchema>;
 export type PipelineDomain = z.infer<typeof pipelineDomainSchema>;
 export type PipelineLoadBalancer = z.infer<typeof pipelineLoadBalancerSchema>;
 export type PipelineEnvironment = z.infer<typeof pipelineEnvironmentSchema>;
@@ -320,6 +360,7 @@ const innerPipelineSchema = z
     build: pipelineBuildSchema.optional(),
     artifacts: z.array(safeRelativePath).default([]),
     runtime: pipelineRuntimeSchema.optional(),
+    dockerfile: pipelineDockerfileSchema.optional(),
     ports: z.array(pipelinePortSchema).default([]),
     instances: z.number().int().min(0).default(1),
     domains: z.array(pipelineDomainSchema).default([]),
@@ -328,6 +369,15 @@ const innerPipelineSchema = z
   })
   // Same cross-field checks as the top-level pipelineDefinitionSchema.
   .superRefine((def, ctx) => {
+    if (def.dockerfile) {
+      if (def.build || def.runtime || def.artifacts.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["dockerfile"],
+          message: "dockerfile: is exclusive with build/artifacts/runtime — pick one mode"
+        });
+      }
+    }
     if (def.runtime) {
       const captured = new Set(def.artifacts);
       for (const c of def.runtime.copy) {

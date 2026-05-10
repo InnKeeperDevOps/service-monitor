@@ -434,6 +434,86 @@ runtime: { image: alpine, command: [sh] }
     });
   });
 
+  describe("dockerfile mode", () => {
+    it("accepts a minimal dockerfile pipeline", () => {
+      const r = parsePipelineYaml(`
+version: 1
+dockerfile:
+  path: Dockerfile
+ports:
+  - port: 9000
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.kind !== "single") return;
+      expect(r.pipeline.dockerfile?.path).toBe("Dockerfile");
+      expect(r.pipeline.dockerfile?.context).toBe(".");
+    });
+
+    it("fills defaults for path + context + args", () => {
+      const r = parsePipelineYaml(`
+version: 1
+dockerfile: {}
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.kind !== "single") return;
+      expect(r.pipeline.dockerfile?.path).toBe("Dockerfile");
+      expect(r.pipeline.dockerfile?.context).toBe(".");
+      expect(r.pipeline.dockerfile?.args).toEqual({});
+    });
+
+    it("rejects dockerfile alongside build", () => {
+      const r = parsePipelineYaml(`
+version: 1
+dockerfile: {}
+build:
+  image: alpine
+  steps: [echo]
+`);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toMatch(/exclusive/);
+    });
+
+    it("rejects dockerfile alongside runtime", () => {
+      const r = parsePipelineYaml(`
+version: 1
+dockerfile: {}
+runtime:
+  image: alpine
+  command: ["sh"]
+`);
+      expect(r.ok).toBe(false);
+    });
+
+    it("rejects dockerfile alongside non-empty artifacts", () => {
+      const r = parsePipelineYaml(`
+version: 1
+dockerfile: {}
+artifacts: ["foo.tar"]
+`);
+      expect(r.ok).toBe(false);
+    });
+
+    it("dockerfile mode works inside multi-pipeline file", () => {
+      const r = parsePipelineYaml(`
+version: 1
+services:
+  base:
+    dockerfile:
+      path: deploy/Dockerfile
+      args:
+        PHP_VERSION: "8.2"
+      target: runtime
+    ports: [{ port: 9000 }]
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok || r.kind !== "multi") return;
+      expect(r.pipelines.base.dockerfile?.path).toBe("deploy/Dockerfile");
+      expect(r.pipelines.base.dockerfile?.args).toEqual({ PHP_VERSION: "8.2" });
+      expect(r.pipelines.base.dockerfile?.target).toBe("runtime");
+    });
+  });
+
   describe("runtime.layers", () => {
     it("accepts layers when present in artifacts[]", () => {
       const r = parsePipelineYaml(`
