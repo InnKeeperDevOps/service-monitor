@@ -618,18 +618,38 @@ async function buildRuntimeImage(params: {
 
   // 0) Per-build docker config with Basic auth so crane runs the
   //    /registry/token round-trip per push and gets a JWT scoped to
-  //    THIS repo. The container-wide ~/.docker/config.json is set up
-  //    by push-agent-on-boot.sh with a `registrytoken` Bearer scoped
-  //    only to `kaiad-agent`, which would 401 here. We don't touch
-  //    that config — we use a separate DOCKER_CONFIG dir per build.
+  //    THIS repo. We start from the container-wide ~/.docker/config.json
+  //    (which holds operator-managed creds for upstream registries —
+  //    e.g. `docker login ghcr.io` so crane can pull private base
+  //    images) and OVERRIDE the kaiad-registry entries with our own
+  //    Basic auth. Without this merge, crane append against a private
+  //    base like ghcr.io/foo/bar would 401 even though the build-step
+  //    container can pull it via the host daemon's config.
   const dockerCfgDir = path.join(rootDir, "docker-config");
   await fs.mkdir(dockerCfgDir, { recursive: true });
   const basic = Buffer.from(`${REGISTRY_PUSH_USER}:${REGISTRY_PUSH_PASSWORD}`).toString("base64");
+
+  let inheritedAuths: Record<string, unknown> = {};
+  try {
+    const home = process.env.HOME ?? "/";
+    const containerCfgPath = path.join(home, ".docker", "config.json");
+    const raw = await fs.readFile(containerCfgPath, "utf8");
+    const parsed = JSON.parse(raw) as { auths?: Record<string, unknown> };
+    if (parsed.auths && typeof parsed.auths === "object") {
+      inheritedAuths = { ...parsed.auths };
+    }
+  } catch {
+    // No container-wide docker config — fine, just use our own.
+  }
+
   await fs.writeFile(
     path.join(dockerCfgDir, "config.json"),
     JSON.stringify(
       {
         auths: {
+          ...inheritedAuths,
+          // Our Basic auth always wins for the kaiad registry (the
+          // inherited registrytoken would 401 with the wrong scope).
           [REGISTRY_INTERNAL]: { auth: basic },
           [REGISTRY_HOST]: { auth: basic }
         }
