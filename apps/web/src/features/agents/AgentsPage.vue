@@ -86,17 +86,25 @@ const serviceCountByAgent = computed(() => {
 });
 
 // Merge live telemetry presence into the static row data so "Live"
-// reflects the WebSocket state in real time.
+// reflects the WebSocket state in real time. Sorted by display name
+// (falling back to id when unnamed) so order is stable across renders
+// and the API's natural ordering doesn't reshuffle rows on refetch.
 const displayedAgents = computed<Agent[]>(() =>
-  agents.value.map((a) => {
-    const liveHost: AgentTelemetry | undefined = live.host[a.id];
-    const livePresence = live.presence[a.id];
-    return {
-      ...a,
-      ...(liveHost ? { telemetry: liveHost } : {}),
-      websocketConnected: livePresence !== undefined ? livePresence : a.websocketConnected
-    };
-  })
+  agents.value
+    .map((a) => {
+      const liveHost: AgentTelemetry | undefined = live.host[a.id];
+      const livePresence = live.presence[a.id];
+      return {
+        ...a,
+        ...(liveHost ? { telemetry: liveHost } : {}),
+        websocketConnected: livePresence !== undefined ? livePresence : a.websocketConnected
+      };
+    })
+    .sort((a, b) => {
+      const an = (a.name?.trim() || a.id).toLowerCase();
+      const bn = (b.name?.trim() || b.id).toLowerCase();
+      return an.localeCompare(bn);
+    })
 );
 
 const summary = computed(() => {
