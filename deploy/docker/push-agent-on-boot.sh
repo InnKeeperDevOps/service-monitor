@@ -89,13 +89,17 @@ cat > "${HOME:-/tmp}/.docker/config.json" <<JSON
 JSON
 export DOCKER_CONFIG="${HOME:-/tmp}/.docker"
 
-# Skip if the registry already has this tag — first-boot push only.
-if crane --insecure manifest "${REGISTRY}/kaiad-agent:${VERSION}" >/dev/null 2>&1; then
-  echo "[push-agent] ${REGISTRY}/kaiad-agent:${VERSION} already present; skipping push"
-  exit 0
+# Push the version tag if it isn't already in the registry. Different
+# kaiad builds often ship different agent code under the same ${VERSION},
+# so we ALSO re-push the moving :latest tag every time, pointing at the
+# tarball baked into THIS kaiad image. crane push is content-addressed,
+# so re-pushing identical blobs is a no-op; only differing layers actually
+# move bytes.
+if ! crane --insecure manifest "${REGISTRY}/kaiad-agent:${VERSION}" >/dev/null 2>&1; then
+  echo "[push-agent] pushing ${TARBALL} → ${REGISTRY}/kaiad-agent:${VERSION}"
+  crane --insecure push "${TARBALL}" "${REGISTRY}/kaiad-agent:${VERSION}"
 fi
 
-echo "[push-agent] pushing ${TARBALL} → ${REGISTRY}/kaiad-agent:${VERSION}"
-crane --insecure push "${TARBALL}" "${REGISTRY}/kaiad-agent:${VERSION}"
-crane --insecure tag "${REGISTRY}/kaiad-agent:${VERSION}" latest
+echo "[push-agent] re-pushing ${TARBALL} → ${REGISTRY}/kaiad-agent:latest (refresh moving tag)"
+crane --insecure push "${TARBALL}" "${REGISTRY}/kaiad-agent:latest"
 echo "[push-agent] done"

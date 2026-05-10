@@ -62,6 +62,13 @@ RUN curl -sSfL https://github.com/google/go-containerregistry/releases/download/
 # no external push step.
 FROM crane-bin AS agent-bundle
 COPY --from=agent-build /out/agent /tmp/rootfs/usr/local/bin/agent
+# kubectl — used by the agent's redeploy_service handler in kubernetes
+# mode (see apps/agent/internal/executor/redeploy.go). Pinned so a hostile
+# mirror can't surprise us. ~50 MB static-linked Go binary.
+ARG AGENT_KUBECTL_VERSION=v1.30.5
+RUN curl -fsSL "https://dl.k8s.io/release/${AGENT_KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+      -o /tmp/rootfs/usr/local/bin/kubectl \
+ && chmod +x /tmp/rootfs/usr/local/bin/kubectl
 RUN cd /tmp/rootfs && tar -cf /tmp/agent-layer.tar usr
 # `crane append` produces a fully-formed image but doesn't let us set
 # the entrypoint inline; the operator's container spec sets

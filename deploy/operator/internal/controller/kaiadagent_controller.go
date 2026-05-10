@@ -333,7 +333,12 @@ func (r *KaiadAgentReconciler) applyDeployment(ctx context.Context, agent *kaiad
 				// step needed to set ENTRYPOINT). Mirrors the way
 				// apps/agent/Dockerfile sets ENTRYPOINT.
 				Command:         []string{"/usr/local/bin/agent"},
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				// :latest tags must re-pull on every pod start so new
+				// agent code reaches the cluster — the kaiad image
+				// re-pushes :latest on each platform restart, but the
+				// cached image on the node would otherwise stick.
+				// Specific tags (e.g. :0.2.0) keep PullIfNotPresent.
+				ImagePullPolicy: imagePullPolicyForImage(agent.Spec.Image),
 				Env:             buildAgentEnv(agent, enroll),
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: "creds", MountPath: "/var/lib/kaiad-agent"},
@@ -449,6 +454,27 @@ func (r *KaiadAgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(),
 		).
 		Complete(r)
+}
+
+// imagePullPolicyForImage picks a sensible default policy: :latest tags
+// pull on every pod start (the kaiad-side push-on-boot may have changed
+// the manifest digest under the same tag); explicit version tags use
+// IfNotPresent so node-cached images aren't redundantly fetched.
+func imagePullPolicyForImage(image string) corev1.PullPolicy {
+	colon := -1
+	for i := len(image) - 1; i >= 0; i-- {
+		if image[i] == ':' {
+			colon = i
+			break
+		}
+		if image[i] == '/' {
+			break
+		}
+	}
+	if colon < 0 || image[colon+1:] == "latest" {
+		return corev1.PullAlways
+	}
+	return corev1.PullIfNotPresent
 }
 
 // namespaceToAgents maps a Namespace event to all KaiadAgents whose selectors
