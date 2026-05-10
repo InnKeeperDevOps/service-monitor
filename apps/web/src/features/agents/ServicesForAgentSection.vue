@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, type CSSProperties } from "vue";
 import { api, type MonitoredService } from "../../lib/api.js";
+import { readCachedAgentDetail, writeCachedAgentDetail } from "./cache.js";
 
 const props = defineProps<{
   agentId: string;
@@ -27,18 +28,35 @@ type RunningEntry = {
 };
 const running = ref<RunningEntry[]>([]);
 
+function hydrateFromCache(id: string) {
+  const cached = readCachedAgentDetail(id);
+  if (cached?.running.length) running.value = cached.running;
+}
+
 async function loadRunning() {
   try {
     const r = await api.listRunningServicesForAgent(props.agentId);
     running.value = r.running;
+    writeCachedAgentDetail(props.agentId, { running: r.running });
   } catch {
     // Non-fatal — section still renders the bound list.
-    running.value = [];
+    // Don't blank out cached data on a transient failure; keep
+    // showing what we last knew until the next successful load.
   }
 }
 
-onMounted(loadRunning);
-watch(() => props.agentId, loadRunning);
+onMounted(() => {
+  hydrateFromCache(props.agentId);
+  void loadRunning();
+});
+watch(
+  () => props.agentId,
+  (newId) => {
+    running.value = [];
+    hydrateFromCache(newId);
+    void loadRunning();
+  }
+);
 
 function runningForService(serviceId: string): RunningEntry[] {
   return running.value.filter((r) => r.serviceId === serviceId);

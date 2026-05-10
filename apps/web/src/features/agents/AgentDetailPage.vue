@@ -32,6 +32,11 @@ import {
   formatRelativeTime,
   truncateFingerprint
 } from "./format.js";
+import {
+  clearCachedAgentDetail,
+  readCachedAgentDetail,
+  writeCachedAgentDetail
+} from "./cache.js";
 
 const props = defineProps<{ agentId: string }>();
 
@@ -42,6 +47,10 @@ const POLL_INTERVAL_MS = 30_000;
 
 const agent = ref<Agent | null>(null);
 const services = ref<MonitoredService[]>([]);
+// Telemetry snapshot pulled from cache — used until the live WS stream
+// produces a fresh frame. After that, `live.host[id]` takes over (see
+// `merged` below).
+const cachedHostTelemetry = ref<AgentTelemetry | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const actionError = ref<string | null>(null);
@@ -50,6 +59,16 @@ const editName = ref("");
 const saving = ref(false);
 
 const live = useTelemetryStream(() => true);
+
+// Pre-fill from cache so the page renders immediately on navigation.
+// fetchData() will overwrite below once the network responds.
+function hydrateFromCache(id: string) {
+  const cached = readCachedAgentDetail(id);
+  if (!cached) return;
+  if (cached.agent) agent.value = cached.agent;
+  if (cached.services.length > 0) services.value = cached.services;
+  if (cached.hostTelemetry) cachedHostTelemetry.value = cached.hostTelemetry;
+}
 
 async function fetchData() {
   error.value = null;
@@ -60,6 +79,7 @@ async function fetchData() {
     ]);
     agent.value = a;
     services.value = sr.services;
+    writeCachedAgentDetail(props.agentId, { agent: a, services: sr.services });
   } catch (e: unknown) {
     error.value = (e as Error).message;
   } finally {
@@ -70,16 +90,39 @@ async function fetchData() {
 let pollId: ReturnType<typeof setInterval> | null = null;
 
 onMounted(() => {
+  hydrateFromCache(props.agentId);
+  // If hydrate gave us an agent, drop the loading skeleton even
+  // though the network call is still in flight.
+  if (agent.value) loading.value = false;
   void fetchData();
   pollId = setInterval(() => void fetchData(), POLL_INTERVAL_MS);
 });
 onUnmounted(() => {
   if (pollId) clearInterval(pollId);
 });
-watch(() => props.agentId, () => {
-  loading.value = true;
-  void fetchData();
-});
+watch(
+  () => props.agentId,
+  (newId) => {
+    agent.value = null;
+    services.value = [];
+    cachedHostTelemetry.value = null;
+    loading.value = true;
+    hydrateFromCache(newId);
+    if (agent.value) loading.value = false;
+    void fetchData();
+  }
+);
+
+// Persist every fresh host_stats frame so the next navigation can
+// render telemetry instantly. live.host[id] is reactive — watch it
+// and write through.
+watch(
+  () => live.host[props.agentId],
+  (t) => {
+    if (t) writeCachedAgentDetail(props.agentId, { hostTelemetry: t, hostTelemetrySampledAt: Date.now() });
+  },
+  { deep: true }
+);
 
 // Merge stored agent fields with live telemetry (same pattern as the
 // list page) so values update in real time without a refetch.
@@ -90,7 +133,11 @@ const merged = computed<Agent | null>(() => {
   const liveApps = live.apps[a.id];
   const livePresence = live.presence[a.id];
   const apps: AgentAppTelemetry[] = liveApps ? Object.values(liveApps) : a.apps ?? [];
-  const telemetry: AgentTelemetry | undefined = liveHost ?? a.telemetry;
+  // Telemetry resolution order: live WS frame → server-side stored
+  // sample → cached frame from a previous session. Cache fills the
+  // gap between page load and the first live frame after navigation.
+  const telemetry: AgentTelemetry | undefined =
+    liveHost ?? a.telemetry ?? cachedHostTelemetry.value ?? undefined;
   return {
     ...a,
     ...(telemetry ? { telemetry } : {}),
@@ -146,6 +193,7 @@ async function deleteAgent() {
   actionError.value = null;
   try {
     await api.deleteAgent(props.agentId);
+    clearCachedAgentDetail(props.agentId);
     window.location.hash = "agents";
   } catch (e: unknown) {
     actionError.value = (e as Error).message;
