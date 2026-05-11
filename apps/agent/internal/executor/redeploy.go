@@ -29,12 +29,14 @@ import (
 	"time"
 
 	"github.com/service-monitor/agent/internal/docker"
+	"github.com/service-monitor/agent/internal/lb"
 )
 
 // LabelServiceID is set on every container the agent creates so a future
 // redeploy can find and clean up its own previous replicas without
 // touching containers it didn't create.
 const LabelServiceID = "kaiad.dev/service-id"
+const LabelServiceName = "kaiad.dev/service-name"
 const LabelBuildID = "kaiad.dev/build-id"
 const LabelEnvironment = "kaiad.dev/environment"
 const LabelNamespace = "kaiad.dev/namespace"
@@ -47,6 +49,11 @@ const DefaultDockerNamespace = "kaiad"
 type redeployInput struct {
 	commandID    string
 	serviceID    string
+	// serviceName is the human-readable name (MonitoredService.name).
+	// Used as the DNS-discoverable handle for the workload: docker
+	// network alias on every replica + k8s Service.metadata.name.
+	// Empty falls back to UUID-derived naming for backwards compat.
+	serviceName  string
 	buildID      string
 	environment  string
 	// namespace is the k8s namespace for k8s mode or the docker
@@ -86,6 +93,9 @@ func parseRedeployPayload(payload map[string]interface{}) (redeployInput, error)
 		in.serviceID = s
 	} else {
 		return in, fmt.Errorf("payload missing serviceId")
+	}
+	if s, ok := payload["serviceName"].(string); ok {
+		in.serviceName = s
 	}
 	if s, ok := payload["buildId"].(string); ok {
 		in.buildID = s
@@ -178,17 +188,18 @@ func (e *Executor) executeTeardownService(
 	if serviceID == "" {
 		return CommandResult{Success: false, Output: "teardown_service: payload missing serviceId"}
 	}
+	serviceName, _ := payload["serviceName"].(string)
 	namespace, _ := payload["namespace"].(string)
 	environment, _ := payload["environment"].(string)
 	log.Printf(
-		"[agent:executor] teardown_service backend=%s service=%s ns=%s env=%s",
-		backend, serviceID, namespace, environment,
+		"[agent:executor] teardown_service backend=%s service=%s name=%s ns=%s env=%s",
+		backend, serviceID, serviceName, namespace, environment,
 	)
 	switch backend {
 	case RuntimeDocker:
 		return teardownDocker(ctx, dc, serviceID, namespace)
 	case RuntimeKubernetes:
-		return teardownKubernetes(ctx, serviceID, namespace)
+		return teardownKubernetes(ctx, serviceID, serviceName, namespace)
 	case RuntimeShell:
 		return CommandResult{Success: true, Output: "teardown_service: shell mode — nothing to remove"}
 	default:
@@ -205,6 +216,14 @@ func teardownDocker(ctx context.Context, dc *docker.Client, serviceID, namespace
 	}
 	if namespace == "" {
 		namespace = DefaultDockerNamespace
+	}
+	// Remove the service's nginx snippet first so the LB stops sending
+	// traffic before the upstream containers vanish. The Detach call
+	// is best-effort — failures are logged into the output but don't
+	// block container teardown.
+	lbm := lb.DefaultManager(dc)
+	if err := lbm.DetachService(ctx, serviceID, namespace); err != nil {
+		log.Printf("[agent:teardown] lb.DetachService(%s): %v", serviceID, err)
 	}
 	existing, err := dc.ListContainersAll(ctx)
 	if err != nil {
@@ -236,7 +255,7 @@ func teardownDocker(ctx context.Context, dc *docker.Client, serviceID, namespace
 	return CommandResult{Success: true, Output: out.String()}
 }
 
-func teardownKubernetes(ctx context.Context, serviceID, namespace string) CommandResult {
+func teardownKubernetes(ctx context.Context, serviceID, serviceName, namespace string) CommandResult {
 	if _, err := exec.LookPath("kubectl"); err != nil {
 		return CommandResult{Success: false, Output: "teardown_service: kubectl not on PATH"}
 	}
@@ -249,7 +268,7 @@ func teardownKubernetes(ctx context.Context, serviceID, namespace string) Comman
 			namespace = "default"
 		}
 	}
-	name := k8sName(serviceID)
+	name := k8sResourceName(serviceID, serviceName)
 	var out strings.Builder
 	for _, kind := range []string{"deployment", "service", "ingress"} {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -349,30 +368,20 @@ func (e *Executor) redeployDocker(
 		}
 	}
 
-	// 3) Create + start new replicas. Port publishing is only safe when
-	// instances == 1 (multiple replicas would collide on the same host
-	// port). For multi-replica, the user is expected to front the
-	// service with a load balancer, which is the loadBalancer's job —
-	// not implemented for docker mode in v1.
-	publishPorts := in.instances == 1
-	if !publishPorts && len(in.domains) > 0 {
-		logf("instances=%d > 1; skipping host port publishing (set up an external LB)", in.instances)
-	}
-
-	var ports []docker.PortBinding
-	if publishPorts {
-		seen := map[int]bool{}
-		for _, d := range in.domains {
-			if seen[d.port] {
-				continue
-			}
-			seen[d.port] = true
-			ports = append(ports, docker.PortBinding{
-				ContainerPort: d.port,
-				HostPort:      d.port,
-				Protocol:      "tcp",
-			})
-		}
+	// 3) Per-agent LB. The kaiad-lb nginx singleton fronts every
+	// service container by name on a shared docker bridge — that
+	// removes the old `instances == 1` limitation around host port
+	// publishing, because nothing in this path actually publishes to
+	// the host anymore. The LB does, on :80, on behalf of every
+	// service that has domains.
+	lbm := lb.DefaultManager(dc)
+	if err := lbm.Ensure(ctx); err != nil {
+		// Continue without LB rather than failing the deploy outright —
+		// the containers still come up, just unreachable via domains
+		// until the LB recovers. Surface the error in the output so
+		// it's visible in the build/redeploy log.
+		fmt.Fprintf(&out, "[agent:redeploy] lb.Ensure failed (proceeding without LB): %v\n", err)
+		log.Printf("[agent:redeploy] lb.Ensure failed: %v", err)
 	}
 
 	labels := map[string]string{
@@ -381,21 +390,45 @@ func (e *Executor) redeployDocker(
 		LabelEnvironment: in.environment,
 		LabelNamespace:   namespace,
 	}
+	if in.serviceName != "" {
+		labels[LabelServiceName] = in.serviceName
+	}
 
+	// Build the list of container names ahead of CreateContainer
+	// loop so we can hand the same slice to the LB without an extra
+	// docker-list round trip after.
+	containerNames := make([]string, 0, in.instances)
+	// DNS aliases attached to every replica. When the platform sent
+	// a service name we register it as a network alias so siblings
+	// can dial `http://php` instead of needing to know the UUID-
+	// prefixed container name. Docker's embedded DNS round-robins
+	// among replicas sharing the alias automatically.
+	aliases := []string{}
+	if in.serviceName != "" {
+		aliases = append(aliases, in.serviceName)
+		// Also expose `<svcname>.<namespace>` so callers in a
+		// different namespace within the same agent (rare in v1
+		// but reasonable in future) can disambiguate.
+		if namespace != "" && namespace != DefaultDockerNamespace {
+			aliases = append(aliases, fmt.Sprintf("%s.%s", in.serviceName, namespace))
+		}
+	}
 	for i := 0; i < in.instances; i++ {
 		// <namespace>-<svc-uuid-short>-<replica> so all containers in
 		// one namespace cluster in `docker ps` and the namespace
 		// shows up in the container name.
 		name := fmt.Sprintf("%s-%s-%d", namespace, shortServiceName(in.serviceID), i)
+		containerNames = append(containerNames, name)
 		// docker create rejects names that already exist; remove any
 		// stale name from a prior run that wasn't caught by label scan.
 		_ = dc.RemoveContainer(ctx, name)
 		id, err := dc.CreateContainer(ctx, docker.CreateContainerOpts{
-			Name:    name,
-			Image:   in.imageRef,
-			Labels:  labels,
-			Ports:   ports,
-			Restart: "unless-stopped",
+			Name:           name,
+			Image:          in.imageRef,
+			Labels:         labels,
+			Restart:        "unless-stopped",
+			Network:        lbm.NetworkName(),
+			NetworkAliases: aliases,
 		})
 		if err != nil {
 			return CommandResult{Success: false, Output: out.String() + fmt.Sprintf("create %s: %v\n", name, err)}
@@ -406,14 +439,24 @@ func (e *Executor) redeployDocker(
 		logf("started %s (%s)", name, shortID(id))
 	}
 
+	// Wire (or rewire) the per-service nginx conf so the new replica
+	// set takes over instantly. AttachService handles a swap-on-reload
+	// with `nginx -t` before reload — if the conf doesn't validate the
+	// reload is skipped and the prior conf stays serving.
+	port := upstreamPort(in.domains)
+	if err := lbm.AttachService(ctx, in.serviceID, in.serviceName, namespace, containerNames, port, toLBDomains(in.domains)); err != nil {
+		fmt.Fprintf(&out, "[agent:redeploy] lb.AttachService failed: %v\n", err)
+		log.Printf("[agent:redeploy] lb.AttachService failed: %v", err)
+	}
+
 	// Report the per-service endpoint to the platform so the panel's
 	// Load Balancers page can show domain → host:port for docker
-	// agents too. Docker mode has no cluster-side LB; the "external
-	// endpoint" is the docker host itself, surfaced via
+	// agents too. The "external endpoint" is the docker host itself,
+	// reachable on the LB's port — surfaced via
 	// KAIAD_AGENT_EXTERNAL_HOST or os.Hostname() as a fallback.
 	reporter, agentID := e.reporterAndID()
 	if reporter != nil {
-		report := buildDockerLbStatusReport(agentID, in, namespace, publishPorts)
+		report := buildDockerLbStatusReport(agentID, in, namespace, len(in.domains) > 0)
 		if err := reporter(report); err != nil {
 			fmt.Fprintf(&out, "lb_status_report send failed: %v\n", err)
 		}
@@ -427,16 +470,16 @@ func (e *Executor) redeployDocker(
 }
 
 // buildDockerLbStatusReport mirrors the k8s-mode reporter for docker
-// agents. The "external endpoint" is the docker host:
+// agents. The external endpoint is the per-agent nginx LB sitting on
+// the docker host:
 //   - KAIAD_AGENT_EXTERNAL_HOST env var if the operator set it (the
 //     stable answer — e.g. "edge-01.example.com" or "203.0.113.5")
 //   - else os.Hostname() (best-effort; what the kernel reports)
 //
-// Domains are emitted only when port-publishing happened (instances=1)
-// since multi-replica docker has no fronting LB by default and the
-// kaiad.yaml domains have nothing to actually route to until one is
-// added externally.
-func buildDockerLbStatusReport(agentID string, in redeployInput, namespace string, publishedPorts bool) map[string]interface{} {
+// Domains are emitted whenever the kaiad.yaml declared any, because
+// the per-agent LB now routes them all (no host-port-collision
+// limitation when instances > 1).
+func buildDockerLbStatusReport(agentID string, in redeployInput, namespace string, hasDomains bool) map[string]interface{} {
 	host := strings.TrimSpace(os.Getenv("KAIAD_AGENT_EXTERNAL_HOST"))
 	if host == "" {
 		if hn, err := os.Hostname(); err == nil {
@@ -449,7 +492,7 @@ func buildDockerLbStatusReport(agentID string, in redeployInput, namespace strin
 	}
 
 	domains := make([]map[string]interface{}, 0, len(in.domains))
-	if publishedPorts {
+	if hasDomains {
 		for _, d := range in.domains {
 			domains = append(domains, map[string]interface{}{
 				"host":     d.host,
@@ -459,28 +502,39 @@ func buildDockerLbStatusReport(agentID string, in redeployInput, namespace strin
 		}
 	}
 
-	seen := map[int]bool{}
+	// Ports the LB exposes on the docker host. Only meaningful when
+	// the service has domains — without domains the LB has nothing
+	// routed for this service and reporting :80 would be misleading.
 	ports := make([]map[string]interface{}, 0)
-	if publishedPorts {
-		for _, d := range in.domains {
-			if seen[d.port] {
-				continue
+	if hasDomains {
+		lbPort := 80
+		if v := strings.TrimSpace(os.Getenv("KAIAD_LB_HTTP_PORT")); v != "" {
+			var n int
+			fmt.Sscanf(v, "%d", &n)
+			if n > 0 && n < 65536 {
+				lbPort = n
 			}
-			seen[d.port] = true
-			ports = append(ports, map[string]interface{}{
-				"port":       d.port,
-				"protocol":   "TCP",
-				"targetPort": d.port,
-			})
 		}
+		ports = append(ports, map[string]interface{}{
+			"port":       lbPort,
+			"protocol":   "TCP",
+			"name":       "http",
+			"targetPort": upstreamPort(in.domains),
+		})
+	}
+
+	// lbType: when the kaiad.yaml declares "nginx" we honor it; when
+	// it declares "none" but there are still domains, the per-agent
+	// LB IS the routing layer for docker-mode, so report "nginx" so
+	// the panel groups consistently with the new behaviour.
+	lbType := in.loadBalancer.typ
+	if hasDomains && lbType == "none" {
+		lbType = "nginx"
 	}
 
 	detail := map[string]interface{}{}
-	if !publishedPorts && in.instances > 1 {
-		detail["note"] = fmt.Sprintf(
-			"docker host-port publish skipped (instances=%d > 1); set up an external LB to route to these replicas",
-			in.instances,
-		)
+	if hasDomains {
+		detail["lbMode"] = "per-agent-nginx"
 	}
 
 	return map[string]interface{}{
@@ -492,16 +546,37 @@ func buildDockerLbStatusReport(agentID string, in redeployInput, namespace strin
 		"namespace":        namespace,
 		"buildId":          in.buildID,
 		"imageRef":         in.imageRef,
-		// Docker doesn't have a "type" in the k8s sense; use the
-		// kaiad.yaml-declared lbType so the panel groups consistently
-		// (most docker services declare "none").
-		"lbType":           in.loadBalancer.typ,
+		"lbType":           lbType,
 		"externalIp":       nil,
 		"externalHostname": hostField,
 		"ports":            ports,
 		"domains":          domains,
 		"detail":           detail,
 	}
+}
+
+// upstreamPort picks the port the LB's nginx proxies to. All domain
+// entries in kaiad.yaml SHOULD share a single container port (one
+// upstream pool per service); when the user mixes ports the first
+// one wins — the platform validates that domain.port appears in
+// ports[], so any inconsistency is a kaiad.yaml authoring issue.
+func upstreamPort(domains []domainSpec) int {
+	for _, d := range domains {
+		if d.port > 0 {
+			return d.port
+		}
+	}
+	return 0
+}
+
+// toLBDomains adapts the executor's domainSpec to the lb package's
+// Domain (avoids the lb package importing the executor).
+func toLBDomains(in []domainSpec) []lb.Domain {
+	out := make([]lb.Domain, 0, len(in))
+	for _, d := range in {
+		out = append(out, lb.Domain{Host: d.host, Port: d.port, Protocol: d.protocol})
+	}
+	return out
 }
 
 func registryAuthFromEnv(imageRef string) *docker.RegistryAuth {
@@ -622,7 +697,7 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 	// deploy without waiting for a successful round-trip. externalIp
 	// and externalHostname stay nil (rendered as "(pending)") when
 	// the cluster hasn't actually assigned them.
-	resourceName := k8sName(in.serviceID)
+	resourceName := k8sResourceName(in.serviceID, in.serviceName)
 	var externalIP, externalHostname string
 	defer func() {
 		reporter, agentID := e.reporterAndID()
@@ -778,7 +853,7 @@ func buildLbStatusReport(agentID string, in redeployInput, namespace, externalIP
 // serialization — kaiad agent ships with kubectl, and YAML is the
 // natural input format.
 func renderK8sManifests(in redeployInput, namespace string) string {
-	name := k8sName(in.serviceID)
+	name := k8sResourceName(in.serviceID, in.serviceName)
 	labelStr := fmt.Sprintf(
 		"%s: %q\n        kaiad.dev/build-id: %q\n        kaiad.dev/environment: %q\n        app.kubernetes.io/name: %q\n        app.kubernetes.io/managed-by: kaiad",
 		LabelServiceID, in.serviceID, in.buildID, in.environment, name,
@@ -887,6 +962,59 @@ func renderK8sManifests(in redeployInput, namespace string) string {
 func k8sName(serviceID string) string {
 	// kaiad-<short-uuid>. Lowercase; no underscores.
 	return "kaiad-" + shortServiceName(serviceID)
+}
+
+// k8sResourceName picks the metadata.name for Deployment/Service/
+// Ingress. When the platform sent a `serviceName`, that wins — the
+// Service object gets that as its name, which is what sibling pods
+// resolve via in-cluster DNS (`http://<service-name>.<ns>`). Falls
+// back to the UUID-derived name for legacy commands.
+//
+// Sanitizes to RFC 1123 label rules (lowercase alphanumeric +
+// hyphens, max 63 chars, must start/end alphanumeric) — that's what
+// k8s requires for metadata.name on these object types. If
+// sanitization would yield an empty string, we fall back to the
+// UUID form rather than letting kubectl reject the manifest.
+func k8sResourceName(serviceID, serviceName string) string {
+	if serviceName == "" {
+		return k8sName(serviceID)
+	}
+	s := sanitizeK8sName(serviceName)
+	if s == "" {
+		return k8sName(serviceID)
+	}
+	return s
+}
+
+func sanitizeK8sName(name string) string {
+	var b strings.Builder
+	prev := byte('-')
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+			c = c + ('a' - 'A')
+			b.WriteByte(c)
+			prev = c
+		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'):
+			b.WriteByte(c)
+			prev = c
+		default:
+			if prev != '-' && b.Len() > 0 {
+				b.WriteByte('-')
+				prev = '-'
+			}
+		}
+		if b.Len() >= 63 {
+			break
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	// First character must be alphanumeric — Trim handles trailing
+	// hyphens but if the input started with digits-only that's fine
+	// for RFC 1123, but for k8s `name` the first char must be
+	// alphanumeric (a-z or 0-9), so Trim above already covers it.
+	return out
 }
 
 func sortedKeys(m map[string]string) []string {

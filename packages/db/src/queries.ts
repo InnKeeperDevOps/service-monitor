@@ -211,6 +211,13 @@ export interface AgentRow {
   allowedCapabilities?: string[];
   /** Deployment environment this agent serves (e.g. 'development', 'production'). */
   environment: string;
+  /**
+   * Runtime backend the agent reports it has configured itself for
+   * ("docker" | "kubernetes" | "shell"). Null until the first
+   * runtime-aware heartbeat arrives, so the UI can show "unknown"
+   * for legacy agents that haven't been upgraded.
+   */
+  runtimeBackend: string | null;
 }
 
 function mapAgent(r: Record<string, unknown>): AgentRow {
@@ -234,6 +241,7 @@ function mapAgent(r: Record<string, unknown>): AgentRow {
       r.cert_fingerprint == null ? null : String(r.cert_fingerprint),
     allowedCapabilities,
     environment: String(r.environment ?? "development"),
+    runtimeBackend: r.runtime_backend == null ? null : String(r.runtime_backend),
   };
 }
 
@@ -264,17 +272,18 @@ export async function getAgent(
 export async function recordAgentHeartbeat(
   query: QueryFn,
   tenantId: string,
-  data: { agentId: string; version: string | null },
+  data: { agentId: string; version: string | null; runtimeBackend?: string | null },
 ): Promise<void> {
   await query(
-    `INSERT INTO agents (id, tenant_id, name, version, status, last_seen_at, cert_fingerprint, allowed_capabilities)
-     VALUES ($1, $2, NULL, $3, 'online', NOW(), NULL, ARRAY[]::text[])
+    `INSERT INTO agents (id, tenant_id, name, version, status, last_seen_at, cert_fingerprint, allowed_capabilities, runtime_backend)
+     VALUES ($1, $2, NULL, $3, 'online', NOW(), NULL, ARRAY[]::text[], $4)
      ON CONFLICT (id) DO UPDATE SET
        version = COALESCE(EXCLUDED.version, agents.version),
        last_seen_at = NOW(),
-       status = 'online'
+       status = 'online',
+       runtime_backend = COALESCE(EXCLUDED.runtime_backend, agents.runtime_backend)
      WHERE agents.tenant_id = EXCLUDED.tenant_id`,
-    [data.agentId, tenantId, data.version],
+    [data.agentId, tenantId, data.version, data.runtimeBackend ?? null],
   );
 }
 
@@ -828,10 +837,12 @@ export async function listAllServicesForPoller(
     sshKeyId: string | null;
     branch: string;
     pipelineName: string | null;
+    kind: string;
+    dependsOn: string[];
   }>
 > {
   const { rows } = await query(
-    `SELECT id, tenant_id, name, git_repo_url, ssh_key_id, branch, pipeline_name
+    `SELECT id, tenant_id, name, git_repo_url, ssh_key_id, branch, pipeline_name, kind, depends_on
        FROM monitored_services`,
     []
   );
@@ -842,8 +853,85 @@ export async function listAllServicesForPoller(
     gitRepoUrl: String(r.git_repo_url),
     sshKeyId: r.ssh_key_id == null ? null : String(r.ssh_key_id),
     branch: String(r.branch),
-    pipelineName: r.pipeline_name == null ? null : String(r.pipeline_name)
+    pipelineName: r.pipeline_name == null ? null : String(r.pipeline_name),
+    kind: r.kind == null ? "deployable" : String(r.kind),
+    dependsOn: Array.isArray(r.depends_on) ? (r.depends_on as unknown[]).map((v) => String(v)) : []
   }));
+}
+
+/**
+ * Cache the service's kind + dependsOn from its latest kaiad.yaml so
+ * cheap reverse-lookups (find services that depend on X) and policy
+ * gates (skip deploy when kind=supporting) don't need to re-parse
+ * every build's pipeline_yaml.
+ */
+export async function updateServicePipelineMeta(
+  query: QueryFn,
+  tenantId: string,
+  serviceId: string,
+  data: { kind: string; dependsOn: string[] }
+): Promise<void> {
+  await query(
+    `UPDATE monitored_services
+        SET kind        = $3,
+            depends_on  = $4::text[]
+      WHERE tenant_id = $1 AND id = $2`,
+    [tenantId, serviceId, data.kind, data.dependsOn]
+  );
+}
+
+/**
+ * Reverse lookup: find every service whose dependsOn array contains
+ * `depName`. Used post-build to chain-trigger dependents.
+ */
+export async function listServicesDependingOn(
+  query: QueryFn,
+  tenantId: string,
+  depName: string
+): Promise<Array<{ id: string; name: string; branch: string }>> {
+  const { rows } = await query(
+    `SELECT id, name, branch
+       FROM monitored_services
+      WHERE tenant_id = $1
+        AND depends_on @> ARRAY[$2]::text[]`,
+    [tenantId, depName]
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    name: String(r.name),
+    branch: String(r.branch)
+  }));
+}
+
+/**
+ * Latest successful build for a service (by tenant + service name).
+ * Used at dep resolution time to pick the image_ref + sha that the
+ * dependent service's build templates should interpolate.
+ */
+export async function getLatestSuccessfulBuildByServiceName(
+  query: QueryFn,
+  tenantId: string,
+  serviceName: string
+): Promise<{ buildId: string; serviceId: string; gitSha: string; imageRef: string | null } | null> {
+  const { rows } = await query(
+    `SELECT b.id, b.service_id, b.git_sha, b.image_ref
+       FROM service_builds b
+       JOIN monitored_services s ON s.id = b.service_id
+      WHERE b.tenant_id = $1
+        AND s.name      = $2
+        AND b.status    = 'success'
+      ORDER BY b.created_at DESC
+      LIMIT 1`,
+    [tenantId, serviceName]
+  );
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    buildId: String(r.id),
+    serviceId: String(r.service_id),
+    gitSha: String(r.git_sha),
+    imageRef: r.image_ref == null ? null : String(r.image_ref)
+  };
 }
 
 export async function recordBuildArtifact(
@@ -1087,6 +1175,160 @@ export async function listMissingDeploysForAgent(
       WHERE j.tenant_id = $1
         AND j.agent_id  = $2
         AND st.id IS NULL`,
+    [tenantId, agentId]
+  );
+  return rows.map((r) => ({
+    serviceId: String(r.service_id),
+    serviceName: String(r.service_name),
+    branch: String(r.branch),
+    buildId: String(r.build_id),
+    gitSha: String(r.git_sha),
+    imageRef: String(r.image_ref),
+    pipelineYaml: String(r.pipeline_yaml ?? ""),
+    pipelineName: r.pipeline_name == null ? null : String(r.pipeline_name)
+  }));
+}
+
+/**
+ * Global cross-tenant drift query — one row per bound (agent, service)
+ * with the agent's environment, the latest successful build, and the
+ * current lb_status_report (LEFT JOIN, so NULL when not yet deployed).
+ *
+ * Used by the periodic deployment scheduler. The caller parses each
+ * row's pipeline_yaml, resolves the desired config under the agent's
+ * env, and compares against currentImageRef/currentBuildId/
+ * currentNamespace/currentEnvironment to decide whether to dispatch
+ * a redeploy. We don't try to compute drift in SQL because resolving
+ * a per-env namespace requires running the kaiad.yaml schema's
+ * resolver, which lives in TS.
+ */
+export async function listAllDeployTargets(
+  query: QueryFn
+): Promise<
+  Array<{
+    tenantId: string;
+    agentId: string;
+    agentEnv: string;
+    serviceId: string;
+    serviceName: string;
+    pipelineName: string | null;
+    buildId: string;
+    imageRef: string;
+    pipelineYaml: string;
+    currentImageRef: string | null;
+    currentBuildId: string | null;
+    currentNamespace: string | null;
+    currentEnvironment: string | null;
+  }>
+> {
+  const { rows } = await query(
+    `WITH latest_builds AS (
+       SELECT DISTINCT ON (b.service_id)
+              b.tenant_id,
+              b.service_id,
+              b.id            AS build_id,
+              b.image_ref,
+              b.pipeline_yaml
+         FROM service_builds b
+        WHERE b.status    = 'success'
+          AND b.image_ref IS NOT NULL
+        ORDER BY b.service_id, b.created_at DESC
+     )
+     SELECT j.tenant_id,
+            j.agent_id,
+            a.environment       AS agent_env,
+            s.id                AS service_id,
+            s.name              AS service_name,
+            s.pipeline_name     AS pipeline_name,
+            lb.build_id,
+            lb.image_ref,
+            lb.pipeline_yaml,
+            st.image_ref        AS current_image_ref,
+            st.build_id         AS current_build_id,
+            st.namespace        AS current_namespace,
+            st.environment      AS current_environment
+       FROM agent_services j
+       JOIN agents a              ON a.id = j.agent_id  AND a.tenant_id = j.tenant_id
+       JOIN monitored_services s  ON s.id = j.service_id AND s.tenant_id = j.tenant_id
+       JOIN latest_builds lb      ON lb.service_id = s.id AND lb.tenant_id = j.tenant_id
+  LEFT JOIN service_loadbalancer_status st
+         ON st.tenant_id = j.tenant_id
+        AND st.service_id = j.service_id
+        AND st.agent_id   = j.agent_id`,
+    []
+  );
+  return rows.map((r) => ({
+    tenantId: String(r.tenant_id),
+    agentId: String(r.agent_id),
+    agentEnv: String(r.agent_env ?? "development"),
+    serviceId: String(r.service_id),
+    serviceName: String(r.service_name),
+    pipelineName: r.pipeline_name == null ? null : String(r.pipeline_name),
+    buildId: String(r.build_id),
+    imageRef: String(r.image_ref),
+    pipelineYaml: String(r.pipeline_yaml ?? ""),
+    currentImageRef: r.current_image_ref == null ? null : String(r.current_image_ref),
+    currentBuildId: r.current_build_id == null ? null : String(r.current_build_id),
+    currentNamespace: r.current_namespace == null ? null : String(r.current_namespace),
+    currentEnvironment: r.current_environment == null ? null : String(r.current_environment)
+  }));
+}
+
+/**
+ * Like listMissingDeploysForAgent but returns ALL services bound to
+ * this agent that have at least one successful build — including ones
+ * that already have an lb_status_report row. Caller diffs the resolved
+ * config (namespace/instances/domains/loadBalancer) per service across
+ * the old vs new environment to decide whether a redeploy is needed.
+ *
+ * Used by the env-change reconciler. listMissingDeploysForAgent's
+ * `st.id IS NULL` filter would hide services that are already running
+ * under the OLD env, but those are exactly the ones that need to flip
+ * to the NEW env.
+ */
+export async function listLatestBuildsForBoundServices(
+  query: QueryFn,
+  tenantId: string,
+  agentId: string
+): Promise<
+  Array<{
+    serviceId: string;
+    serviceName: string;
+    branch: string;
+    buildId: string;
+    gitSha: string;
+    imageRef: string;
+    pipelineYaml: string;
+    pipelineName: string | null;
+  }>
+> {
+  const { rows } = await query(
+    `WITH latest_builds AS (
+       SELECT DISTINCT ON (b.service_id)
+              b.service_id,
+              b.id          AS build_id,
+              b.git_sha,
+              b.image_ref,
+              b.pipeline_yaml
+         FROM service_builds b
+        WHERE b.tenant_id = $1
+          AND b.status    = 'success'
+          AND b.image_ref IS NOT NULL
+        ORDER BY b.service_id, b.created_at DESC
+     )
+     SELECT s.id            AS service_id,
+            s.name          AS service_name,
+            s.branch        AS branch,
+            s.pipeline_name AS pipeline_name,
+            lb.build_id,
+            lb.git_sha,
+            lb.image_ref,
+            lb.pipeline_yaml
+       FROM agent_services AS j
+       JOIN monitored_services s ON s.id = j.service_id
+       JOIN latest_builds lb     ON lb.service_id = s.id
+      WHERE j.tenant_id = $1
+        AND j.agent_id  = $2`,
     [tenantId, agentId]
   );
   return rows.map((r) => ({

@@ -21,7 +21,18 @@ const heartbeatSchema = z.object({
   ts: z.string(),
   capacity: z.number().int().nonnegative(),
   tenantId: z.string().optional(),
-  agentVersion: z.string().optional()
+  agentVersion: z.string().optional(),
+  /**
+   * The runtime backend the agent actually configured itself for.
+   * Echoes whatever the agent decided after the hello frame +
+   * SM_AGENT_RUNTIME_OVERRIDE env var resolved. Optional so older
+   * agents that don't report it still validate.
+   */
+  runtime: z
+    .object({
+      backend: z.enum(["docker", "kubernetes", "shell"])
+    })
+    .optional()
 });
 
 const logEventSchema = z.object({
@@ -415,6 +426,16 @@ const redeployServiceCommandSchema = z.object({
   type: z.literal("redeploy_service"),
   commandId: z.string(),
   serviceId: z.string(),
+  /**
+   * Human-readable service name (MonitoredService.name). The agent
+   * uses this as the DNS-discoverable handle for the workload —
+   * docker network alias on every replica + k8s Service.metadata.name.
+   * Sibling services share a network and reach this one by name
+   * (e.g. `http://php`) instead of by UUID-prefixed container IDs.
+   * Empty falls back to the UUID-derived name, matching pre-feature
+   * behaviour for agents that pre-date this field.
+   */
+  serviceName: z.string().default(""),
   /** Fully-qualified image reference (host/repo:tag) the agent should pull. */
   imageRef: z.string(),
   /** Source build row id, for cross-referencing in agent logs. */
@@ -450,6 +471,10 @@ const teardownServiceCommandSchema = z.object({
   type: z.literal("teardown_service"),
   commandId: z.string(),
   serviceId: z.string(),
+  /** Same as redeploy_service.serviceName — used to clean up k8s
+   *  Service objects named after the service name. Optional; agents
+   *  fall back to UUID-based name matching when empty. */
+  serviceName: z.string().default(""),
   environment: z.string().default(""),
   namespace: z.string().default("")
 });

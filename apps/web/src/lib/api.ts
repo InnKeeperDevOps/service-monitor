@@ -177,6 +177,8 @@ export type Agent = {
   allowedCapabilities?: string[];
   /** Deployment environment (e.g. "development", "production") — keys into kaiad.yaml's environments map. */
   environment: string;
+  /** Runtime backend the agent reports it has configured itself for. Null on legacy agents that predate the field. */
+  runtimeBackend?: "docker" | "kubernetes" | "shell" | null;
   /** Present when API merges RealtimeManager session state. */
   websocketConnected?: boolean;
   /** Latest host_stats merged from RealtimeManager. */
@@ -221,6 +223,8 @@ export type LoadBalancerEntry = {
   serviceId: string;
   serviceName: string;
   agentId: string | null;
+  /** Runtime backend of the reporting agent ("docker"|"kubernetes"|"shell"). Null until first runtime-aware heartbeat. */
+  agentRuntime: "docker" | "kubernetes" | "shell" | null;
   environment: string;
   namespace: string;
   lbType: "none" | "k8s" | "metallb" | "nginx";

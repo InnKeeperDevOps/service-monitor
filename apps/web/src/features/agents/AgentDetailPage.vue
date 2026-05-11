@@ -30,13 +30,17 @@ import {
   formatBytesPerSec,
   formatPercent,
   formatRelativeTime,
+  formatRuntimeBackend,
   truncateFingerprint
 } from "./format.js";
 import {
+  appendTelemetrySample,
   clearCachedAgentDetail,
   readCachedAgentDetail,
-  writeCachedAgentDetail
+  writeCachedAgentDetail,
+  type TelemetrySample
 } from "./cache.js";
+import TelemetrySpark from "./TelemetrySpark.vue";
 
 const props = defineProps<{ agentId: string }>();
 
@@ -51,6 +55,9 @@ const services = ref<MonitoredService[]>([]);
 // produces a fresh frame. After that, `live.host[id]` takes over (see
 // `merged` below).
 const cachedHostTelemetry = ref<AgentTelemetry | null>(null);
+// Ring buffer of recent samples for the sparklines. Hydrated from
+// cache on mount; appended to on every fresh host_stats frame.
+const samples = ref<TelemetrySample[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const actionError = ref<string | null>(null);
@@ -68,6 +75,7 @@ function hydrateFromCache(id: string) {
   if (cached.agent) agent.value = cached.agent;
   if (cached.services.length > 0) services.value = cached.services;
   if (cached.hostTelemetry) cachedHostTelemetry.value = cached.hostTelemetry;
+  if (cached.telemetrySamples?.length) samples.value = cached.telemetrySamples;
 }
 
 async function fetchData() {
@@ -114,12 +122,27 @@ watch(
 );
 
 // Persist every fresh host_stats frame so the next navigation can
-// render telemetry instantly. live.host[id] is reactive — watch it
-// and write through.
+// render telemetry instantly. live.host[id] is reactive — watch it,
+// write the latest snapshot AND append to the sparkline ring.
 watch(
   () => live.host[props.agentId],
   (t) => {
-    if (t) writeCachedAgentDetail(props.agentId, { hostTelemetry: t, hostTelemetrySampledAt: Date.now() });
+    if (!t) return;
+    const now = Date.now();
+    writeCachedAgentDetail(props.agentId, { hostTelemetry: t, hostTelemetrySampledAt: now });
+    const diskPercent =
+      t.diskUsedBytes !== undefined && t.diskTotalBytes !== undefined && t.diskTotalBytes > 0
+        ? (t.diskUsedBytes / t.diskTotalBytes) * 100
+        : undefined;
+    samples.value = appendTelemetrySample(props.agentId, {
+      ts: now,
+      cpuPercent: t.cpuPercent,
+      memPercent: t.memPercent,
+      diskPercent,
+      netRxBytesPerSec: t.netRxBytesPerSec,
+      netTxBytesPerSec: t.netTxBytesPerSec,
+      processRSSBytes: t.processRSSBytes
+    });
   },
   { deep: true }
 );
@@ -292,6 +315,7 @@ const thStyle: CSSProperties = {
               {{ merged.websocketConnected ? "live" : "offline" }}
             </Badge>
             <Badge :variant="badgeVariantForStatus(merged.status)">{{ merged.status }}</Badge>
+            <Badge variant="muted">runtime: {{ formatRuntimeBackend(merged.runtimeBackend) }}</Badge>
             <Badge variant="muted">{{ merged.environment }}</Badge>
           </div>
           <div
@@ -367,6 +391,10 @@ const thStyle: CSSProperties = {
             <span v-else :style="cellValue">{{ merged.environment }}</span>
           </div>
           <div>
+            <div :style="cellTitle">Runtime</div>
+            <div :style="cellValue">{{ formatRuntimeBackend(merged.runtimeBackend) }}</div>
+          </div>
+          <div>
             <div :style="cellTitle">Version</div>
             <div :style="cellValue">{{ merged.version ?? "—" }}</div>
           </div>
@@ -408,6 +436,12 @@ const thStyle: CSSProperties = {
           <div>
             <div :style="cellTitle">CPU</div>
             <div :style="cellValue">{{ formatPercent(merged.telemetry?.cpuPercent) }}</div>
+            <TelemetrySpark
+              :samples="samples"
+              :pick="(s) => s.cpuPercent"
+              domain="percent"
+              color="#4f8cff"
+            />
           </div>
           <div>
             <div :style="cellTitle">Memory</div>
@@ -418,6 +452,12 @@ const thStyle: CSSProperties = {
             >
               {{ formatBytes(merged.telemetry.memUsedBytes) }} / {{ formatBytes(merged.telemetry.memTotalBytes) }}
             </div>
+            <TelemetrySpark
+              :samples="samples"
+              :pick="(s) => s.memPercent"
+              domain="percent"
+              color="#9d6cff"
+            />
           </div>
           <div :title="merged.telemetry?.diskPath">
             <div :style="cellTitle">Disk</div>
@@ -428,25 +468,58 @@ const thStyle: CSSProperties = {
             >
               {{ formatBytes(merged.telemetry.diskUsedBytes) }} / {{ formatBytes(merged.telemetry.diskTotalBytes) }}
             </div>
+            <TelemetrySpark
+              :samples="samples"
+              :pick="(s) => s.diskPercent"
+              domain="percent"
+              color="#22a06b"
+            />
           </div>
           <div>
             <div :style="cellTitle">Net RX</div>
             <div :style="cellValue">{{ formatBytesPerSec(merged.telemetry?.netRxBytesPerSec) }}</div>
+            <TelemetrySpark
+              :samples="samples"
+              :pick="(s) => s.netRxBytesPerSec"
+              domain="auto"
+              color="#0aa5b5"
+            />
           </div>
           <div>
             <div :style="cellTitle">Net TX</div>
             <div :style="cellValue">{{ formatBytesPerSec(merged.telemetry?.netTxBytesPerSec) }}</div>
+            <TelemetrySpark
+              :samples="samples"
+              :pick="(s) => s.netTxBytesPerSec"
+              domain="auto"
+              color="#e08a3c"
+            />
           </div>
           <div>
             <div :style="cellTitle">Process RSS</div>
             <div :style="cellValue">{{ formatBytes(merged.telemetry?.processRSSBytes) }}</div>
+            <TelemetrySpark
+              :samples="samples"
+              :pick="(s) => s.processRSSBytes"
+              domain="auto"
+              color="#a36ad9"
+            />
           </div>
         </div>
         <div
-          v-if="merged.telemetry?.ts"
-          :style="{ marginTop: '0.6rem', fontSize: '0.75rem', color: 'var(--color-text-secondary)' }"
+          :style="{
+            marginTop: '0.6rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: '0.75rem',
+            color: 'var(--color-text-secondary)'
+          }"
         >
-          Sampled {{ new Date(merged.telemetry.ts).toLocaleString() }}
+          <span v-if="merged.telemetry?.ts">
+            Sampled {{ new Date(merged.telemetry.ts).toLocaleString() }}
+          </span>
+          <span v-else />
+          <span v-if="samples.length > 0">{{ samples.length }} sample{{ samples.length === 1 ? "" : "s" }} buffered</span>
         </div>
       </Card>
 

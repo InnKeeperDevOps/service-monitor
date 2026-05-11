@@ -3,11 +3,13 @@ package executor
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -20,6 +22,30 @@ import (
 // On success the output ends with `commit=<sha>` so the API can extract the
 // SHA for the onFixCreated event.
 func (e *Executor) executeRunFixPlan(ctx context.Context, payload map[string]interface{}) CommandResult {
+	// Always log entry + outcome so the operator can trace auto-fix
+	// runs by tailing the agent's stdout. The platform's ack pipeline
+	// surfaces the output but only on demand; an emerg-log here makes
+	// failures visible without round-tripping to the panel.
+	cmdID, _ := payload["commandId"].(string)
+	log.Printf("[agent:fixplan] start commandId=%s", cmdID)
+	res := executeRunFixPlanInner(e, ctx, payload)
+	if res.Success {
+		log.Printf("[agent:fixplan] OK   commandId=%s output=%s", cmdID, truncateForLog(res.Output, 160))
+	} else {
+		log.Printf("[agent:fixplan] FAIL commandId=%s output=%s", cmdID, truncateForLog(res.Output, 320))
+	}
+	return res
+}
+
+func truncateForLog(s string, max int) string {
+	s = strings.ReplaceAll(s, "\n", " ⏎ ")
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+func executeRunFixPlanInner(e *Executor, ctx context.Context, payload map[string]interface{}) CommandResult {
 	errorMessage, _ := payload["errorMessage"].(string)
 	if strings.TrimSpace(errorMessage) == "" {
 		return CommandResult{Success: false, Output: "missing errorMessage"}
@@ -78,15 +104,32 @@ func (e *Executor) executeRunFixPlan(ctx context.Context, payload map[string]int
 	planTimeoutDur := planTimeout()
 	runCtx, cancel := context.WithTimeout(ctx, planTimeoutDur)
 	defer cancel()
+
+	// Claude refuses to run as uid 0 (--dangerously-skip-permissions
+	// hardcodes a root guard, and --permission-mode bypassPermissions
+	// resolves to the same check). The agent itself must run as root
+	// for /var/run/docker.sock access, so the workaround is to switch
+	// JUST the claude subprocess to a non-root uid (the `claude` user
+	// the runtime Dockerfile creates at uid 1000). The cloned repo
+	// scratch dir is chowned to that uid first so claude can write
+	// commits + push.
+	claudeUID := uint32(1000)
+	claudeGID := uint32(1000)
+	if err := chownTreeUnsafe(scratch, int(claudeUID), int(claudeGID)); err != nil {
+		return CommandResult{Success: false, Output: fmt.Sprintf("chown scratch to claude: %v", err)}
+	}
 	// Real claude CLI: `claude -p "<prompt>"` is non-interactive mode; cwd is
 	// inherited from the process (we set cmd.Dir = scratch below).
-	// --dangerously-skip-permissions is required because the fix flow is fully
-	// automated (no human to approve tool calls).
+	// `--permission-mode bypassPermissions` is the same kill-permission-prompts
+	// behaviour as --dangerously-skip-permissions, but without the
+	// hard-fail-on-root guard the latter has. Agents commonly run as root in
+	// a container with no shell login, so the root check would block every
+	// automated fix run.
 	// We deliberately omit --add-dir: it's variadic and would swallow the
 	// positional prompt argument that follows. The working directory is enough.
 	claudeArgs := []string{
 		"-p",
-		"--dangerously-skip-permissions",
+		"--permission-mode", "bypassPermissions",
 		prompt,
 	}
 	cmd := exec.CommandContext(runCtx, planBin, claudeArgs...)
@@ -95,6 +138,12 @@ func (e *Executor) executeRunFixPlan(ctx context.Context, payload map[string]int
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
+	// Run as the unprivileged `claude` uid. The setuid + setgid combo
+	// here is local to this child only; the parent agent process
+	// keeps its root credential.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{Uid: claudeUID, Gid: claudeGID},
+	}
 	claudeOut, claudeErr := cmd.CombinedOutput()
 	output := string(claudeOut)
 	if claudeErr != nil {
@@ -102,6 +151,14 @@ func (e *Executor) executeRunFixPlan(ctx context.Context, payload map[string]int
 	}
 	if runCtx.Err() == context.DeadlineExceeded {
 		return CommandResult{Success: false, Output: fmt.Sprintf("claude timed out after %s\n%s", planTimeoutDur, output)}
+	}
+
+	// Chown back to root so the subsequent git add/commit/push (which
+	// run as root inside this process) own the repo files. Without this
+	// `git` would warn "detected dubious ownership" and refuse to act
+	// on a repo owned by a different uid.
+	if err := chownTreeUnsafe(scratch, 0, 0); err != nil {
+		return CommandResult{Success: false, Output: fmt.Sprintf("chown scratch back to root: %v", err)}
 	}
 
 	statusOut, err := runGit(ctx, scratch, env, "status", "--porcelain")
@@ -158,6 +215,11 @@ func buildSSHEnvFromPayload(payload map[string]interface{}) (map[string]string, 
 			return nil, noop, fmt.Errorf("failed to write ssh key file: %v", err)
 		}
 		_ = f.Close()
+		// Make the key readable by the unprivileged `claude` uid (1000)
+		// in case Claude shells out to git during the fix (e.g. to
+		// check log/blame for context). Mode stays 0600 — only the
+		// target uid changes.
+		_ = os.Chown(keyPath, 1000, 1000)
 		env["GIT_SSH_COMMAND"] = fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no -o BatchMode=yes", keyPath)
 		return env, func() { _ = os.Remove(keyPath) }, nil
 	}
@@ -222,4 +284,17 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// chownTreeUnsafe recursively chowns `root` to (uid, gid). "Unsafe"
+// because it follows directory traversal at the kernel's behest —
+// fine for a freshly-cloned, attacker-untrusted scratch dir; do NOT
+// reuse this against paths an external party could craft.
+func chownTreeUnsafe(root string, uid, gid int) error {
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chown(path, uid, gid)
+	})
 }

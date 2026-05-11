@@ -64,6 +64,13 @@ create table if not exists agents (
 -- match pipelineEnvironmentSchema's regex.
 alter table agents add column if not exists environment text not null default 'development';
 
+-- The agent's own resolved runtime backend (docker | kubernetes |
+-- shell). Set on every heartbeat from the agent's reported value.
+-- Nullable until the first runtime-aware heartbeat lands so the UI
+-- can render an "unknown" state for newly-enrolled or pre-upgrade
+-- agents instead of guessing.
+alter table agents add column if not exists runtime_backend text;
+
 create table if not exists agent_enrollment_tokens (
   id text primary key,
   tenant_id text not null references tenants(id) on delete cascade,
@@ -98,6 +105,22 @@ alter table monitored_services drop column if exists agent_runtime_backend casca
 -- but different pipeline_names ARE the supported way to model a
 -- multi-image project.
 alter table monitored_services add column if not exists pipeline_name text;
+
+-- "supporting" services (typically a base/library docker image) are NOT
+-- deployed to agents — they just build and serve as build-time inputs
+-- for other services via the dependsOn relationship. Refreshed from
+-- kaiad.yaml on every successful build.
+alter table monitored_services add column if not exists kind text not null default 'deployable';
+
+-- Names of other services in the same tenant whose latest successful
+-- build must complete before this service can build. Snapshot of the
+-- kaiad.yaml dependsOn array on the latest build. Used both to:
+--   (1) gate this service's builds on its deps, and
+--   (2) when a dep finishes building, find the services to re-trigger.
+-- text[] (not jsonb) so the reverse-lookup uses an array-contains
+-- query with a GIN index instead of parsing JSON on every match.
+alter table monitored_services add column if not exists depends_on text[] not null default ARRAY[]::text[];
+create index if not exists monitored_services_depends_on_gin on monitored_services using gin (depends_on);
 
 -- agent ↔ service binding is many-to-many. The join table is the single
 -- source of truth. The legacy monitored_services.agent_id column

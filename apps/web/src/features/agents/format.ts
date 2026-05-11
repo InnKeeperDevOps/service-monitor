@@ -7,6 +7,17 @@ export const AGENT_STATUS_BADGE: Record<string, "success" | "warning" | "danger"
   unknown: "muted"
 };
 
+/**
+ * Display label for an agent runtime. Null/undefined indicates the
+ * agent hasn't reported one yet (pre-upgrade or just-enrolled), so
+ * the UI shows "unknown" instead of guessing.
+ */
+export function formatRuntimeBackend(rt: string | null | undefined): string {
+  if (rt == null || rt === "") return "unknown";
+  if (rt === "kubernetes") return "k8s";
+  return rt;
+}
+
 export function formatRelativeTime(iso: string | null): string {
   if (!iso) return "—";
   const t = new Date(iso).getTime();

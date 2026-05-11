@@ -15,7 +15,8 @@ import EnrollmentTokensPanel from "./EnrollmentTokensPanel.vue";
 import {
   AGENT_STATUS_BADGE,
   badgeVariantForStatus,
-  formatRelativeTime
+  formatRelativeTime,
+  formatRuntimeBackend
 } from "./format.js";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -183,6 +184,7 @@ const summary = computed(() => {
             <th scope="col" :style="thStyle">Agent</th>
             <th scope="col" :style="thStyle">Live</th>
             <th scope="col" :style="thStyle">Status</th>
+            <th scope="col" :style="thStyle">Runtime</th>
             <th scope="col" :style="thStyle">Environment</th>
             <th scope="col" :style="thStyle">Last seen</th>
             <th scope="col" :style="thStyle">Services</th>
@@ -226,6 +228,11 @@ const summary = computed(() => {
             </td>
             <td :style="tdStyle">
               <Badge :variant="badgeVariantForStatus(a.status)">{{ a.status }}</Badge>
+            </td>
+            <td :style="tdStyle">
+              <Badge :variant="a.runtimeBackend ? 'muted' : 'muted'">
+                {{ formatRuntimeBackend(a.runtimeBackend) }}
+              </Badge>
             </td>
             <td :style="{ ...tdStyle, fontSize: '0.85rem' }">
               <Badge variant="muted">{{ a.environment }}</Badge>

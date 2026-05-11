@@ -63,15 +63,19 @@ import {
   claimNextBuild,
   ensureCoreSchema,
   enqueueBuild,
+  enqueueManualBuild,
   finishBuild,
   getLatestBuildSha,
   listAllServicesForPoller,
+  listServicesDependingOn,
   recordBuildArtifact,
   setBuildPipelineYaml,
   updateBuildGitSha,
+  updateServicePipelineMeta,
   type QueryFn,
   type ServiceBuildRow
 } from "@sm/db";
+import { BuildDepsError, resolveDeps, substitutePipeline } from "./builddeps.js";
 import {
   parsePipelineYaml,
   resolveEnvironment,
@@ -373,7 +377,58 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
       await finishBuild(query, build.id, { status: "failed", failureReason: picked.reason });
       return;
     }
-    const pipeline = picked.pipeline;
+    let pipeline = picked.pipeline;
+
+    // Cache the kind + dependsOn snapshot on the service row so the
+    // reverse-lookup (find services that depend on X) and the
+    // "skip deploy for supporting services" gate stay cheap. This is
+    // pinned to the LATEST kaiad.yaml — if a user removes a dep on
+    // main, the next build of THAT service updates the row.
+    await updateServicePipelineMeta(query, svc.tenantId, svc.id, {
+      kind: pipeline.kind,
+      dependsOn: pipeline.dependsOn
+    }).catch((err) =>
+      logger.warn("updateServicePipelineMeta failed", {
+        buildId: build.id,
+        err: (err as Error).message
+      })
+    );
+
+    // Resolve dependsOn → latest successful build of each. Bail on the
+    // build if any dep is missing (clearer signal than a build that
+    // tries to interpolate `{php_image_version}` and fails at
+    // `docker pull` because the literal string was left intact).
+    if (pipeline.dependsOn.length > 0) {
+      try {
+        const { vars, resolved } = await resolveDeps(query, svc.tenantId, pipeline);
+        for (const r of resolved) {
+          await appendBuildLog(
+            query,
+            build.id,
+            `dep: ${r.depName} → build ${r.buildId.slice(0, 8)} sha=${r.gitSha.slice(0, 12)}` +
+              (r.imageRef ? ` image=${r.imageRef}` : "") +
+              "\n"
+          );
+        }
+        const sub = substitutePipeline(pipeline, vars);
+        if (sub.missing.length > 0) {
+          const reason =
+            `unresolved template variable(s) in kaiad.yaml: {${sub.missing.join("} {")}}\n` +
+            `available: ${Object.keys(vars).map((k) => "{" + k + "}").join(" ") || "(none)"}`;
+          await appendBuildLog(query, build.id, `${reason}\n`);
+          await finishBuild(query, build.id, { status: "failed", failureReason: reason });
+          return;
+        }
+        pipeline = sub.pipeline;
+      } catch (err) {
+        if (err instanceof BuildDepsError) {
+          await appendBuildLog(query, build.id, `${err.message}\n`);
+          await finishBuild(query, build.id, { status: "failed", failureReason: err.message });
+          return;
+        }
+        throw err;
+      }
+    }
 
     // ── Dockerfile mode (alternative to build/runtime/artifacts) ──
     //    `docker build -t <ref>` against the host daemon, then `docker
@@ -390,6 +445,7 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
       const built = await buildViaDockerfile({
         query,
         buildId: build.id,
+        rootDir: root,
         ws,
         pipeline,
         serviceName: svc.name,
@@ -407,24 +463,35 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
         imageRef: built.imageRef,
         mode: "dockerfile"
       });
-      // Continuous deployment: every successful build (poll-triggered
-      // or manual) dispatches a redeploy to bound agents. The agent
-      // is the source of truth for "is this image actually deployed";
-      // sending the command on every build is idempotent (the agent
-      // re-runs apply with the same manifests when nothing changed).
-      await dispatchRedeployToBoundAgents(
-        query,
-        build.id,
-        build.serviceId,
-        built.imageRef,
-        pipeline,
-        logger
-      ).catch((err) => {
-        logger.warn("redeploy dispatch failed", {
+      // Continuous deployment: every successful DEPLOYABLE build
+      // dispatches a redeploy to bound agents. SUPPORTING builds
+      // produce inputs for other services' builds — there's nothing
+      // to deploy on the agent side.
+      if (pipeline.kind === "deployable") {
+        await dispatchRedeployToBoundAgents(
+          query,
+          build.id,
+          build.serviceId,
+          svc.name,
+          built.imageRef,
+          pipeline,
+          logger
+        ).catch((err) => {
+          logger.warn("redeploy dispatch failed", {
+            buildId: build.id,
+            err: (err as Error).message
+          });
+        });
+      }
+      // Trigger downstream builds: any service in this tenant that
+      // depends on the one we just built. The chain only fires on
+      // success (no point cascading a broken base image).
+      await triggerDependentBuilds(query, svc.tenantId, svc.name, logger).catch((err) =>
+        logger.warn("dependent-build trigger failed", {
           buildId: build.id,
           err: (err as Error).message
-        });
-      });
+        })
+      );
       return;
     }
 
@@ -488,15 +555,16 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
     await finishBuild(query, build.id, { status: "success", imageRef });
     logger.info("build succeeded", { buildId: build.id, sha: build.gitSha.slice(0, 12), imageRef });
 
-    // Continuous deployment — every successful build dispatches a
-    // redeploy to bound agents. The agent applies idempotently when
-    // nothing changed, so re-dispatching on poll-triggered builds is
-    // safe and gives operators "push to main → deployed" semantics.
-    if (imageRef) {
+    // Continuous deployment — every successful DEPLOYABLE build
+    // dispatches a redeploy to bound agents. SUPPORTING builds
+    // (base images / libraries) produce inputs for other builds
+    // and aren't deployed themselves.
+    if (imageRef && pipeline.kind === "deployable") {
       await dispatchRedeployToBoundAgents(
         query,
         build.id,
         build.serviceId,
+        svc.name,
         imageRef,
         pipeline,
         logger
@@ -507,6 +575,13 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
         });
       });
     }
+    // Trigger downstream builds.
+    await triggerDependentBuilds(query, svc.tenantId, svc.name, logger).catch((err) =>
+      logger.warn("dependent-build trigger failed", {
+        buildId: build.id,
+        err: (err as Error).message
+      })
+    );
   } finally {
     // Best-effort cleanup. /tmp gets reaped on container restart anyway,
     // but leaving 1 GB of node_modules around per build adds up.
@@ -1075,33 +1150,40 @@ function runProcStreaming(
 async function buildViaDockerfile(params: {
   query: QueryFn;
   buildId: string;
+  /** Container-side root used for staging (DOCKER_CONFIG + saved tar). */
+  rootDir: string;
   /** Container-side path to the cloned workspace. */
   ws: string;
   pipeline: PipelineDefinition;
   serviceName: string;
   sha: string;
 }): Promise<{ ok: true; imageRef: string } | { ok: false; reason: string }> {
-  const { query, buildId, ws, pipeline, serviceName, sha } = params;
+  const { query, buildId, rootDir, ws, pipeline, serviceName, sha } = params;
   const df = pipeline.dockerfile;
   if (!df) {
     return { ok: false, reason: "buildViaDockerfile called without pipeline.dockerfile" };
   }
 
-  // Image refs use the EXTERNAL host so the daemon can resolve via DNS.
-  // The internal/external blobs are the same — registry just stores by
-  // digest under whichever repo namespace the manifest lives at.
+  // The internal ref (registry:5000/...) is what crane actually pushes
+  // to — the kaiad registry there accepts the same Basic→JWT exchange
+  // that build+runtime mode uses. The external ref (panel.dev.kaiad.dev/
+  // ...) is what we record in the DB so agents pull from the operator-
+  // facing hostname. Blobs are identical; only the path differs.
+  const internalRef = `${REGISTRY_INTERNAL}/${serviceName}:${sha}`;
+  const internalLatestRef = `${REGISTRY_INTERNAL}/${serviceName}:latest`;
   const externalRef = `${REGISTRY_HOST}/${serviceName}:${sha}`;
-  const externalLatestRef = `${REGISTRY_HOST}/${serviceName}:latest`;
 
   await appendBuildLog(query, buildId, banner(`dockerfile mode — ${df.path} @ ${df.context}`));
 
-  // The docker CLI runs in this container, reads the context from this
-  // container's filesystem, tarballs it, and POSTs to the host daemon.
-  // Container-side ws paths are what the CLI needs.
   const ctxPath = path.posix.join(ws, df.context);
   const dockerfilePath = path.posix.join(ws, df.path);
 
-  const buildArgs: string[] = ["build", "-f", dockerfilePath, "-t", externalRef, "-t", externalLatestRef];
+  // Build with the INTERNAL ref as the only tag the daemon sees. We
+  // could leave the external tag off entirely — `crane push` ships
+  // the layers and `crane tag` aliases :latest, both via the kaiad
+  // registry's own auth surface that doesn't depend on the host
+  // docker daemon being logged in.
+  const buildArgs: string[] = ["build", "-f", dockerfilePath, "-t", internalRef];
   for (const [k, v] of Object.entries(df.args)) {
     buildArgs.push("--build-arg", `${k}=${v}`);
   }
@@ -1118,20 +1200,140 @@ async function buildViaDockerfile(params: {
     return { ok: false, reason: `docker build exited with code ${buildRes.code}` };
   }
 
-  // Push the immutable :sha tag and the moving :latest tag. The daemon
-  // uses the kaiad container's ~/.docker/config.json for auth — the
-  // X-Registry-Auth header is set by the docker CLI from there.
-  for (const ref of [externalRef, externalLatestRef]) {
-    const pushRes = await runProcStreaming("docker", ["push", ref], {
+  // ── Crane-based push (replaces `docker push`) ─────────────────────
+  //
+  // Why not `docker push`: the host docker daemon authenticates with
+  // Basic auth from ~/.docker/config.json, but the kaiad registry
+  // demands a JWT minted by /registry/token. docker login can't do
+  // that exchange. crane CAN — it's the same auth setup runtime-mode
+  // builds use successfully today. So we route the dockerfile-mode
+  // image through crane via `docker save | crane push -`.
+  //
+  // The DOCKER_CONFIG dir is a private overlay: it inherits the
+  // worker's existing config (so private upstream registries the
+  // user `docker login`ed to still resolve) but overrides the kaiad
+  // registry entries with our Basic creds. /registry/token will
+  // accept those and hand back a JWT scoped to this repo.
+  const dockerCfgDir = path.join(rootDir, "docker-config");
+  await fs.mkdir(dockerCfgDir, { recursive: true });
+  const basic = Buffer.from(`${REGISTRY_PUSH_USER}:${REGISTRY_PUSH_PASSWORD}`).toString("base64");
+  let inheritedAuths: Record<string, unknown> = {};
+  try {
+    const home = process.env.HOME ?? "/";
+    const containerCfgPath = path.join(home, ".docker", "config.json");
+    const raw = await fs.readFile(containerCfgPath, "utf8");
+    const parsed = JSON.parse(raw) as { auths?: Record<string, unknown> };
+    if (parsed.auths && typeof parsed.auths === "object") {
+      inheritedAuths = { ...parsed.auths };
+    }
+  } catch {
+    // No container-wide docker config — fine, just use our own.
+  }
+  await fs.writeFile(
+    path.join(dockerCfgDir, "config.json"),
+    JSON.stringify(
+      {
+        auths: {
+          ...inheritedAuths,
+          [REGISTRY_INTERNAL]: { auth: basic },
+          [REGISTRY_HOST]: { auth: basic }
+        }
+      },
+      null,
+      2
+    )
+  );
+  const craneEnv = { ...process.env, DOCKER_CONFIG: dockerCfgDir };
+
+  // 1) Export the built image as an OCI tarball.
+  const imageTar = path.join(rootDir, "image.tar");
+  const saveRes = await runProcStreaming("sh", ["-c", `docker save ${internalRef} -o ${imageTar}`], {
+    onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
+    timeoutMs: BUILD_TIMEOUT_MS
+  });
+  if (saveRes.code !== 0) {
+    return { ok: false, reason: `docker save exited with code ${saveRes.code}` };
+  }
+
+  // 2) Push the tar to the kaiad registry via crane.
+  const pushArgs = [...(REGISTRY_INSECURE ? ["--insecure"] : []), "push", imageTar, internalRef];
+  const pushRes = await runProcStreaming("crane", pushArgs, {
+    env: craneEnv,
+    onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
+    timeoutMs: BUILD_TIMEOUT_MS
+  });
+  if (pushRes.code !== 0) {
+    return { ok: false, reason: `crane push exited with code ${pushRes.code}` };
+  }
+
+  // 3) Move the :latest tag. Non-fatal: :latest going stale is a
+  //    degraded but recoverable state — the immutable :<sha> tag is
+  //    what the agent actually deploys.
+  const tagRes = await runProcStreaming(
+    "crane",
+    [...(REGISTRY_INSECURE ? ["--insecure"] : []), "tag", internalRef, "latest"],
+    {
+      env: craneEnv,
       onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
       timeoutMs: BUILD_TIMEOUT_MS
-    });
-    if (pushRes.code !== 0) {
-      return { ok: false, reason: `docker push ${ref} exited with code ${pushRes.code}` };
     }
+  );
+  if (tagRes.code !== 0) {
+    await appendBuildLog(
+      query,
+      buildId,
+      `WARNING: crane tag ${internalLatestRef} exited ${tagRes.code} — :latest may not move\n`
+    );
   }
 
   return { ok: true, imageRef: externalRef };
+}
+
+// ─── Chain-build trigger ──────────────────────────────────────────────────
+//
+// When a service finishes building (success), services that listed it
+// in `dependsOn` need a fresh build so they pick up the new image_ref
+// / version. We enqueue a manual-style build for each: empty gitSha so
+// the build worker resolves HEAD of the watched branch at run time —
+// exactly how the "Start build" panel button works.
+
+async function triggerDependentBuilds(
+  query: QueryFn,
+  tenantId: string,
+  depName: string,
+  logger: Logger
+): Promise<void> {
+  let dependents;
+  try {
+    dependents = await listServicesDependingOn(query, tenantId, depName);
+  } catch (err) {
+    logger.warn("listServicesDependingOn failed", {
+      depName,
+      err: (err as Error).message
+    });
+    return;
+  }
+  if (dependents.length === 0) return;
+  for (const d of dependents) {
+    try {
+      await enqueueManualBuild(query, {
+        tenantId,
+        serviceId: d.id,
+        branch: d.branch
+      });
+      logger.info("dependent build queued", {
+        triggeredBy: depName,
+        dependentServiceId: d.id,
+        dependentName: d.name
+      });
+    } catch (err) {
+      logger.warn("dependent enqueue failed", {
+        depName,
+        dependentServiceId: d.id,
+        err: (err as Error).message
+      });
+    }
+  }
 }
 
 // ─── Manual-build redeploy dispatch ────────────────────────────────────────
@@ -1154,6 +1356,7 @@ async function dispatchRedeployToBoundAgents(
   query: QueryFn,
   buildId: string,
   serviceId: string,
+  serviceName: string,
   imageRef: string,
   pipeline: PipelineDefinition,
   logger: Logger
@@ -1194,6 +1397,7 @@ async function dispatchRedeployToBoundAgents(
         type: "redeploy_service",
         commandId,
         serviceId,
+        serviceName,
         imageRef,
         buildId,
         // Per-agent resolved deployment metadata. Agents/operators in

@@ -17,7 +17,11 @@ export type DomainStore = {
   getAgent(tenantId: string, id: string): Promise<Agent | undefined>;
   recordAgentHeartbeat(
     tenantId: string,
-    data: { agentId: string; version: string | null },
+    data: {
+      agentId: string;
+      version: string | null;
+      runtimeBackend?: "docker" | "kubernetes" | "shell" | null;
+    },
   ): Promise<void>;
   markAgentOffline(tenantId: string, agentId: string): Promise<void>;
   /** Tenant-scoped administrative metadata update (rename, capability allow-list). */
@@ -189,7 +193,8 @@ export function createMemoryDomainStore(): DomainStore {
         lastSeenAt: now,
         certFingerprint: existing?.certFingerprint ?? null,
         allowedCapabilities: existing?.allowedCapabilities ?? [],
-        environment: existing?.environment ?? "development"
+        environment: existing?.environment ?? "development",
+        runtimeBackend: data.runtimeBackend ?? existing?.runtimeBackend ?? null
       };
       agents.set(data.agentId, next);
     },

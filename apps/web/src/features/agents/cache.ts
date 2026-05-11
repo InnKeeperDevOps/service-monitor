@@ -30,12 +30,29 @@ export type RunningEntry = {
   observedAt: string;
 };
 
+/** One host_stats sample. Sparse — fields the agent didn't report stay undefined. */
+export type TelemetrySample = {
+  /** Client receive time (ms). Used for x-axis spacing and ring-buffer order. */
+  ts: number;
+  cpuPercent?: number;
+  memPercent?: number;
+  diskPercent?: number;
+  netRxBytesPerSec?: number;
+  netTxBytesPerSec?: number;
+  processRSSBytes?: number;
+};
+
+/** Cap on retained samples — at one frame per ~5s that's ~10 minutes of history. */
+export const TELEMETRY_RING_CAP = 120;
+
 export type CachedAgentDetail = {
   agent: Agent | null;
   services: MonitoredService[];
   running: RunningEntry[];
   hostTelemetry: AgentTelemetry | null;
   hostTelemetrySampledAt: number | null;
+  /** Ring buffer of host_stats samples; oldest first, newest last. */
+  telemetrySamples: TelemetrySample[];
   updatedAt: number;
 };
 
@@ -49,8 +66,41 @@ function emptyEntry(): CachedAgentDetail {
     running: [],
     hostTelemetry: null,
     hostTelemetrySampledAt: null,
+    telemetrySamples: [],
     updatedAt: 0
   };
+}
+
+/**
+ * Append one telemetry sample to the ring buffer + persist. Capped at
+ * TELEMETRY_RING_CAP; oldest entries fall off. Skips writes when the
+ * sample looks identical to the last (same `cpuPercent` etc) to avoid
+ * burning sessionStorage on duplicate frames the WS may emit when
+ * nothing changed.
+ */
+export function appendTelemetrySample(agentId: string, sample: TelemetrySample): TelemetrySample[] {
+  const existing = readCachedAgentDetail(agentId) ?? emptyEntry();
+  const last = existing.telemetrySamples[existing.telemetrySamples.length - 1];
+  if (last && telemetrySampleEqual(last, sample)) {
+    return existing.telemetrySamples;
+  }
+  const next = [...existing.telemetrySamples, sample];
+  if (next.length > TELEMETRY_RING_CAP) {
+    next.splice(0, next.length - TELEMETRY_RING_CAP);
+  }
+  writeCachedAgentDetail(agentId, { telemetrySamples: next });
+  return next;
+}
+
+function telemetrySampleEqual(a: TelemetrySample, b: TelemetrySample): boolean {
+  return (
+    a.cpuPercent === b.cpuPercent &&
+    a.memPercent === b.memPercent &&
+    a.diskPercent === b.diskPercent &&
+    a.netRxBytesPerSec === b.netRxBytesPerSec &&
+    a.netTxBytesPerSec === b.netTxBytesPerSec &&
+    a.processRSSBytes === b.processRSSBytes
+  );
 }
 
 function safeStorage(): Storage | null {

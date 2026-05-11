@@ -125,6 +125,8 @@ import {
   getBuildArtifact,
   listBuildArtifacts,
   listBuildsForService,
+  listAllDeployTargets,
+  listLatestBuildsForBoundServices,
   listLoadBalancerStatusForTenant,
   listMissingDeploysForAgent,
   listRunningServicesForAgent,
@@ -243,6 +245,23 @@ export type { ReadinessChecker } from "./readyChecks.js";
 function extractCommitShaFromOutput(output: string): string | null {
   const m = output.match(/commit=([0-9a-f]{7,40})/i);
   return m ? m[1] : null;
+}
+
+/**
+ * Two `resolveEnvironment` outputs that mean the same deployment.
+ * Used to skip churn when an agent's env flips but the resolved config
+ * is identical for both (kaiad.yaml didn't carve out anything different
+ * between the two envs).
+ */
+function resolvedConfigsEqual(
+  a: { instances: number; namespace: string; loadBalancer: unknown; domains: unknown },
+  b: { instances: number; namespace: string; loadBalancer: unknown; domains: unknown }
+): boolean {
+  if (a.instances !== b.instances) return false;
+  if (a.namespace !== b.namespace) return false;
+  if (JSON.stringify(a.loadBalancer) !== JSON.stringify(b.loadBalancer)) return false;
+  if (JSON.stringify(a.domains) !== JSON.stringify(b.domains)) return false;
+  return true;
 }
 
 const noopLogIngestion = (_job: LogIngestionJob) => Promise.resolve();
@@ -432,6 +451,25 @@ export function buildServer(opts: BuildServerOptions = {}) {
   /** Map of in-flight fix command_id → errorGroupId, so the WS command_ack
    *  handler can mark the right group fixed/open and emit onFixCreated. */
   const fixCommandToGroup = new Map<string, { tenantId: string; serviceId: string; agentId: string; errorGroupId: string }>();
+
+  /**
+   * Per-service auto-fix concurrency gate. Key is `<tenantId>:<serviceId>`.
+   *
+   * One physical incident (e.g. a thrown NullPointerException) typically
+   * lands as multiple error groups — Spring emits a "Servlet.service()
+   * threw exception" wrapper, the NPE itself, and the top stack frame
+   * each as a distinct ERROR-level line. Without this lock, every group
+   * fires its own `run_fix_plan` and we end up with N concurrent Claude
+   * runs racing to push to the same branch — N-1 of them lose the race
+   * and report "no changes" because the first push already fixed the
+   * file. The lock is acquired SYNCHRONOUSLY before dispatchAutoFix's
+   * first await so concurrent app_log_error handlers can't both observe
+   * the unlocked state. Released by the command_ack handler regardless
+   * of fix outcome (a stuck "fixing" lock would starve future incidents
+   * for that service until process restart).
+   */
+  const fixInFlightByService = new Set<string>();
+  const fixServiceKey = (tenantId: string, serviceId: string) => `${tenantId}:${serviceId}`;
   const app = Fastify();
   app.register(cors);
   app.register(websocket);
@@ -835,7 +873,8 @@ export function buildServer(opts: BuildServerOptions = {}) {
             void domainStore
               .recordAgentHeartbeat(tenantForStore, {
                 agentId: msg.agentId,
-                version: msg.agentVersion ?? null
+                version: msg.agentVersion ?? null,
+                runtimeBackend: msg.runtime?.backend ?? null
               })
               .catch(() => {});
           }
@@ -905,6 +944,27 @@ export function buildServer(opts: BuildServerOptions = {}) {
           const fixMeta = fixCommandToGroup.get(msg.commandId);
           if (fixMeta) {
             fixCommandToGroup.delete(msg.commandId);
+            // Release the per-service auto-fix lock so the NEXT
+            // incident on this service can dispatch. Runs on every
+            // ack (completed / failed / cancelled) so a single bad
+            // fix won't jam the gate. fixMeta.serviceId is whatever
+            // the agent reported (usually the kaiad service NAME via
+            // the service-name label); resolve to the canonical
+            // MonitoredService.id with the same id-then-name lookup
+            // we used at dispatch time.
+            try {
+              let lockSvc = await domainStore.getService(fixMeta.tenantId, fixMeta.serviceId);
+              if (!lockSvc) {
+                const all = await domainStore.listServices(fixMeta.tenantId);
+                lockSvc = all.find((s) => s.name === fixMeta.serviceId);
+              }
+              if (lockSvc) {
+                fixInFlightByService.delete(fixServiceKey(fixMeta.tenantId, lockSvc.id));
+              }
+            } catch {
+              // Best effort. Worst case the lock leaks for this
+              // service until the next process restart.
+            }
             if (msg.status === "completed") {
               const commitSha = extractCommitShaFromOutput(msg.output ?? "");
               const updated = errorGroups.setStatus(fixMeta.errorGroupId, "fixed", commitSha ?? undefined);
@@ -972,7 +1032,19 @@ export function buildServer(opts: BuildServerOptions = {}) {
 
             // Auto-fix dispatch — only on a NEW group or when status was open.
             // Paused / fixing groups are skipped by the dispatcher itself.
-            if (upsert.isNew || upsert.group.status === "open") {
+            // Env knob `SM_AUTO_FIX_DISABLED=1` short-circuits the entire
+            // dispatch so incidents accumulate in the queue without the
+            // server triggering fix plans — useful for testing dedup
+            // behaviour where you want to SEE incidents land without
+            // them being mutated mid-test.
+            const autoFixDisabled = process.env.SM_AUTO_FIX_DISABLED === "1";
+            if (autoFixDisabled) {
+              req.log?.info?.({
+                event: "auto_fix.disabled",
+                groupId: upsert.group.id,
+                serviceId: msg.serviceId
+              });
+            } else if (upsert.isNew || upsert.group.status === "open") {
               // The agent's log streamer reports `serviceId` as the docker
               // container name (not the kaiad service UUID). Look up by id
               // first; on miss, fall back to a name match so this works for
@@ -982,17 +1054,44 @@ export function buildServer(opts: BuildServerOptions = {}) {
                 const all = await domainStore.listServices(tenantId);
                 service = all.find((s) => s.name === msg.serviceId);
               }
-              const outcome = await dispatchAutoFix(
-                {
-                  domainStore,
-                  errorGroups,
-                  readSshKeyMaterial: (tid, kid) => domainStore.getSshKeyMaterial(tid, kid),
-                  enqueueAgentCommand,
-                  isAgentOnline: (id) => realtimeManager.getConnectedAgentIds().includes(id)
-                },
-                upsert.group,
-                service
-              );
+              const svcKey = service ? fixServiceKey(tenantId, service.id) : null;
+              // Optimistic synchronous acquire so concurrent
+              // app_log_error handlers (3+ per NPE due to Spring's
+              // multi-line error output) can't all observe the
+              // unlocked state and race into parallel dispatches.
+              let weAcquired = false;
+              if (svcKey) {
+                if (fixInFlightByService.has(svcKey)) {
+                  req.log?.info?.({
+                    event: "auto_fix.skip_in_flight_for_service",
+                    groupId: upsert.group.id,
+                    serviceId: service?.id
+                  });
+                } else {
+                  fixInFlightByService.add(svcKey);
+                  weAcquired = true;
+                }
+              }
+              const outcome = (svcKey && !weAcquired)
+                ? ({ kind: "skipped_in_flight" } as const)
+                : await dispatchAutoFix(
+                    {
+                      domainStore,
+                      errorGroups,
+                      readSshKeyMaterial: (tid, kid) => domainStore.getSshKeyMaterial(tid, kid),
+                      enqueueAgentCommand,
+                      isAgentOnline: (id) => realtimeManager.getConnectedAgentIds().includes(id)
+                    },
+                    upsert.group,
+                    service
+                  );
+              // Release the lock when dispatchAutoFix declined to
+              // actually send a command (no online agent, missing
+              // repo, missing auth). Without this the service would
+              // be jammed until process restart.
+              if (weAcquired && outcome.kind !== "dispatched" && svcKey) {
+                fixInFlightByService.delete(svcKey);
+              }
               if (outcome.kind === "dispatched") {
                 fixCommandToGroup.set(outcome.commandId, {
                   tenantId,
@@ -2108,9 +2207,34 @@ export function buildServer(opts: BuildServerOptions = {}) {
         })
       );
     }
+    // Snapshot the prior env BEFORE the update so we can detect
+    // env-change and trigger redeploys on services whose resolved
+    // config differs across the old/new env.
+    const prior = await domainStore.getAgent(session.tenantId, req.params.id);
     const updated = await domainStore.updateAgent(session.tenantId, req.params.id, parsed.data);
     if (!updated) {
       return reply.status(404).send(apiErrorSchema.parse({ code: "NOT_FOUND", message: "Agent not found", correlationId: (req as any).correlationId }));
+    }
+    if (
+      parsed.data.environment !== undefined &&
+      prior &&
+      prior.environment !== updated.environment
+    ) {
+      // Run after the response is sent — redeploy fan-out can be slow
+      // (one HTTP POST per service), and the caller doesn't need to
+      // wait. The helper logs/skips errors per-service.
+      const tenantId = session.tenantId;
+      const agentId = req.params.id;
+      const oldEnv = prior.environment;
+      const newEnv = updated.environment;
+      setImmediate(() => {
+        redeployAgentForEnvChange(tenantId, agentId, oldEnv, newEnv).catch((err) =>
+          req.log?.warn?.(
+            { err: (err as Error).message, agentId, oldEnv, newEnv },
+            "redeployAgentForEnvChange failed"
+          )
+        );
+      });
     }
     return updated;
   });
@@ -2227,6 +2351,13 @@ export function buildServer(opts: BuildServerOptions = {}) {
     const rows = await listLoadBalancerStatusForTenant(q, session.tenantId);
     const services = await domainStore.listServices(session.tenantId);
     const byId = new Map(services.map((s) => [s.id, s]));
+    // Pre-fetch the tenant's agents once so we can resolve each row's
+    // owner-agent runtime without one query per row. Listing agents
+    // is small (tens of rows) so this is the right shape.
+    const agentList = await domainStore.listAgents(session.tenantId);
+    const agentRuntimeById = new Map(
+      agentList.map((a) => [a.id, a.runtimeBackend ?? null] as const)
+    );
     const entries = rows.map((r: LoadBalancerStatusRow) => {
       const svc = byId.get(r.serviceId);
       return {
@@ -2234,6 +2365,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
         serviceId: r.serviceId,
         serviceName: svc?.name ?? r.serviceId,
         agentId: r.agentId,
+        agentRuntime: r.agentId ? agentRuntimeById.get(r.agentId) ?? null : null,
         environment: r.environment,
         namespace: r.namespace,
         lbType: r.lbType,
@@ -2521,6 +2653,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
           type: "redeploy_service",
           commandId,
           serviceId: m.serviceId,
+          serviceName: m.serviceName,
           imageRef: m.imageRef,
           buildId: m.buildId,
           environment: env,
@@ -2546,6 +2679,122 @@ export function buildServer(opts: BuildServerOptions = {}) {
       }
     }
     return { dispatched, skipped };
+  }
+
+  /**
+   * Re-deploy services bound to an agent whose env just flipped.
+   *
+   * For each bound service with a successful build, resolve the
+   * effective config under the OLD env and the NEW env from the
+   * captured pipeline_yaml. Skip if both resolve identically (the
+   * env doesn't carve out anything different in kaiad.yaml).
+   *
+   * When the resolved namespace differs we tear down the old (env, ns)
+   * first — otherwise the OLD namespace keeps zombie pods/containers
+   * the new config will never reach. When only domains/instances/lb
+   * change we redeploy in place; the agent's apply is idempotent on
+   * the same namespace.
+   */
+  async function redeployAgentForEnvChange(
+    tenantId: string,
+    agentId: string,
+    oldEnv: string,
+    newEnv: string
+  ): Promise<{ redeployed: number; tornDown: number; unchanged: number; skipped: string[] }> {
+    const out = { redeployed: 0, tornDown: 0, unchanged: 0, skipped: [] as string[] };
+    if (oldEnv === newEnv) return out;
+    const q = await getBuildsQuery();
+    if (!q) return out;
+
+    const services = await listLatestBuildsForBoundServices(q, tenantId, agentId);
+    const apiUrl =
+      process.env.INTERNAL_API_URL?.trim() ?? `http://127.0.0.1:${process.env.PORT ?? "8092"}`;
+    const internalToken = process.env.INTERNAL_API_TOKEN?.trim() || "dev-token";
+
+    for (const m of services) {
+      const parsed = parsePipelineYaml(m.pipelineYaml);
+      if (!parsed.ok) {
+        out.skipped.push(`${m.serviceName}: kaiad.yaml parse failed (${parsed.reason})`);
+        continue;
+      }
+      const picked = selectPipeline(parsed, m.pipelineName ?? null);
+      if (!picked.ok) {
+        out.skipped.push(`${m.serviceName}: ${picked.reason}`);
+        continue;
+      }
+      const oldR = resolveEnvironment(picked.pipeline, oldEnv);
+      const newR = resolveEnvironment(picked.pipeline, newEnv);
+      if (resolvedConfigsEqual(oldR, newR)) {
+        out.unchanged += 1;
+        continue;
+      }
+
+      // Namespace flipped → tear down old first so the cluster doesn't
+      // keep zombie resources in the previous namespace. We pop the
+      // status row using the agent's recorded last-deployed namespace
+      // (which is what the agent will actually find to delete) — that
+      // covers the case where a prior kaiad.yaml change moved the
+      // service into a different namespace under the old env name.
+      if (oldR.namespace !== newR.namespace) {
+        try {
+          const last = await popLoadBalancerStatusForAgentService(q, tenantId, agentId, m.serviceId);
+          const teardownNs = last?.namespace ?? oldR.namespace;
+          const teardownEnv = last?.environment ?? oldEnv;
+          const tdId = crypto.randomUUID();
+          const tdJob: AgentCommandJob = {
+            agentId,
+            commandId: tdId,
+            payload: {
+              type: "teardown_service",
+              commandId: tdId,
+              serviceId: m.serviceId,
+              serviceName: m.serviceName,
+              environment: teardownEnv,
+              namespace: teardownNs
+            }
+          };
+          fetch(`${apiUrl}/api/v1/internal/agent-commands`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${internalToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify(tdJob)
+          }).catch(() => {});
+          out.tornDown += 1;
+        } catch (err) {
+          out.skipped.push(`${m.serviceName}: teardown ${(err as Error).message}`);
+        }
+      }
+
+      const cmdId = crypto.randomUUID();
+      const job: AgentCommandJob = {
+        agentId,
+        commandId: cmdId,
+        payload: {
+          type: "redeploy_service",
+          commandId: cmdId,
+          serviceId: m.serviceId,
+          serviceName: m.serviceName,
+          imageRef: m.imageRef,
+          buildId: m.buildId,
+          environment: newEnv,
+          instances: newR.instances,
+          domains: newR.domains,
+          loadBalancer: newR.loadBalancer,
+          namespace: newR.namespace
+        }
+      };
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/internal/agent-commands`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${internalToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify(job)
+        });
+        if (res.ok) out.redeployed += 1;
+        else out.skipped.push(`${m.serviceName}: dispatch ${res.status}`);
+      } catch (err) {
+        out.skipped.push(`${m.serviceName}: ${(err as Error).message}`);
+      }
+    }
+    return out;
   }
 
   app.post<{ Params: { agentId: string } }>(
@@ -2629,6 +2878,11 @@ export function buildServer(opts: BuildServerOptions = {}) {
             req.params.agentId,
             req.params.serviceId
           );
+          // Look up the service's display name so the agent can match
+          // k8s Services by metadata.name (which is now the service
+          // name, not the UUID). Best-effort: if the service row was
+          // already deleted, the agent falls back to UUID-based match.
+          const svcRow = await domainStore.getService(session.tenantId, req.params.serviceId).catch(() => null);
           const apiUrl =
             process.env.INTERNAL_API_URL?.trim() ?? `http://127.0.0.1:${process.env.PORT ?? "8092"}`;
           const internalToken = process.env.INTERNAL_API_TOKEN?.trim() || "dev-token";
@@ -2640,6 +2894,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
               type: "teardown_service",
               commandId,
               serviceId: req.params.serviceId,
+              serviceName: svcRow?.name ?? "",
               environment: last?.environment ?? "",
               namespace: last?.namespace ?? ""
             }
@@ -2668,6 +2923,243 @@ export function buildServer(opts: BuildServerOptions = {}) {
       return reply.status(204).send();
     }
   );
+
+  /**
+   * Deployment drift scheduler.
+   *
+   * Walks every (agent, bound service) in the system on a fixed cadence
+   * and dispatches a redeploy_service whenever the deployed state
+   * (`service_loadbalancer_status`) drifts from the desired state
+   * (latest successful build + agent's env + resolved kaiad.yaml).
+   *
+   * The on-connect reconciler covers initial deploys and reconnect
+   * gaps; the every-build dispatcher covers new images; the env-change
+   * handler covers env flips. This scheduler covers everything else —
+   * stale deploys when one of those mechanisms missed (e.g. the agent
+   * was offline during a build dispatch and the on-connect reconciler
+   * already ran), and any future drift sources we haven't named yet.
+   *
+   * Drift triggers (any one ⇒ redeploy):
+   *   • no status row at all (never deployed)
+   *   • currentImageRef ≠ latest imageRef (newer build available)
+   *   • currentBuildId ≠ latest buildId (image tag stable but rebuilt)
+   *   • currentEnvironment ≠ agent.env (agent moved between envs)
+   *   • currentNamespace ≠ resolveEnvironment(yaml, agent.env).namespace
+   *     (kaiad.yaml flipped which ns this env deploys into)
+   *
+   * The scheduler skips agents that aren't currently WebSocket-connected
+   * — there's no point dispatching a command to an offline agent, the
+   * on-connect reconciler will pick up any drift when they come back.
+   */
+  const reconcileIntervalMs = (() => {
+    const raw = process.env.RECONCILE_INTERVAL_MS?.trim();
+    if (!raw) return 60_000;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 5_000 ? n : 60_000;
+  })();
+  const reconcileDisabled =
+    process.env.RECONCILE_DISABLED === "1" ||
+    process.env.NODE_ENV === "test" ||
+    process.env.VITEST === "true";
+
+  async function reconcileAllDeployments(): Promise<{
+    checked: number;
+    redeployed: number;
+    skipped: number;
+  }> {
+    const out = { checked: 0, redeployed: 0, skipped: 0 };
+    const q = await getBuildsQuery();
+    if (!q) return out;
+
+    let targets: Awaited<ReturnType<typeof listAllDeployTargets>>;
+    try {
+      targets = await listAllDeployTargets(q);
+    } catch (err) {
+      app.log.warn?.({ err: (err as Error).message }, "reconcile: listAllDeployTargets failed");
+      return out;
+    }
+    if (targets.length === 0) return out;
+
+    const connectedAgents = new Set(realtimeManager.getConnectedAgentIds());
+    const apiUrl =
+      process.env.INTERNAL_API_URL?.trim() ?? `http://127.0.0.1:${process.env.PORT ?? "8092"}`;
+    const internalToken = process.env.INTERNAL_API_TOKEN?.trim() || "dev-token";
+
+    for (const t of targets) {
+      out.checked += 1;
+      // Skip offline agents — on-connect reconciler will handle them
+      // when they return. Saves command-queue churn for agents that
+      // are deliberately stopped.
+      if (!connectedAgents.has(t.agentId)) {
+        out.skipped += 1;
+        continue;
+      }
+
+      const parsed = parsePipelineYaml(t.pipelineYaml);
+      if (!parsed.ok) {
+        out.skipped += 1;
+        continue;
+      }
+      const picked = selectPipeline(parsed, t.pipelineName ?? null);
+      if (!picked.ok) {
+        out.skipped += 1;
+        continue;
+      }
+      const desired = resolveEnvironment(picked.pipeline, t.agentEnv);
+
+      // Namespace comparison: when the kaiad.yaml leaves namespace
+      // unset, `desired.namespace` is "" and the agent picks a runtime
+      // default (docker→"kaiad", k8s→pod's own ns). The server can't
+      // know that default from here, so empty desired ↔ any current
+      // is treated as a match — otherwise drift fires forever and
+      // teardown+redeploy fight over the same containers.
+      const namespaceDrift =
+        desired.namespace !== "" &&
+        (t.currentNamespace ?? "") !== "" &&
+        t.currentNamespace !== desired.namespace;
+
+      const drift =
+        t.currentImageRef === null ||
+        t.currentBuildId === null ||
+        t.currentImageRef !== t.imageRef ||
+        t.currentBuildId !== t.buildId ||
+        t.currentEnvironment !== t.agentEnv ||
+        namespaceDrift;
+
+      if (!drift) continue;
+
+      // Namespace flip → tear down the old (env, ns) first so the
+      // cluster doesn't accumulate zombie resources in the previous
+      // namespace. We AWAIT the teardown's enqueue response so the
+      // redeploy can't beat it into the agent's command queue —
+      // otherwise the agent processes redeploy first, then teardown
+      // wipes what we just deployed. Failures fall through to the
+      // redeploy: the binding's last-known row is still popped.
+      if (namespaceDrift && t.currentNamespace) {
+        try {
+          await popLoadBalancerStatusForAgentService(q, t.tenantId, t.agentId, t.serviceId);
+          const tdId = crypto.randomUUID();
+          const tdJob: AgentCommandJob = {
+            agentId: t.agentId,
+            commandId: tdId,
+            payload: {
+              type: "teardown_service",
+              commandId: tdId,
+              serviceId: t.serviceId,
+              serviceName: t.serviceName,
+              environment: t.currentEnvironment ?? t.agentEnv,
+              namespace: t.currentNamespace
+            }
+          };
+          await fetch(`${apiUrl}/api/v1/internal/agent-commands`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${internalToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify(tdJob)
+          }).catch((err) =>
+            app.log.warn?.(
+              { err: (err as Error).message, agentId: t.agentId, serviceId: t.serviceId },
+              "reconcile: teardown dispatch failed"
+            )
+          );
+        } catch (err) {
+          app.log.warn?.(
+            { err: (err as Error).message, agentId: t.agentId, serviceId: t.serviceId },
+            "reconcile: teardown failed"
+          );
+        }
+      }
+
+      const cmdId = crypto.randomUUID();
+      const job: AgentCommandJob = {
+        agentId: t.agentId,
+        commandId: cmdId,
+        payload: {
+          type: "redeploy_service",
+          commandId: cmdId,
+          serviceId: t.serviceId,
+          serviceName: t.serviceName,
+          imageRef: t.imageRef,
+          buildId: t.buildId,
+          environment: t.agentEnv,
+          instances: desired.instances,
+          domains: desired.domains,
+          loadBalancer: desired.loadBalancer,
+          namespace: desired.namespace
+        }
+      };
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/internal/agent-commands`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${internalToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify(job)
+        });
+        if (res.ok) out.redeployed += 1;
+        else out.skipped += 1;
+      } catch (err) {
+        out.skipped += 1;
+        app.log.warn?.(
+          { err: (err as Error).message, agentId: t.agentId, serviceId: t.serviceId },
+          "reconcile: redeploy dispatch failed"
+        );
+      }
+    }
+    return out;
+  }
+
+  // Manual trigger — handy for ops + integration tests. No auth gate
+  // needed beyond the standard session check; the action is idempotent
+  // per drift state.
+  app.post("/api/v1/internal/reconcile-all", async (req, reply) => {
+    const session = await resolveSession(authStore, req.headers.authorization);
+    if (!session) {
+      return reply.status(401).send(
+        apiErrorSchema.parse({
+          code: "UNAUTHORIZED",
+          message: "Missing or invalid bearer token",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    if (session.role !== "owner" && session.role !== "admin") {
+      return reply.status(403).send(
+        apiErrorSchema.parse({
+          code: "FORBIDDEN",
+          message: "Admin access required",
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const result = await reconcileAllDeployments();
+    return result;
+  });
+
+  // Periodic loop. setInterval (not setTimeout-chain) is fine: each
+  // tick re-reads connectedAgents + the targets list, so a slow tick
+  // doesn't compound on later ones; concurrent ticks are guarded by
+  // a simple in-flight flag so we don't pile up redeploys when the
+  // DB or downstream is slow.
+  let reconcileInFlight = false;
+  let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  if (!reconcileDisabled) {
+    reconcileTimer = setInterval(() => {
+      if (reconcileInFlight) return;
+      reconcileInFlight = true;
+      reconcileAllDeployments()
+        .catch((err) => app.log.warn?.({ err: (err as Error).message }, "reconcile loop failed"))
+        .finally(() => {
+          reconcileInFlight = false;
+        });
+    }, reconcileIntervalMs);
+    // Don't keep the event loop alive solely for this timer.
+    reconcileTimer.unref?.();
+    app.log.info?.(
+      { intervalMs: reconcileIntervalMs },
+      "deployment drift scheduler started"
+    );
+  }
+  app.addHook("onClose", async () => {
+    if (reconcileTimer) clearInterval(reconcileTimer);
+  });
 
   app.setNotFoundHandler(async (req, reply) => {
     if (

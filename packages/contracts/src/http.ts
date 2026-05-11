@@ -249,6 +249,13 @@ export const agentSchema = z.object({
    * the right per-env block when redeploying.
    */
   environment: agentEnvironmentSchema.default("development"),
+  /**
+   * Runtime backend the agent reports it has actually configured
+   * itself for ("docker" | "kubernetes" | "shell"). Null until the
+   * first runtime-aware heartbeat lands — pre-upgrade agents predate
+   * this field, so the UI shows them as "unknown".
+   */
+  runtimeBackend: z.enum(["docker", "kubernetes", "shell"]).nullable().optional(),
   websocketConnected: z.boolean().optional(),
   telemetry: agentTelemetrySchema.optional(),
   apps: z.array(agentAppTelemetrySchema).optional()

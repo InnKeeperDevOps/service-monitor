@@ -30,13 +30,18 @@ type AgentHello struct {
 	PreferredExecutor string `json:"preferredExecutor,omitempty"`
 }
 
+type heartbeatRuntime struct {
+	Backend string `json:"backend"`
+}
+
 type heartbeatMessage struct {
-	Type         string `json:"type"`
-	AgentID      string `json:"agentId"`
-	Ts           string `json:"ts"`
-	Capacity     int    `json:"capacity"`
-	TenantID     string `json:"tenantId,omitempty"`
-	AgentVersion string `json:"agentVersion,omitempty"`
+	Type         string            `json:"type"`
+	AgentID      string            `json:"agentId"`
+	Ts           string            `json:"ts"`
+	Capacity     int               `json:"capacity"`
+	TenantID     string            `json:"tenantId,omitempty"`
+	AgentVersion string            `json:"agentVersion,omitempty"`
+	Runtime      *heartbeatRuntime `json:"runtime,omitempty"`
 }
 
 // ErrPermanentRejection is returned from RunContext when the platform
@@ -119,6 +124,30 @@ type Client struct {
 
 	// appStats, when set, runs after hostStats each tick to send zero or more app_stats frames (per container).
 	appStats func(agentID string) ([][]byte, error)
+
+	// runtime is the agent's resolved runtime backend ("docker" |
+	// "kubernetes" | "shell"). Set after the hello frame's backend
+	// resolution completes (see SetRuntime); included in every
+	// outbound heartbeat so the platform can distinguish docker-mode
+	// vs k8s-mode agents in the UI without inferring it elsewhere.
+	runtimeMu sync.Mutex
+	runtime   string
+}
+
+// SetRuntime records the runtime backend the agent has configured
+// itself for. Safe to call from any goroutine. Subsequent heartbeats
+// include this value; passing "" clears it (heartbeat omits the
+// `runtime` field, mirroring agents that haven't reported yet).
+func (c *Client) SetRuntime(backend string) {
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	c.runtime = backend
+}
+
+func (c *Client) currentRuntime() string {
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	return c.runtime
 }
 
 type ClientOption func(*Client)
@@ -401,6 +430,9 @@ func (c *Client) sendHeartbeat() error {
 		Capacity:     4,
 		TenantID:     c.tenantID,
 		AgentVersion: c.version,
+	}
+	if rt := c.currentRuntime(); rt != "" {
+		msg.Runtime = &heartbeatRuntime{Backend: rt}
 	}
 	payload, err := json.Marshal(msg)
 	if err != nil {

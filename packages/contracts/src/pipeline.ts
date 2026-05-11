@@ -235,7 +235,29 @@ export const pipelineDefinitionSchema = z
      * (e.g. "development", "staging", "production"). Each environment's
      * fields fall back to the top-level defaults when omitted.
      */
-    environments: z.record(pipelineEnvironmentSchema).default({})
+    environments: z.record(pipelineEnvironmentSchema).default({}),
+    /**
+     * Service "kind".
+     *   - "deployable" (default): the build produces a runtime image
+     *     the platform deploys to bound agents.
+     *   - "supporting": the build produces an artifact (typically a
+     *     base/library docker image) consumed by other services'
+     *     builds. Supporting services are NOT dispatched to agents
+     *     even when bound — they sit upstream of `dependsOn`.
+     */
+    kind: z.enum(["deployable", "supporting"]).default("deployable"),
+    /**
+     * Names of other Kaiad services this one needs to have built
+     * first. Resolution is tenant-scoped by MonitoredService.name.
+     * After each dep's latest successful build is found, build-time
+     * variable interpolation substitutes `{<dep_name>_version}` and
+     * `{<dep_name>_image_ref}` (with hyphens → underscores) wherever
+     * they appear inside `build`, `runtime`, or `dockerfile` strings.
+     * A successful build of THIS service additionally triggers a
+     * rebuild of any service that lists it in dependsOn — that's the
+     * chain-build propagation path.
+     */
+    dependsOn: z.array(z.string().min(1)).default([])
   })
   .superRefine((def, ctx) => {
     // dockerfile mode is mutually exclusive with the build/artifacts/
@@ -393,7 +415,11 @@ const innerPipelineSchema = z
     domains: z.array(pipelineDomainSchema).default([]),
     loadBalancer: pipelineLoadBalancerSchema.default({ type: "none" }),
     namespace: namespaceSchema.optional(),
-    environments: z.record(pipelineEnvironmentSchema).default({})
+    environments: z.record(pipelineEnvironmentSchema).default({}),
+    /** See pipelineDefinitionSchema.kind. */
+    kind: z.enum(["deployable", "supporting"]).default("deployable"),
+    /** See pipelineDefinitionSchema.dependsOn. */
+    dependsOn: z.array(z.string().min(1)).default([])
   })
   // Same cross-field checks as the top-level pipelineDefinitionSchema.
   .superRefine((def, ctx) => {

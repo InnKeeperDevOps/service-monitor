@@ -20,4 +20,11 @@ blob-report/
 
 env/*/data/
 
+# Runtime data dir created when kaiad runs from this checkout
+# (registry-auth keypair, builds workspace, etc.).
+apps/api/data/
+
+# Claude Code session state (lockfile, etc.) — never tracked.
+.claude/
+
 other-projects/

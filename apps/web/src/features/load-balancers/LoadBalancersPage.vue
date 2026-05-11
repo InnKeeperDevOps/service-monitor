@@ -37,6 +37,8 @@ type FlatRow = {
   externalKind: "ip" | "hostname" | "pending" | "internal";
   serviceName: string;
   serviceId: string;
+  /** Reporting agent's runtime backend ("docker"|"kubernetes"|"shell"|null). */
+  agentRuntime: LoadBalancerEntry["agentRuntime"];
   environment: string;
   namespace: string;
   lbType: LoadBalancerEntry["lbType"];
@@ -46,6 +48,12 @@ type FlatRow = {
   detailLabel: string;
   observedAt: string;
 };
+
+function formatRuntime(rt: LoadBalancerEntry["agentRuntime"]): string {
+  if (rt == null) return "unknown";
+  if (rt === "kubernetes") return "k8s";
+  return rt;
+}
 
 const rows = computed<FlatRow[]>(() => {
   const out: FlatRow[] = [];
@@ -66,6 +74,7 @@ const rows = computed<FlatRow[]>(() => {
         externalKind: kind,
         serviceName: e.serviceName,
         serviceId: e.serviceId,
+        agentRuntime: e.agentRuntime,
         environment: e.environment,
         namespace: e.namespace,
         lbType: e.lbType,
@@ -82,6 +91,7 @@ const rows = computed<FlatRow[]>(() => {
           externalKind: kind,
           serviceName: e.serviceName,
           serviceId: e.serviceId,
+          agentRuntime: e.agentRuntime,
           environment: e.environment,
           namespace: e.namespace,
           lbType: e.lbType,
@@ -207,6 +217,7 @@ function endpointColor(kind: FlatRow["externalKind"]): string {
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">External endpoint</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Port</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Service</th>
+            <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Runtime</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Env</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">Namespace</th>
             <th :style="{ padding: '0.5rem 0.75rem', fontWeight: 500 }">LB</th>
@@ -245,6 +256,9 @@ function endpointColor(kind: FlatRow["externalKind"]): string {
               {{ r.port || "—" }}
             </td>
             <td :style="{ padding: '0.45rem 0.75rem' }">{{ r.serviceName }}</td>
+            <td :style="{ padding: '0.45rem 0.75rem' }">
+              <Badge variant="muted">{{ formatRuntime(r.agentRuntime) }}</Badge>
+            </td>
             <td :style="{ padding: '0.45rem 0.75rem' }">
               <Badge variant="muted">{{ r.environment }}</Badge>
             </td>
