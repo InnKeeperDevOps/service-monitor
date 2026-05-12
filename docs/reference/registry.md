@@ -195,6 +195,8 @@ Lists every repository known to the local Postgres, with expandable
 rows showing per-tag info: tag name, manifest digest, total size
 (config + layers), creation date.
 
+![Registry page in the Kaiad panel: a list of repositories with one expanded showing a table of tags (tag name, short manifest digest, size, created date) and a per-tag delete button for admin sessions](/assets/screenshots/registry-tags-expanded.png)
+
 Behind the scenes the page calls
 `GET /api/v1/registry/repositories` and
 `GET /api/v1/registry/repositories/:name/tags`. Those endpoints read

@@ -28,6 +28,8 @@ Operators use the **browser UI** and the **REST API** (`/api/v1`). **Agents** ne
 {% include mermaid-architecture.html %}
 {:/nomarkdown}
 
+![Kaiad admin SPA dashboard showing tenant overview, active agents, recent incidents, and navigation links to Agents, Services, Incidents, Registry, SSH Keys, Load Balancers, and Settings](/assets/screenshots/dashboard.png)
+
 **Reading the diagram:** GitHub pushes events into the API; workers pull work from Redis, may call GitHub, and coordinate **agent commands** and other jobs through the same control plane stack. The **realtime gateway** (WebSocket path used by agents) may live in the API process or behind a load balancer—see [Realtime gateway]({% link runbooks/realtime-gateway.md %}) for operations detail.
 
 ## How a typical flow works

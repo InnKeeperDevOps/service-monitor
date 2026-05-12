@@ -69,6 +69,8 @@ Two surfaces, both equivalent:
 Both call the same endpoints under the hood — pick whichever direction
 matches your mental model for the action.
 
+![Agents page in the Kaiad panel, showing the agent list with one row expanded to reveal the bound services subsection](/assets/screenshots/agents-list.png)
+
 ## Editing bindings from the API
 
 Per-binding (preferred for one-at-a-time changes; safe to call repeatedly):

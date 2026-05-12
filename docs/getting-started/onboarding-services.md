@@ -45,6 +45,8 @@ For organisation-wide setups, a single deploy-key-style account often
 backs many services. For tightly-scoped access, generate one keypair
 per repo.
 
+![Panel SSH Keys page showing a list of keys with their names, types, and creation dates, and a form to add a new key with name, type (uploaded vs local-path), and private-key fields](/assets/screenshots/ssh-keys.png)
+
 If you've configured the **GitHub App** path
 ([`getting-started/github-app.md`]({% link getting-started/github-app.md %})),
 public repos can sometimes be cloned without an SSH key. Most operators
@@ -68,6 +70,8 @@ In the **Services** page, click **Add Service**. Fields:
 
 The service is created immediately. You can edit any field later
 without losing builds.
+
+![Add Service form open on the Services page, showing Name, Git Repository URL, SSH Key dropdown, Branch, Docker Image, Compose Path, Pipeline Name, and Bound agents checkboxes](/assets/screenshots/services-add-form.png)
 
 ## 3. Write `kaiad.yaml`
 
@@ -177,6 +181,8 @@ the Builds tab and the service detail). The image lives in
 **[the built-in registry]({% link reference/registry.md %})** at
 `panel.<your-host>/<service-name>:<git-sha>` and at the moving
 `:latest` tag.
+
+![Services page with one row expanded, showing the Builds subsection: a table of recent builds with status (success/failed/running), git SHA, duration, and the pushed image ref](/assets/screenshots/services-builds-expanded.png)
 
 ## 5. Deployment
 
