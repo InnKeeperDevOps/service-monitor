@@ -12,6 +12,7 @@ type ServiceForm = {
   branch: string;
   dockerImage: string;
   composePath: string;
+  pipelineName: string;
   agentIds: string[];
 };
 
@@ -22,6 +23,7 @@ const emptyForm = (): ServiceForm => ({
   branch: "main",
   dockerImage: "",
   composePath: "",
+  pipelineName: "",
   agentIds: []
 });
 
@@ -72,6 +74,10 @@ function toggleAgent(agentId: string) {
 async function handleSubmit(ev: Event) {
   ev.preventDefault();
   try {
+    // PATCH: null clears the field; undefined leaves it unchanged. The
+    // form's empty string means "clear it" on edit (revert to single-
+    // pipeline default).
+    const trimmedPipeline = form.pipelineName.trim();
     if (editingId.value) {
       const svc = await api.updateService(editingId.value, {
         name: form.name,
@@ -80,6 +86,7 @@ async function handleSubmit(ev: Event) {
         branch: form.branch,
         dockerImage: form.dockerImage.trim() || undefined,
         composePath: form.composePath.trim() || undefined,
+        pipelineName: trimmedPipeline || null,
         agentIds: form.agentIds
       });
       services.value = services.value.map((s) => (s.id === editingId.value ? svc : s));
@@ -91,6 +98,7 @@ async function handleSubmit(ev: Event) {
         branch: form.branch,
         dockerImage: form.dockerImage.trim() || undefined,
         composePath: form.composePath.trim() || undefined,
+        pipelineName: trimmedPipeline || undefined,
         agentIds: form.agentIds
       });
       services.value = [...services.value, svc];
@@ -110,6 +118,7 @@ function handleEdit(svc: MonitoredService) {
   form.branch = svc.branch;
   form.dockerImage = svc.dockerImage || "";
   form.composePath = svc.composePath || "";
+  form.pipelineName = svc.pipelineName || "";
   form.agentIds = (svc.agents ?? []).map((b) => b.agentId);
   editingId.value = svc.id;
   showForm.value = true;
@@ -253,6 +262,17 @@ function toggleBuilds(id: string) {
         Compose Path
         <span :style="{ color: 'var(--color-text-secondary)', fontSize: '0.8rem' }">(optional)</span>
         <input v-model="form.composePath" placeholder="e.g. docker-compose.yml" :style="inputStyle" />
+      </label>
+      <label>
+        Pipeline Name
+        <span :style="{ color: 'var(--color-text-secondary)', fontSize: '0.8rem' }">
+          (only when kaiad.yaml is multi-pipeline)
+        </span>
+        <input
+          v-model="form.pipelineName"
+          placeholder="e.g. php (matches services.<name> in kaiad.yaml)"
+          :style="inputStyle"
+        />
       </label>
       <fieldset
         :style="{

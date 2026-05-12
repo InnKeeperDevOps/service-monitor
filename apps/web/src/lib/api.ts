@@ -204,6 +204,11 @@ export type MonitoredService = {
   agents: AgentBinding[];
   dockerImage?: string | null;
   composePath?: string | null;
+  /**
+   * Which pipeline to pick from a multi-pipeline kaiad.yaml. When the
+   * yaml uses the legacy single-pipeline form, this is null/unset.
+   */
+  pipelineName?: string | null;
 };
 
 /** Matches server OAuth provider registration (POST /api/v1/settings/oauth-providers). */
@@ -360,6 +365,8 @@ export const api = {
     agentIds?: string[];
     dockerImage?: string;
     composePath?: string;
+    /** Required when the repo's kaiad.yaml is multi-pipeline. */
+    pipelineName?: string | null;
   }) =>
     apiFetch<MonitoredService>("/api/v1/services", {
       method: "POST",
@@ -375,6 +382,11 @@ export const api = {
     agentIds?: string[];
     dockerImage?: string;
     composePath?: string;
+    /**
+     * Set to a string to pick a pipeline from a multi-pipeline kaiad.yaml.
+     * Set to null to clear (revert to single-pipeline default).
+     */
+    pipelineName?: string | null;
   }) =>
     apiFetch<MonitoredService>(`/api/v1/services/${encodeURIComponent(id)}`, {
       method: "PATCH",
