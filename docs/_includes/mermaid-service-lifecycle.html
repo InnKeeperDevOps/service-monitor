@@ -1,0 +1,25 @@
+<pre class="mermaid">sequenceDiagram
+  autonumber
+  participant Dev as Developer
+  participant Git as GitHub
+  participant W as Build worker<br/>(in-process)
+  participant Reg as Native registry<br/>(/v2/*)
+  participant API as Kaiad API
+  participant Agt as Bound agent
+  participant Pod as Workload runtime
+
+  Dev->>Git: git push origin main
+  Note over W: Poller picks up the new SHA<br/>(or panel triggers manually)
+  W->>Git: clone @ SHA
+  W->>W: read kaiad.yaml,<br/>resolve dependsOn,<br/>substitute {vars}
+  W->>W: run build container
+  W->>W: crane assemble runtime image
+  W->>Reg: PUT manifest + blob uploads<br/>(in-process JWT, no /registry/token)
+  W->>API: finishBuild status=success,<br/>imageRef recorded
+  API->>Agt: redeploy_service command<br/>over WSS
+  Agt->>Reg: docker / kubelet pull<br/>(registrytoken from imagePullSecret)
+  Reg-->>Agt: blob stream (lo_read 64K chunks)
+  Agt->>Pod: stop old / start new<br/>(docker run or apps/v1 patch)
+  Pod-->>Agt: container running
+  Agt-->>API: heartbeat + status
+</pre>

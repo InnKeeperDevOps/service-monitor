@@ -1,0 +1,33 @@
+<pre class="mermaid">flowchart TB
+  trig{{Trigger}}
+  trig -->|manual / push / dep success| claim[Claim queued row]
+
+  claim --> clone[git clone @ SHA]
+  clone --> read[Read kaiad.yaml]
+  read -->|missing| skip[Skip build, no_pipeline]
+  read --> pick[Pick pipeline by pipelineName]
+
+  pick --> deps{dependsOn?}
+  deps -->|yes| resolve[resolveDeps: latest successful build of each dep]
+  deps -->|no| sub[Build var map]
+  resolve --> sub
+  sub --> subst[Substitute variables in pipeline strings]
+
+  subst --> mode{build mode}
+  mode -->|"build + runtime"| buildc[Run build container]
+  mode -->|dockerfile| dockerf[docker build]
+
+  buildc --> art[Capture artifacts to /artifacts]
+  art --> crane[crane append layers onto runtime.image]
+  crane --> push1["crane push: image to registry"]
+  push1 --> done
+
+  dockerf --> save[docker save tar]
+  save --> push2["crane push: tar to registry"]
+  push2 --> done
+
+  done[Record imageRef, mark success] --> kind{kind}
+  kind -->|deployable| dispatch[Dispatch redeploy to bound agents]
+  kind -->|supporting| trigger[Trigger downstream builds that depend on this]
+  dispatch --> trigger
+</pre>

@@ -32,5 +32,6 @@ Progressive disclosure: start here for the mental model, then [configure the con
 - [Configure the control plane]({% link getting-started/configure-control-plane.md %}) — env vars, processes, Compose reference.
 - [GitHub App setup]({% link getting-started/github-app.md %}) — permissions, installation, webhooks, allowlists.
 - [Install Agent]({% link agent/install.md %}) — binary or container, `SM_REALTIME_URL`, systemd unit.
+- [Onboarding a service]({% link getting-started/onboarding-services.md %}) — add a Git repo, write `kaiad.yaml`, watch the first build, deploy to bound agents.
 
-For HTTP/API details, see [API reference]({% link reference/api.md %}) and the [Reference]({% link reference/index.md %}) section.
+For HTTP/API details, see [API reference]({% link reference/api.md %}) and the [Reference]({% link reference/index.md %}) section. For the build pipeline and the built-in OCI registry, jump straight to the [`kaiad.yaml` reference]({% link reference/pipeline.md %}) and [registry reference]({% link reference/registry.md %}).

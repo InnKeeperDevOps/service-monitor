@@ -1,0 +1,34 @@
+<pre class="mermaid">flowchart LR
+  subgraph Svcs[Services]
+    S1[api-prod]
+    S2[worker-prod]
+    S3[supporting<br/>base-image]
+  end
+
+  subgraph Bind["agent_service_bindings<br/>(many-to-many)"]
+    direction TB
+    B1["api-prod ↔ agt-east-1"]
+    B2["api-prod ↔ agt-east-2"]
+    B3["worker-prod ↔ agt-east-1"]
+    B4["supporting bindings allowed<br/>but never trigger deploys"]
+  end
+
+  subgraph Agents
+    A1[agt-east-1<br/>k8s runtime]
+    A2[agt-east-2<br/>docker runtime]
+  end
+
+  S1 --- B1
+  S1 --- B2
+  S2 --- B3
+  S3 --- B4
+  B1 --- A1
+  B2 --- A2
+  B3 --- A1
+  B4 --- A1
+
+  S1 -. "successful build →<br/>redeploy to BOTH agents" .-> A1
+  S1 -. .-> A2
+  S2 -. "redeploy to one agent" .-> A1
+  S3 -. "no deploy dispatch<br/>(kind: supporting)" .-> A1
+</pre>

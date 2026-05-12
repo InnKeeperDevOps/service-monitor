@@ -1,0 +1,23 @@
+<pre class="mermaid">flowchart LR
+  subgraph DB[Postgres]
+    BR["registry_blobs row<br/>digest → content_oid, size"]
+    LO[("pg_largeobject<br/>(content_oid)")]
+    MN["registry_manifests<br/>(BYTEA, inline)"]
+    TG["registry_tags<br/>(repo, tag) → manifest_digest"]
+  end
+
+  TG -->|FK ON DELETE RESTRICT| MN
+  MN -.->|config_digest +<br/>layer_digests| BR
+  BR -.->|oid| LO
+
+  subgraph API[Kaiad API process]
+    H["/v2/&lt;name&gt;/blobs/&lt;digest&gt; handler"]
+    R["openBlobReadStream(pool, oid)<br/>BEGIN; lo_open; loread×N; lo_close; COMMIT"]
+  end
+
+  H -->|lookup digest| BR
+  H --> R
+  R -.->|streams 64K chunks| LO
+
+  R ==>|"reply.send(stream)"| Client[Client HTTP response]
+</pre>

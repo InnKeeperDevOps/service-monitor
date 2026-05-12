@@ -125,6 +125,32 @@ kubectl get kaiadagents -A
 Within 60 seconds you should see the agent appear online in the Kaiad panel
 under the **Agents** page.
 
+## Pulling workload images from the Kaiad registry
+
+Services built by Kaiad land in the [built-in OCI registry]({% link reference/registry.md %})
+at `<KAIAD_REGISTRY_HOST>/<service-name>:<git-sha>`. When the agent deploys
+those services, the cluster's kubelet needs credentials to pull from that
+registry — Kaiad doesn't accept anonymous pulls.
+
+The operator generates an **`imagePullSecrets`** Secret per `KaiadAgent`
+containing a long-lived enrollment-token-derived `registrytoken` in
+docker-config-json shape. The Secret is referenced in the Deployments the
+agent creates for managed workloads, so kubelets `docker pull` against
+Kaiad authenticate transparently.
+
+The enrollment token grants **pull-only**, scoped to any repository — push
+from this credential is rejected. Token rotation is handled by the
+operator's reconcile loop; you don't need to refresh the Secret manually.
+
+If you see `ImagePullBackOff` with `unauthorized: authentication required`,
+check:
+
+- The Secret exists (`kubectl -n <workload-ns> get secret kaiad-pull`).
+- The workload Deployment references it (`imagePullSecrets: [{name: kaiad-pull}]`).
+- The image ref starts with `KAIAD_REGISTRY_HOST` (not the loopback alias).
+- The cluster can resolve and reach that hostname (egress + DNS) — see
+  [Agent networking]({% link security/agent-networking.md %}).
+
 ## RBAC scope: what `manages` actually allows
 
 The operator validates `spec.manages` against an allow-list. As of v0.1

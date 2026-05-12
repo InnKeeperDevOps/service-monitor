@@ -13,6 +13,21 @@ agent can be the observer for many services. The binding is independent of
 the service's other config — you can change the bound agent set without
 touching the repo URL, branch, or SSH key.
 
+A binding does two things:
+
+1. **Routes log frames + auto-fix dispatch** — covered below.
+2. **Makes the agent a deploy target.** Every successful `kind: deployable`
+   build of the service dispatches a redeploy command to every bound
+   agent. The agent's runtime backend (docker, kubernetes, shell) handles
+   the actual rollout — see [Agent runtimes]({% link agent/runtimes.md %}).
+   `kind: supporting` services (typically base images consumed by others
+   via `dependsOn:` — see the [pipeline reference]({% link reference/pipeline.md %}#kind))
+   are never deployed even when bound.
+
+{::nomarkdown}
+{% include mermaid-agent-binding.html %}
+{:/nomarkdown}
+
 ## When to bind multiple agents to one service
 
 - **High-availability monitoring.** Two agents on separate hosts watch the

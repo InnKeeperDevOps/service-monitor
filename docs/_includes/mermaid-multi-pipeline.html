@@ -1,0 +1,24 @@
+<pre class="mermaid">flowchart LR
+  subgraph Repo["Repo: app-stack (one Git repository)"]
+    YAML["kaiad.yaml<br/>version: 1<br/>services:<br/>&nbsp;&nbsp;php: { ... }<br/>&nbsp;&nbsp;nginx: { ... dependsOn: [php] }"]
+  end
+
+  subgraph Panel["Kaiad panel (two MonitoredService rows)"]
+    SVC1["MonitoredService 'app-php'<br/>gitRepoUrl: app-stack<br/>pipelineName: php"]
+    SVC2["MonitoredService 'app-nginx'<br/>gitRepoUrl: app-stack<br/>pipelineName: nginx"]
+  end
+
+  subgraph Images["Pushed images"]
+    IMG1["registry/app-php:&lt;sha&gt;"]
+    IMG2["registry/app-nginx:&lt;sha&gt;"]
+  end
+
+  Repo -.->|each row picks one inner pipeline| SVC1
+  Repo -.-> SVC2
+  SVC1 -->|build worker| IMG1
+  SVC2 -->|build worker| IMG2
+
+  SVC1 -.->|"agentIds: [a1, a2]"| AG1[Agent a1]
+  SVC1 -.-> AG2[Agent a2]
+  SVC2 -.->|"agentIds: [a3]"| AG3[Agent a3]
+</pre>

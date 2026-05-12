@@ -1,0 +1,20 @@
+<pre class="mermaid">flowchart TB
+  subgraph Sup["kind: supporting"]
+    PHPI["php-image<br/>(hardened PHP base)<br/>build → image only,<br/>never deployed"]
+  end
+
+  subgraph Dep["kind: deployable"]
+    SITE["site-php<br/>dependsOn: [php-image]"]
+    WORK["jobs-php<br/>dependsOn: [php-image]"]
+  end
+
+  PHPI -.->|exposes vars| VARS["{php_image_version}<br/>{php_image_image_ref}<br/>{kaiad_registry_host}"]
+  VARS -.-> SITE
+  VARS -.-> WORK
+
+  SITE -->|pushed image| AGD[Bound agents → deploy]
+  WORK -->|pushed image| AGD
+
+  PHPI -. "successful build<br/>triggers" .-> SITE
+  PHPI -. "rebuild of every<br/>downstream consumer" .-> WORK
+</pre>

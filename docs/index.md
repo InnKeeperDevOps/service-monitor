@@ -61,11 +61,15 @@ Agents are **egress-only** toward Kaiad for the SaaS path; customers firewall **
 - [Configure the control plane]({% link getting-started/configure-control-plane.md %}) — environment variables, API/worker processes, Compose reference.
 - [GitHub App setup]({% link getting-started/github-app.md %}) — permissions, webhooks, secrets, troubleshooting.
 - [Install Agent]({% link agent/install.md %}) — release binaries, systemd, Docker, environment variables.
+- [Onboarding a service]({% link getting-started/onboarding-services.md %}) — wire up a Git repo, author `kaiad.yaml`, ship the first build.
 
 ## Reference
 
 - [Reference overview]({% link reference/index.md %}) — OpenAPI location, queues, correlation headers, env summaries.
 - [API reference]({% link reference/api.md %}) — HTTP surface area.
+- [`kaiad.yaml` reference]({% link reference/pipeline.md %}) — full pipeline schema, build modes, environments, validation rules.
+- [Pipeline variables]({% link reference/pipeline-variables.md %}) — `{var}` interpolation: system vars, dependency vars, naming rules.
+- [Built-in OCI registry]({% link reference/registry.md %}) — Kaiad's native registry: endpoints, auth, storage, GC.
 
 ## Runbooks
 

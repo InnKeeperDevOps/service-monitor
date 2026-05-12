@@ -6,18 +6,22 @@ nav_order: 2
 
 # PostgreSQL failure
 
-PostgreSQL is the **system of record** for tenants, RBAC, incidents, agents, services, and audit-related state.
+PostgreSQL is the **system of record** for tenants, RBAC, incidents, agents, services, audit-related state, **and the built-in OCI registry** (image blobs in `pg_largeobject`, manifests inline as BYTEA — see [registry reference]({% link reference/registry.md %}#storage)).
 
 ## Symptoms
 
 - HTTP **5xx** on CRUD and authenticated routes; health endpoints may report DB unhealthy.
+- `/v2/*` returns **503 UNAVAILABLE** (`Registry storage not configured`); `docker pull` and `crane push` fail; build worker can't push new images.
+- Agents fail to pull workload images with `ImagePullBackOff` / `unauthorized` — manifests can't be served.
 - Worker errors on **transactions**, **connection pool** exhaustion, or migration/version mismatch.
 - Replication lag or failover events (managed Postgres), or **disk full** / **corruption** alerts.
 
 ## Impact
 
 - **Critical**: Control plane and workers cannot persist or read tenant data; new incidents and policy checks may fail.
-- **Severe during migration**: schema drift blocks startup until migrations succeed.
+- **Critical for builds + deploys**: the registry is unreachable, so newly-built images can't be pushed and previously-built images can't be pulled. Already-running workloads on agents are unaffected (kubelet/docker has the image locally); only new pulls fail.
+- **Severe during migration**: schema drift blocks startup until migrations succeed. Registry-related migrations add the `registry_blobs`, `registry_manifests`, `registry_tags`, `registry_uploads` tables — failure here means the kaiad process won't start.
+- **Disk pressure** specifically: blob storage in `pg_largeobject` can grow large fast. A few GB of layers is normal per service. Run [`pnpm --filter @sm/api registry:gc`]({% link reference/registry.md %}#garbage-collection) before treating "disk full" as a Postgres capacity problem.
 
 ## Immediate actions
 

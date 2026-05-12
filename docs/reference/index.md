@@ -8,6 +8,16 @@ has_children: true
 
 Material here is **dense and factual**: schemas, flags, queues, and headers. Use it when integrating agents, automating deployments, or debugging cross-service behavior. For narrative onboarding, start with [Getting started]({% link getting-started/index.md %}).
 
+## Build & deploy
+
+The build pipeline and registry have their own reference pages — start here when onboarding a repo or debugging a build:
+
+- **[`kaiad.yaml` reference]({% link reference/pipeline.md %})** — every field, every option, the build-mode split (`build/runtime` vs `dockerfile:`), `environments:`, `dependsOn:`, `kind:`, validation rules.
+- **[Pipeline variables]({% link reference/pipeline-variables.md %})** — `{var}` substitution, system vars (`kaiad_registry_host`), dependency vars (`{<dep>_version}`, `{<dep>_image_ref}`, …), naming rules.
+- **[Built-in OCI registry]({% link reference/registry.md %})** — `/v2/*` endpoints, JWT auth, Postgres-backed storage, pagination, garbage collection CLI, compose env vars.
+
+For the panel walkthrough (SSH key, service creation, first build), see [Onboarding a service]({% link getting-started/onboarding-services.md %}).
+
 ## OpenAPI
 
 The HTTP contract is captured in the **OpenAPI 3.1** document generated from shared contracts:

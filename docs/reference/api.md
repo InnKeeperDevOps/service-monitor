@@ -47,8 +47,8 @@ let you bind/unbind without touching the service row.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/v1/services` | Bearer | List monitored services for the tenant. Each service includes its bound agents. |
-| POST | `/api/v1/services` | Bearer | Create a monitored service (**201**). Optional `agentIds` initial bindings. |
-| PATCH | `/api/v1/services/:id` | Bearer | Update fields. When `agentIds` is provided, replaces the full set of bindings. Pass `[]` to detach all. |
+| POST | `/api/v1/services` | Bearer | Create a monitored service (**201**). Optional `agentIds` initial bindings. Body fields include `name`, `gitRepoUrl`, `sshKeyId`, `branch`, `dockerImage`, `composePath`, and **`pipelineName`** (required when the repo's `kaiad.yaml` is multi-pipeline — see [Onboarding a service]({% link getting-started/onboarding-services.md %})). |
+| PATCH | `/api/v1/services/:id` | Bearer | Update fields. When `agentIds` is provided, replaces the full set of bindings. Pass `[]` to detach all. `pipelineName: null` clears the pin (revert to single-pipeline default); a non-empty string repins. |
 | DELETE | `/api/v1/services/:id` | Bearer | Delete a service; its bindings are garbage-collected. |
 
 ### Per-binding endpoints
@@ -62,6 +62,20 @@ for the full model.
 | GET | `/api/v1/agents/:agentId/services` | Bearer | List services currently bound to one agent. |
 | POST | `/api/v1/agents/:agentId/services/:serviceId` | Bearer | Bind a service to an agent. Idempotent: response `bound=false` on repeat. |
 | DELETE | `/api/v1/agents/:agentId/services/:serviceId` | Bearer | Remove a binding (404 if not bound). |
+
+### Builds
+
+The build worker turns service repos into pushed images. Build rows
+record git SHA, pipeline yaml, status, and (on success) the pushed
+image ref. See [`kaiad.yaml` reference]({% link reference/pipeline.md %})
+for what the worker actually runs.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/v1/services/:id/builds` | Bearer | Build history for one service. Each row carries `id`, `gitSha`, `status` (`queued`/`running`/`success`/`failed`), `imageRef`, `failureReason`, timestamps. |
+| POST | `/api/v1/services/:id/builds` | Bearer (owner/admin) | Manually trigger a build. The worker resolves `HEAD` of the configured branch via `git ls-remote` on claim. Successful deployable builds dispatch a redeploy to every bound agent. |
+| GET | `/api/v1/services/:id/builds/:buildId` | Bearer | Get one build, including the full log buffer and resolved pipeline yaml. |
+| GET | `/api/v1/services/:id/builds/:buildId/artifacts/:name` | Bearer | Stream a captured artifact (anything listed under `artifacts:` in the pipeline). Octet-stream body. |
 
 ## Incidents
 
@@ -150,7 +164,53 @@ known gap.
 
 Treat the WebSocket as a **long-lived channel**, not a REST substitute—pair with enrollment tokens and tenant policies for production.
 
+## OCI registry
+
+Kaiad serves an [OCI Distribution v2 registry]({% link reference/registry.md %})
+in the same process. Two surfaces:
+
+### Token endpoint
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/registry/token` | **Basic** | Mints a registry-scoped JWT. Pass `Authorization: Basic base64(user:password)` and query params `service=kaiad-registry&scope=repository:<name>:<actions>`. Returns `{ token, expires_in, issued_at }`. Owner/admin sessions and API credentials grant `pull,push,*`; enrollment tokens grant `pull` only. In non-prod, `admin:dev-token` also works. |
+
+### `/v2/*` (OCI Distribution)
+
+Standard pull/push surface. Auth is bearer JWT (mint via `/registry/token`).
+The build worker mints in-process and skips this endpoint entirely.
+
+| Method | Path | Required scope |
+|--------|------|---------------|
+| GET | `/v2/` | (any valid token) |
+| GET | `/v2/_catalog?n=&last=` | `registry:catalog:*` (admin) |
+| GET | `/v2/<name>/tags/list?n=&last=` | `repository:<name>:pull` |
+| HEAD/GET | `/v2/<name>/manifests/<ref>` | `repository:<name>:pull` |
+| PUT | `/v2/<name>/manifests/<ref>` | `repository:<name>:push` |
+| DELETE | `/v2/<name>/manifests/<digest>` | `repository:<name>:delete` |
+| HEAD/GET | `/v2/<name>/blobs/<digest>` | `repository:<name>:pull` |
+| DELETE | `/v2/<name>/blobs/<digest>` | `repository:<name>:delete` |
+| POST | `/v2/<name>/blobs/uploads/` | `repository:<name>:push` |
+| PATCH/PUT/GET/DELETE | `/v2/<name>/blobs/uploads/<uuid>` | `repository:<name>:push` |
+
+The catalog and tags-list responses include OCI-standard pagination headers
+(`Link: …; rel="next"`).
+
+### Panel-facing admin
+
+The Registry page in the panel uses these. They read directly from
+Postgres rather than calling `/v2/*` — richer response shape (digest +
+size + createdAt per tag) in a single round trip.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/v1/registry/repositories` | Bearer (owner/admin) | Lists every repo with at least one manifest or tag. |
+| GET | `/api/v1/registry/repositories/:name/tags` | Bearer (owner/admin) | Per-tag detail: name, manifest digest, total size (config + layers), creation timestamp from the image config blob's `created` field when present. Repo names with slashes must be URL-encoded (`library%2Falpine`). |
+| DELETE | `/api/v1/registry/repositories/:name/tags/:tag` | Bearer (owner/admin) | Drop the tag. If no other tag references the underlying manifest, the manifest is also deleted; orphan blobs are reclaimed by the GC sweep. |
+
 ## Related
 
 - [Reference index]({% link reference/index.md %}) — OpenAPI path, queues, headers.
 - [GitHub App setup]({% link getting-started/github-app.md %}) — webhook headers and secrets.
+- [`kaiad.yaml` reference]({% link reference/pipeline.md %}) — what the build endpoints actually run.
+- [Built-in OCI registry]({% link reference/registry.md %}) — full registry semantics and GC.

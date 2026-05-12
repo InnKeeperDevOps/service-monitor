@@ -1,0 +1,28 @@
+<pre class="mermaid">sequenceDiagram
+  autonumber
+  participant C as Client<br/>(docker / crane / kubelet)
+  participant V as Kaiad /v2/*
+  participant T as Kaiad /registry/token
+  participant K as registry-auth keypair<br/>(/data/registry-auth/)
+
+  rect rgba(180, 220, 255, 0.35)
+    Note over C,K: External clients (cold cache)
+    C->>V: GET /v2/&lt;name&gt;/manifests/&lt;ref&gt;
+    V-->>C: 401 + WWW-Authenticate:<br/>Bearer realm=…/registry/token,<br/>service=kaiad-registry,<br/>scope=repository:&lt;name&gt;:pull
+    C->>T: GET /registry/token?scope=…<br/>Authorization: Basic admin:&lt;real-token&gt;
+    T->>K: load signing key
+    T-->>C: { token: "&lt;JWT&gt;" }
+    C->>V: GET /v2/&lt;name&gt;/manifests/&lt;ref&gt;<br/>Authorization: Bearer &lt;JWT&gt;
+    V->>K: verify signature + kid
+    V-->>C: 200 + manifest body
+  end
+
+  rect rgba(220, 255, 200, 0.35)
+    Note over C,K: Build worker (embedded — shortcut)
+    Note right of V: Worker is in the same process<br/>so it has filesystem access<br/>to the keypair directly.
+    C->>K: signRegistryToken(access=push+pull)
+    K-->>C: pre-minted JWT in config.json registrytoken
+    C->>V: GET /v2/&lt;name&gt;/manifests/&lt;ref&gt;<br/>Authorization: Bearer &lt;JWT&gt;
+    V-->>C: 200 + manifest body
+  end
+</pre>
