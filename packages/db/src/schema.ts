@@ -356,4 +356,81 @@ create table if not exists service_build_artifacts (
   created_at timestamptz not null default now(),
   primary key (build_id, name)
 );
+
+-- ─── Native OCI distribution registry (kaiad-hosted) ────────────────────
+-- Replaces the registry:2 sidecar. Blob bytes live in pg_largeobject
+-- (streamable via lo_*); manifests are inline BYTEA since they're <1MB.
+-- All tables are global (not tenant-scoped) — current panel model is
+-- "this Kaiad instance hosts one registry, shared by all tenants."
+
+create table if not exists registry_blobs (
+  -- "sha256:<hex>". The leading scheme is part of the PK so downloads
+  -- can use the on-the-wire digest verbatim.
+  digest text primary key,
+  -- Content-type the blob was uploaded with. Informational only; pulls
+  -- echo it back via Content-Type but the OCI spec doesn't require it
+  -- to be set or accurate.
+  media_type text,
+  size_bytes bigint not null,
+  -- Postgres Large Object oid. Created at upload-commit time via
+  -- lo_create(); the bytes are written in 64K chunks via lowrite().
+  -- Reads use loread() over the same oid inside a tx.
+  content_oid oid not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists registry_manifests (
+  -- "sha256:<hex>" of body, computed at PUT time.
+  digest text primary key,
+  -- Repository this manifest was first pushed under. The same content
+  -- could in theory be pushed to multiple repos with different digests
+  -- (no — same content has the same digest). Kept here so the panel can
+  -- show "which repo does this manifest belong to" without joining tags.
+  repo text not null,
+  -- "application/vnd.docker.distribution.manifest.v2+json" or the OCI
+  -- variants ("application/vnd.oci.image.manifest.v1+json"). Echoed in
+  -- the Content-Type of GET responses — clients use it to decide how to
+  -- parse the body.
+  media_type text not null,
+  -- The exact JSON bytes the client uploaded. Stored byte-for-byte so
+  -- the digest stays stable on re-fetch.
+  body bytea not null,
+  size_bytes bigint not null,
+  -- Parsed references for GC. Null/empty for manifest lists (which
+  -- reference other manifests instead).
+  config_digest text,
+  layer_digests text[] not null default '{}',
+  -- Other manifests referenced (for image-index / manifest-list).
+  referenced_manifest_digests text[] not null default '{}',
+  created_at timestamptz not null default now()
+);
+create index if not exists registry_manifests_repo_idx on registry_manifests(repo);
+
+create table if not exists registry_tags (
+  repo text not null,
+  tag text not null,
+  -- Tags are mutable: pushing a new manifest under the same name
+  -- overwrites this row. Old manifest stays in registry_manifests until
+  -- GC reaps it (no other tag references it AND no manifest list
+  -- references it).
+  manifest_digest text not null references registry_manifests(digest) on delete restrict,
+  updated_at timestamptz not null default now(),
+  primary key (repo, tag)
+);
+create index if not exists registry_tags_repo_idx on registry_tags(repo);
+
+-- Blob upload sessions. Client posts to /v2/<name>/blobs/uploads/,
+-- gets a uuid + Location, then PATCHes chunks and PUTs to commit.
+-- content_oid is allocated on session start; chunks lowrite() into it.
+-- On commit, the oid is renamed into registry_blobs.content_oid and
+-- the session row is deleted. On cancel/expiry, lo_unlink() reclaims.
+create table if not exists registry_uploads (
+  uuid text primary key,
+  repo text not null,
+  content_oid oid not null,
+  received_bytes bigint not null default 0,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists registry_uploads_repo_idx on registry_uploads(repo);
 `;

@@ -16,8 +16,36 @@ services:
       - DATABASE_URL=postgres://postgres:postgres@postgres:5432/service_monitor
       - REDIS_URL=redis://redis:6379
       - VITE_API_BASE=http://panel.kaiad.dev
+      - KAIAD_ENCRYPTION_KEY=${KAIAD_ENCRYPTION_KEY}
+      # Build pipeline: host-visible path for /data/builds, so build
+      # containers spawned via the host docker daemon can bind-mount the
+      # workspace dir. Must match the bind mount below.
+      - KAIAD_BUILDS_HOST_DIR=${PWD}/data/kaiad-builds
+      # Native OCI registry: kaiad serves /v2/* itself. The worker
+      # crane-pushes to loopback (no separate registry container) and
+      # image refs recorded in the DB use the external host that agent
+      # kubelets pull from.
+      - KAIAD_REGISTRY_INTERNAL=127.0.0.1:8091
+      - KAIAD_REGISTRY_HOST=panel.kaiad.dev
+      # WWW-Authenticate realm URL. Must be absolute — crane's go-http
+      # client rejects relative paths with "unsupported protocol scheme".
+      # Internal pushes (build worker, push-agent) hit loopback. External
+      # docker clients should use pre-minted enrollment tokens and won't
+      # follow the realm.
+      - KAIAD_REGISTRY_REALM=http://127.0.0.1:8091/registry/token
     volumes:
       - ./data/kaiad:/data
+      # Registry-auth keypair. Kaiad writes key.pem + cert.pem on first
+      # boot and signs bearer JWTs with it. Persisted so tokens issued
+      # before a restart stay valid.
+      - ./data/registry-auth:/data/registry-auth
+      # Build pipeline workspace + artifact root (same path as
+      # KAIAD_BUILDS_HOST_DIR above).
+      - ./data/kaiad-builds:/data/builds
+      # Build pipeline engine: worker shells out to `docker build`/`docker
+      # run` against the host daemon. Container runs as root, so no
+      # group_add needed.
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8091:8091"
     healthcheck:

@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "registry:gc": "node dist/registry/gc-cli.js"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
@@ -20,6 +21,7 @@
     "@sm/db": "workspace:*",
     "@sm/domain": "workspace:*",
     "@sm/queue": "workspace:*",
+    "@sm/registry-auth": "workspace:*",
     "@sm/web": "workspace:*",
     "@sm/worker": "workspace:*",
     "fastify": "^5.2.1",

@@ -32,17 +32,25 @@ services:
       # `docker run -v <KAIAD_BUILDS_HOST_DIR>/<id>/workspace:/workspace`.
       - KAIAD_BUILDS_HOST_DIR=${PWD}/data/kaiad-builds
       # Internal hostname the build worker uses when crane-pushing the
-      # runtime image. registry:5000 is the compose-DNS name; pushing
-      # through this avoids the openresty/nginx round trip and works
-      # without configuring host /etc/hosts. The image ref recorded in
-      # the DB still uses the external host (KAIAD_REGISTRY_HOST below).
-      - KAIAD_REGISTRY_INTERNAL=registry:5000
+      # runtime image. The native OCI registry is served by this same
+      # kaiad process, so pushes go to its own loopback. PORT=8092 in
+      # dev. Image refs recorded in the DB still use KAIAD_REGISTRY_HOST
+      # (below) — that's what agent kubelets see.
+      - KAIAD_REGISTRY_INTERNAL=127.0.0.1:8092
       - KAIAD_REGISTRY_HOST=panel.dev.kaiad.dev
+      # WWW-Authenticate realm URL. Must be absolute — crane's go-http
+      # client rejects relative paths with "unsupported protocol scheme".
+      # Internal pushes (build worker, push-agent) hit loopback. External
+      # docker clients should use pre-minted enrollment tokens and won't
+      # follow the realm; if they do, the host nginx is expected to
+      # proxy /registry/token to kaiad at this same path.
+      - KAIAD_REGISTRY_REALM=http://127.0.0.1:8092/registry/token
     volumes:
       - ./data/kaiad:/data
-      # Registry-auth keypair shared rw with kaiad (writes on first boot
-      # if missing) and ro to the registry container (reads cert.pem
-      # for JWT verification).
+      # Registry-auth keypair. Kaiad writes key.pem + cert.pem here on
+      # first boot and uses them to mint + verify the bearer JWTs that
+      # gate /v2/* and /registry/token. Persisted so tokens issued
+      # before a restart remain valid.
       - ./data/registry-auth:/data/registry-auth
       # Build pipeline workspace + artifact root. Bound so the same
       # path is reachable from the host docker daemon (which spawns
@@ -113,42 +121,15 @@ services:
       retries: 10
       start_period: 5s
 
-  # OCI distribution registry hosted alongside Kaiad. Phase 1: anonymous
-  # read + push. Phase 2 will gate push (and optionally pull) behind the
-  # kaiad-issued JWT bearer auth at /v2/_token. The registry is reverse-
-  # proxied at panel.dev.kaiad.dev/v2/* by ../../kaiad-proxy/nginx.conf.
-  registry:
-    image: registry:2
-    user: "1000:1000"
-    depends_on:
-      kaiad:
-        condition: service_healthy
-    environment:
-      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
-      # delete: lets the panel's Registry page DELETE a manifest,
-      # which is then garbage-collected on the next `registry garbage-collect`
-      # run (we don't run that automatically yet — manual `docker exec`).
-      REGISTRY_STORAGE_DELETE_ENABLED: "true"
-      REGISTRY_HTTP_ADDR: "0.0.0.0:5000"
-      # relativeurls: redirect URLs (e.g. blob upload session Location)
-      # are emitted as path-only, so internal pushes (registry:5000)
-      # and external pushes (panel.dev.kaiad.dev) both work without
-      # the registry having to know which side it's serving. Setting
-      # REGISTRY_HTTP_HOST overrides this for external host construction
-      # — leaving it unset lets the registry honour the request's Host
-      # header, which is what we want.
-      REGISTRY_HTTP_RELATIVEURLS: "true"
-      # Token auth: every pull/push must present a JWT minted by the
-      # Kaiad API at /registry/token. The registry verifies the JWT
-      # signature against the cert in /auth/cert.pem (written by the
-      # kaiad container on first boot — see ../../apps/api/src/registryAuth.ts).
-      REGISTRY_AUTH: token
-      REGISTRY_AUTH_TOKEN_REALM: "https://panel.dev.kaiad.dev/registry/token"
-      REGISTRY_AUTH_TOKEN_SERVICE: "kaiad-registry"
-      REGISTRY_AUTH_TOKEN_ISSUER: "kaiad"
-      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /auth/cert.pem
-    volumes:
-      - ./data/registry-data:/var/lib/registry
-      - ./data/registry-auth:/auth:ro
-    ports:
-      - "5050:5000"
+  # registry:2 sidecar removed — Kaiad now serves /v2/* directly from
+  # apps/api/src/registry/routes.ts. Image blobs live in pg_largeobject
+  # under the postgres service; admin operations go through the panel's
+  # /api/v1/registry/* endpoints (apps/api/src/registry/admin.ts).
+  #
+  # Host nginx must now route panel.dev.kaiad.dev/v2/* to the kaiad
+  # container at :8092 (was :5050 → registry:2). The proxy config lives
+  # in ~/kaiad-proxy/nginx.conf — update there before bringing this up.
+  #
+  # Old blob storage at ./data/registry-data is now orphan and can be
+  # removed by hand once you've re-pushed your kaiad-agent image
+  # (push-agent-on-boot.sh re-pushes on every kaiad start).

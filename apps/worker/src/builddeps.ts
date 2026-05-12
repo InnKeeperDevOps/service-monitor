@@ -15,6 +15,11 @@
 //      dockerfile.image, dockerfile.args, etc.) and substitute the
 //      variables in-place.
 //
+// Also exposes system-wide variables (no dep prefix) so kaiad.yaml can
+// avoid hard-coding the registry hostname:
+//   {kaiad_registry_host}     → external registry host (KAIAD_REGISTRY_HOST)
+//   {kaiad_registry_internal} → loopback host the worker uses for pushes
+//
 // Errors are surfaced as a `BuildDepsError` carrying both a
 // human-readable reason and the failed dep name, so the caller can
 // fail the build with an actionable log line.
@@ -51,7 +56,8 @@ function varKey(serviceName: string): string {
 export async function resolveDeps(
   query: QueryFn,
   tenantId: string,
-  pipeline: PipelineDefinition
+  pipeline: PipelineDefinition,
+  options: { registryHost?: string; registryInternal?: string } = {}
 ): Promise<{
   vars: Record<string, string>;
   resolved: Array<{
@@ -62,6 +68,10 @@ export async function resolveDeps(
   }>;
 }> {
   const vars: Record<string, string> = {};
+  // System-wide vars first — kaiad.yaml can use these even when there
+  // are no dependsOn entries.
+  if (options.registryHost) vars.kaiad_registry_host = options.registryHost;
+  if (options.registryInternal) vars.kaiad_registry_internal = options.registryInternal;
   const resolved: Array<{
     depName: string;
     buildId: string;

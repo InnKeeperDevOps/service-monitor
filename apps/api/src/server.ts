@@ -97,13 +97,13 @@ import {
   signRegistryToken,
   type RegistryAccess,
   type RegistryAuthConfig
-} from "./registryAuth.js";
+} from "@sm/registry-auth";
 import {
   deleteTag as registryDeleteTag,
   listRepositories as registryListRepositories,
-  listTags as registryListTags,
-  type RegistryAdminConfig
-} from "./registryAdmin.js";
+  listTags as registryListTags
+} from "./registry/admin.js";
+import { registerRegistryRoutes } from "./registry/routes.js";
 import { createMemoryAuthStore, seedDevUser } from "./memoryAuthStore.js";
 import { createPostgresAuthStore } from "./postgresAuthStore.js";
 import { readConfig, writeConfig, type KaiadConfig } from "./configPersistence.js";
@@ -525,7 +525,12 @@ export function buildServer(opts: BuildServerOptions = {}) {
     keyPath: process.env.REGISTRY_AUTH_KEY_PATH || `${getDataDir()}/registry-auth/key.pem`,
     certPath: process.env.REGISTRY_AUTH_CERT_PATH || `${getDataDir()}/registry-auth/cert.pem`,
     issuer: process.env.REGISTRY_AUTH_ISSUER || "kaiad",
-    service: process.env.REGISTRY_AUTH_SERVICE || "kaiad-registry"
+    service: process.env.REGISTRY_AUTH_SERVICE || "kaiad-registry",
+    // 5min is too tight for multi-GB layer uploads — a mid-push token
+    // expiry triggers a 401, crane re-auths via the realm URL, and the
+    // upload session restarts. Default to 1h; override via env if you
+    // have stricter compliance requirements.
+    ttlSeconds: Number.parseInt(process.env.REGISTRY_AUTH_TOKEN_TTL_SECONDS ?? "3600", 10)
   };
   // Generate the keypair eagerly so the registry can read cert.pem at startup.
   ensureRegistryAuth(registryAuthConfig);
@@ -618,19 +623,51 @@ export function buildServer(opts: BuildServerOptions = {}) {
     };
   });
 
+  // ── Registry shared pool ─────────────────────────────────────────────
+  // Used by both the panel-facing /api/v1/registry/* routes and the OCI
+  // /v2/* routes registered further down. Lazy: opens on first hit so
+  // the memory-store fallback (dev-without-postgres) still serves the
+  // rest of the app — registry endpoints just respond 503.
+  let registryPool: import("pg").Pool | null | undefined;
+  async function getRegistryPool(): Promise<import("pg").Pool | null> {
+    if (registryPool !== undefined) return registryPool;
+    const url = process.env.DATABASE_URL;
+    if (!url?.trim()) {
+      registryPool = null;
+      return null;
+    }
+    try {
+      const { Pool } = await import("pg");
+      const pool = new Pool({ connectionString: url });
+      await ensureCoreSchema(pool);
+      registryPool = pool;
+      return pool;
+    } catch (err) {
+      app.log.error({ err }, "registry pool init failed");
+      registryPool = null;
+      return null;
+    }
+  }
+  async function getRegistryAdminContext(): Promise<
+    { pool: import("pg").Pool; queryFn: QueryFn } | null
+  > {
+    const pool = await getRegistryPool();
+    if (!pool) return null;
+    return {
+      pool,
+      queryFn: async (sql: string, params: unknown[]) => {
+        const r = await pool.query(sql, params as unknown[]);
+        return { rows: r.rows as Record<string, unknown>[] };
+      }
+    };
+  }
+
   // ── Registry-management API (panel-only) ───────────────────
-  // The registry's HTTP surface (/v2/_catalog, /v2/<name>/tags/list, …)
-  // is technically reachable from the browser, but the JWT it requires
-  // would have to be minted by the kaiad API anyway. Rather than expose
-  // a "give me an admin token" endpoint to the panel, we proxy the few
-  // operations the Registry page needs and sign the upstream JWTs
-  // server-side with a fixed `kaiad-internal-admin` subject.
-  const registryAdminConfig: RegistryAdminConfig = {
-    baseUrl:
-      process.env.KAIAD_REGISTRY_ADMIN_URL ||
-      `http://${process.env.KAIAD_REGISTRY_INTERNAL || "registry:5000"}`,
-    auth: registryAuthConfig
-  };
+  // Reads from Postgres directly. The native /v2/* server (registered
+  // below) handles OCI distribution traffic; this surface returns the
+  // richer per-tag info (digest + size + createdAt) the panel needs in
+  // a single fetch, avoiding the multi-HTTP-roundtrip the previous
+  // registry:2 proxy required.
 
   /**
    * Reject unless the caller is an owner/admin kaiad session. Returns
@@ -665,19 +702,18 @@ export function buildServer(opts: BuildServerOptions = {}) {
   app.get("/api/v1/registry/repositories", async (req, reply) => {
     const session = await requireAdminSession(req, reply);
     if (!session) return;
-    try {
-      const repositories = await registryListRepositories(registryAdminConfig);
-      return { repositories };
-    } catch (err) {
-      app.log.error({ err }, "registry list repositories failed");
-      return reply.status(502).send(
+    const ctx = await getRegistryAdminContext();
+    if (!ctx) {
+      return reply.status(503).send(
         apiErrorSchema.parse({
           code: "REGISTRY_UNAVAILABLE",
-          message: err instanceof Error ? err.message : "Registry call failed",
+          message: "Registry storage not configured (DATABASE_URL missing)",
           correlationId: (req as any).correlationId
         })
       );
     }
+    const repositories = await registryListRepositories(ctx.queryFn);
+    return { repositories };
   });
 
   // Repo names can contain slashes (e.g. `library/alpine`). Fastify
@@ -688,20 +724,19 @@ export function buildServer(opts: BuildServerOptions = {}) {
     async (req, reply) => {
       const session = await requireAdminSession(req, reply);
       if (!session) return;
-      const name = req.params.name;
-      try {
-        const tags = await registryListTags(registryAdminConfig, name);
-        return { name, tags };
-      } catch (err) {
-        app.log.error({ err, name }, "registry list tags failed");
-        return reply.status(502).send(
+      const ctx = await getRegistryAdminContext();
+      if (!ctx) {
+        return reply.status(503).send(
           apiErrorSchema.parse({
             code: "REGISTRY_UNAVAILABLE",
-            message: err instanceof Error ? err.message : "Registry call failed",
+            message: "Registry storage not configured (DATABASE_URL missing)",
             correlationId: (req as any).correlationId
           })
         );
       }
+      const name = req.params.name;
+      const tags = await registryListTags(ctx.pool, ctx.queryFn, name);
+      return { name, tags };
     }
   );
 
@@ -710,31 +745,43 @@ export function buildServer(opts: BuildServerOptions = {}) {
     async (req, reply) => {
       const session = await requireAdminSession(req, reply);
       if (!session) return;
-      const { name, tag } = req.params;
-      try {
-        const result = await registryDeleteTag(registryAdminConfig, name, tag);
-        if (!result.deleted) {
-          return reply.status(result.status === 404 ? 404 : 502).send(
-            apiErrorSchema.parse({
-              code: result.status === 404 ? "NOT_FOUND" : "REGISTRY_UNAVAILABLE",
-              message: result.message ?? "Delete failed",
-              correlationId: (req as any).correlationId
-            })
-          );
-        }
-        return { deleted: true, digest: result.digest };
-      } catch (err) {
-        app.log.error({ err, name, tag }, "registry delete tag failed");
-        return reply.status(502).send(
+      const ctx = await getRegistryAdminContext();
+      if (!ctx) {
+        return reply.status(503).send(
           apiErrorSchema.parse({
             code: "REGISTRY_UNAVAILABLE",
-            message: err instanceof Error ? err.message : "Registry call failed",
+            message: "Registry storage not configured (DATABASE_URL missing)",
             correlationId: (req as any).correlationId
           })
         );
       }
+      const { name, tag } = req.params;
+      const result = await registryDeleteTag(ctx.queryFn, name, tag);
+      if (!result.deleted) {
+        return reply.status(404).send(
+          apiErrorSchema.parse({
+            code: "NOT_FOUND",
+            message: `tag not found: ${tag}`,
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      return { deleted: true, digest: result.digest };
     }
   );
+
+  // ── Native OCI Distribution v2 (kaiad-hosted) ────────────────────────
+  // Replaces the registry:2 sidecar. Uses the shared registryPool above.
+  registerRegistryRoutes(app, {
+    getPool: getRegistryPool,
+    authConfig: registryAuthConfig,
+    // `realm` is the absolute URL clients hit to obtain a token. We
+    // can't always know the public hostname from inside the API, so
+    // honour KAIAD_REGISTRY_REALM if set; otherwise default to the
+    // service-relative path and let the host nginx rewrite if needed.
+    tokenRealm: process.env.KAIAD_REGISTRY_REALM || "/registry/token",
+    service: registryAuthConfig.service
+  });
 
   // WebSocket routes must live in an async child plugin (Fastify 5 + @fastify/websocket);
   // otherwise upgrades fail with HTTP 500 for both TCP and injectWS.

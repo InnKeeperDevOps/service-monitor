@@ -6,32 +6,30 @@
 # Inputs (env, with sensible defaults set in Dockerfile.unified):
 #   KAIAD_AGENT_BUNDLE         path to the OCI tarball baked into the image
 #   KAIAD_AGENT_VERSION        tag to push (e.g. 0.1.0)
-#   KAIAD_REGISTRY_INTERNAL    docker hostname:port reachable from this
-#                              container — typically the compose service
-#                              name (registry:5000) so the request stays
-#                              on the docker network and doesn't have
-#                              to round-trip through openresty/nginx.
+#   KAIAD_REGISTRY_INTERNAL    hostname:port for the OCI registry. Since
+#                              kaiad now hosts /v2/* itself, this is
+#                              loopback (127.0.0.1:${PORT}) in compose.
 #   PORT                       port kaiad listens on (3001 in the runtime
-#                              image; 8092 in dev compose)
+#                              image; 8092 in dev compose, 8091 in prod)
 #
 # Skips silently if the tarball isn't present or kaiad isn't ready
 # within a generous window. Failures are logged to /tmp/push-agent.log
 # (see the Dockerfile entrypoint redirect) but do not affect the API.
 set -eu
 
-REGISTRY="${KAIAD_REGISTRY_INTERNAL:-registry:5000}"
+KAIAD_PORT="${PORT:-3001}"
+REGISTRY="${KAIAD_REGISTRY_INTERNAL:-127.0.0.1:${KAIAD_PORT}}"
 VERSION="${KAIAD_AGENT_VERSION:-0.1.0}"
 TARBALL="${KAIAD_AGENT_BUNDLE:-/opt/kaiad-agent.tar}"
-KAIAD_PORT="${PORT:-3001}"
 
 if [ ! -f "$TARBALL" ]; then
   echo "[push-agent] no tarball at $TARBALL; nothing to push" >&2
   exit 0
 fi
 
-# Wait for kaiad's own /ready endpoint so /registry/token works. The
-# script and the API live in the same container, so we wait on
-# 127.0.0.1, not the public host.
+# Wait for kaiad's own /ready endpoint so /registry/token AND /v2/* work.
+# Both are served by the same Fastify process, so a single readiness
+# check covers both — no separate registry container to wait on.
 i=0
 until wget -q --spider "http://127.0.0.1:${KAIAD_PORT}/ready"; do
   i=$((i + 1))
@@ -41,26 +39,7 @@ until wget -q --spider "http://127.0.0.1:${KAIAD_PORT}/ready"; do
   fi
   sleep 2
 done
-echo "[push-agent] kaiad ready at :${KAIAD_PORT}"
-
-# Wait for the registry container too. `registry:2` returns 401 (Bearer
-# challenge) on /v2/ once it's listening — we just need a TCP-level
-# response, not auth. wget exits 8 on HTTP 4xx but 4 on connection
-# failure; treat anything that isn't a connection error as "up".
-i=0
-while :; do
-  if wget -qO /dev/null --server-response "http://${REGISTRY}/v2/" 2>&1 \
-     | grep -q "^  HTTP/"; then
-    break
-  fi
-  i=$((i + 1))
-  if [ "$i" -gt 60 ]; then
-    echo "[push-agent] registry at ${REGISTRY} never came up after 120s; giving up" >&2
-    exit 1
-  fi
-  sleep 2
-done
-echo "[push-agent] registry ready at ${REGISTRY}"
+echo "[push-agent] kaiad ready at :${KAIAD_PORT} (also serves /v2/*)"
 
 # Get a push+pull JWT from our own /registry/token. The dev-token
 # shortcut is owner-class in non-prod (NODE_ENV != production OR

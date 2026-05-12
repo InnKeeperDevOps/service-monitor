@@ -23,7 +23,7 @@
 
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -75,6 +75,12 @@ import {
   type QueryFn,
   type ServiceBuildRow
 } from "@sm/db";
+import {
+  ensureRegistryAuth,
+  signRegistryToken,
+  type RegistryAccess,
+  type RegistryAuthConfig
+} from "@sm/registry-auth";
 import { BuildDepsError, resolveDeps, substitutePipeline } from "./builddeps.js";
 import {
   parsePipelineYaml,
@@ -110,9 +116,25 @@ const KAIAD_DATA_DIR = process.env.KAIAD_DATA_DIR ?? "/data";
 // in that case the build step is skipped.
 const BUILDS_HOST_DIR = process.env.KAIAD_BUILDS_HOST_DIR ?? null;
 
-// Basic-auth credential for crane → /registry/token. Defaults match the
-// dev compose stack's admin shortcut. Override in production via env so
-// the worker pushes with a real admin credential.
+// Registry-auth keypair paths. The embedded worker runs in-process with
+// the kaiad API, so it has filesystem access to the same registry-auth
+// keypair the API uses to verify bearer JWTs on /v2/*. We mint our own
+// short-lived JWT here and stuff it into docker config.json as
+// `registrytoken`, bypassing /registry/token entirely. Avoids the
+// Basic-auth credential dance and the prod gotcha where dev-token is
+// (correctly) rejected.
+const REGISTRY_AUTH_KEY_PATH =
+  process.env.REGISTRY_AUTH_KEY_PATH ??
+  `${process.env.KAIAD_DATA_DIR ?? "/data"}/registry-auth/key.pem`;
+const REGISTRY_AUTH_CERT_PATH =
+  process.env.REGISTRY_AUTH_CERT_PATH ??
+  `${process.env.KAIAD_DATA_DIR ?? "/data"}/registry-auth/cert.pem`;
+const REGISTRY_AUTH_ISSUER = process.env.REGISTRY_AUTH_ISSUER ?? "kaiad";
+const REGISTRY_AUTH_SERVICE = process.env.REGISTRY_AUTH_SERVICE ?? "kaiad-registry";
+
+// Fallback Basic auth — kept for the case where the keypair is not on
+// disk (e.g. the worker is running outside compose, against an external
+// kaiad). Unused when the embedded worker can mint its own JWTs.
 const REGISTRY_PUSH_USER = process.env.KAIAD_REGISTRY_PUSH_USER ?? "admin";
 const REGISTRY_PUSH_PASSWORD = process.env.KAIAD_REGISTRY_PUSH_PASSWORD ?? "dev-token";
 
@@ -127,6 +149,123 @@ const stderrLogger: Logger = {
   warn: (m, c) => console.error(`[builds][WARN] ${m}`, c ?? ""),
   error: (m, c) => console.error(`[builds][ERR] ${m}`, c ?? "")
 };
+
+// ─── Docker config auth — kaiad registry ────────────────────────────────
+//
+// Crane authenticates against the kaiad-hosted registry using one of two
+// docker-config.json shapes:
+//
+//   1. `{ "auth": "<base64(user:password)>" }`
+//      Crane does Basic auth → /registry/token round-trip → JWT → push.
+//      Requires a real owner/admin password; the default `admin:dev-token`
+//      is rejected in prod (NODE_ENV=production).
+//
+//   2. `{ "registrytoken": "<JWT>" }`
+//      Crane sends the JWT directly as a Bearer token; no /registry/token
+//      call. The embedded worker mints this JWT in-process using the
+//      kaiad signing keypair (same one the /v2/* verifier uses).
+//
+// We prefer (2) when the keypair is on disk — which it always is in
+// compose deployments where kaiad and the worker share /data. We fall
+// back to (1) when the keypair isn't readable (worker running standalone
+// against an external registry).
+
+let cachedRegistryAuth: RegistryAuthConfig | null | undefined;
+
+function getRegistryAuthConfig(): RegistryAuthConfig | null {
+  if (cachedRegistryAuth !== undefined) return cachedRegistryAuth;
+  // The keypair must already exist on disk — the API process creates
+  // it on startup. If it's missing we're probably a standalone worker
+  // and don't share state with the kaiad we'd be pushing to; minting
+  // our own JWT with a fresh keypair would produce tokens the verifier
+  // rejects (wrong kid). Fall back to Basic auth in that case.
+  if (!existsSync(REGISTRY_AUTH_KEY_PATH) || !existsSync(REGISTRY_AUTH_CERT_PATH)) {
+    cachedRegistryAuth = null;
+    return null;
+  }
+  try {
+    const cfg: RegistryAuthConfig = {
+      keyPath: REGISTRY_AUTH_KEY_PATH,
+      certPath: REGISTRY_AUTH_CERT_PATH,
+      issuer: REGISTRY_AUTH_ISSUER,
+      service: REGISTRY_AUTH_SERVICE,
+      ttlSeconds: Number.parseInt(
+        process.env.REGISTRY_AUTH_TOKEN_TTL_SECONDS ?? "3600",
+        10
+      )
+    };
+    ensureRegistryAuth(cfg);
+    cachedRegistryAuth = cfg;
+    return cfg;
+  } catch {
+    cachedRegistryAuth = null;
+    return null;
+  }
+}
+
+/**
+ * Build the docker config.json `auths.<host>` entry crane uses to push
+ * to the kaiad registry. Returns a `registrytoken` entry when we can
+ * mint our own JWT; falls back to Basic when we can't.
+ *
+ * `repos` is the list of repositories the resulting JWT must cover —
+ * typically the one we're pushing (`<serviceName>`) plus `kaiad-agent`
+ * if the build also runs `crane append` against it. `actions` is the
+ * grant per repo; defaults to push+pull, but pull-only is used for
+ * build steps that just need to fetch a dep image.
+ */
+function buildKaiadRegistryAuthEntry(
+  repos: string[],
+  actions: ("push" | "pull")[] = ["push", "pull"]
+): Record<string, string> {
+  return buildKaiadRegistryAuthEntryWithAccess(
+    repos.map((name) => ({ type: "repository", name, actions }))
+  );
+}
+
+/**
+ * Variant of buildKaiadRegistryAuthEntry that takes a pre-built access
+ * list, used when different repos need different action sets in the
+ * same token (e.g. push+pull on the service repo, pull-only on a dep
+ * repo crane append fetches).
+ */
+function buildKaiadRegistryAuthEntryWithAccess(
+  access: RegistryAccess[]
+): Record<string, string> {
+  const cfg = getRegistryAuthConfig();
+  if (cfg) {
+    const { token } = signRegistryToken(cfg, {
+      subject: "kaiad-internal-worker",
+      access
+    });
+    return { registrytoken: token };
+  }
+  const basic = Buffer.from(
+    `${REGISTRY_PUSH_USER}:${REGISTRY_PUSH_PASSWORD}`
+  ).toString("base64");
+  return { auth: basic };
+}
+
+/**
+ * If `imageRef` is hosted on the kaiad registry (either via the
+ * external hostname or the internal loopback), return the repo segment.
+ * Otherwise null — the docker daemon's normal auth chain handles
+ * upstream registries (Docker Hub, ghcr.io, etc.) via the operator's
+ * `docker login`.
+ */
+function kaiadRepoFromImageRef(imageRef: string): string | null {
+  const trim = (host: string, ref: string): string | null => {
+    const prefix = `${host}/`;
+    if (!ref.startsWith(prefix)) return null;
+    const rest = ref.slice(prefix.length);
+    // Strip `:tag` and `@digest` suffixes to get the bare repo.
+    const atIdx = rest.indexOf("@");
+    const base = atIdx >= 0 ? rest.slice(0, atIdx) : rest;
+    const colonIdx = base.lastIndexOf(":");
+    return colonIdx >= 0 ? base.slice(0, colonIdx) : base;
+  };
+  return trim(REGISTRY_HOST, imageRef) ?? trim(REGISTRY_INTERNAL, imageRef);
+}
 
 export type BuildLoopHandles = {
   pollTimer: NodeJS.Timeout;
@@ -394,13 +533,20 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
       })
     );
 
-    // Resolve dependsOn → latest successful build of each. Bail on the
-    // build if any dep is missing (clearer signal than a build that
-    // tries to interpolate `{php_image_version}` and fails at
-    // `docker pull` because the literal string was left intact).
-    if (pipeline.dependsOn.length > 0) {
+    // Resolve dependsOn → latest successful build of each, plus the
+    // system-wide registry-host variables. Bail on the build if any
+    // dep is missing (clearer signal than a build that tries to
+    // interpolate `{php_image_version}` and fails at `docker pull`
+    // because the literal string was left intact).
+    //
+    // Substitution always runs — kaiad.yaml may reference
+    // {kaiad_registry_host} even without dependsOn.
+    {
       try {
-        const { vars, resolved } = await resolveDeps(query, svc.tenantId, pipeline);
+        const { vars, resolved } = await resolveDeps(query, svc.tenantId, pipeline, {
+          registryHost: REGISTRY_HOST,
+          registryInternal: REGISTRY_INTERNAL
+        });
         for (const r of resolved) {
           await appendBuildLog(
             query,
@@ -512,6 +658,7 @@ async function runBuild(query: QueryFn, build: ServiceBuildRow, logger: Logger):
         buildId: build.id,
         hostWs,
         hostArtifacts,
+        rootDir: root,
         pipeline,
         sha: build.gitSha,
         branch: build.branch,
@@ -598,12 +745,14 @@ async function runBuildContainer(params: {
   hostWs: string;
   /** Path on the HOST to the build's artifacts dir. */
   hostArtifacts: string;
+  /** Workspace root INSIDE the kaiad container — used for the per-build docker config dir. */
+  rootDir: string;
   pipeline: PipelineDefinition;
   sha: string;
   branch: string;
   serviceName: string;
 }): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const { query, buildId, hostWs, hostArtifacts, pipeline, sha, branch, serviceName } = params;
+  const { query, buildId, hostWs, hostArtifacts, rootDir, pipeline, sha, branch, serviceName } = params;
   if (!pipeline.build) return { ok: true };
 
   const envArgs = Object.entries(pipeline.build.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
@@ -611,6 +760,34 @@ async function runBuildContainer(params: {
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
     .join("\n");
+
+  // If the build.image is hosted on the kaiad registry (typically a
+  // dep's runtime image), the host docker daemon needs credentials to
+  // pull it. The CLI honours DOCKER_CONFIG and forwards X-Registry-Auth
+  // to the daemon on /images/create, so a per-build config with a
+  // pre-minted registrytoken is all we need.
+  const buildCfgDir = path.join(rootDir, "docker-build-config");
+  const kaiadRepo = kaiadRepoFromImageRef(pipeline.build.image);
+  if (kaiadRepo) {
+    await fs.mkdir(buildCfgDir, { recursive: true });
+    const authEntry = buildKaiadRegistryAuthEntry([kaiadRepo], ["pull"]);
+    await fs.writeFile(
+      path.join(buildCfgDir, "config.json"),
+      JSON.stringify(
+        {
+          auths: {
+            [REGISTRY_INTERNAL]: authEntry,
+            [REGISTRY_HOST]: authEntry
+          }
+        },
+        null,
+        2
+      )
+    );
+  }
+  const dockerEnv = kaiadRepo
+    ? { ...process.env, DOCKER_CONFIG: buildCfgDir }
+    : process.env;
 
   const dockerArgs = [
     "run",
@@ -638,7 +815,8 @@ async function runBuildContainer(params: {
 
   const res = await runProcStreaming("docker", dockerArgs, {
     onChunk: (chunk) => appendBuildLog(query, buildId, chunk),
-    timeoutMs: BUILD_TIMEOUT_MS
+    timeoutMs: BUILD_TIMEOUT_MS,
+    env: dockerEnv
   });
   if (res.code !== 0) {
     return { ok: false, reason: `build step exited with code ${res.code}` };
@@ -745,18 +923,48 @@ async function buildRuntimeImage(params: {
 
   await appendBuildLog(query, buildId, banner("runtime image (crane assembly)"));
 
-  // 0) Per-build docker config with Basic auth so crane runs the
-  //    /registry/token round-trip per push and gets a JWT scoped to
-  //    THIS repo. We start from the container-wide ~/.docker/config.json
-  //    (which holds operator-managed creds for upstream registries —
-  //    e.g. `docker login ghcr.io` so crane can pull private base
-  //    images) and OVERRIDE the kaiad-registry entries with our own
-  //    Basic auth. Without this merge, crane append against a private
-  //    base like ghcr.io/foo/bar would 401 even though the build-step
-  //    container can pull it via the host daemon's config.
+  // 0) Per-build docker config. We start from the container-wide
+  //    ~/.docker/config.json (which holds operator-managed creds for
+  //    upstream registries — e.g. `docker login ghcr.io` so crane can
+  //    pull private base images) and OVERRIDE the kaiad-registry
+  //    entries with a pre-minted JWT (`registrytoken`).
+  //
+  //    JWT scope:
+  //      - push+pull on `serviceName` (we're pushing THIS service's image)
+  //      - pull on `kaiad-agent` (crane append against the kaiad-agent
+  //        base in `crane append --base kaiad-agent`)
+  //      - pull on `runtime.image`'s repo, if that's a kaiad-hosted ref
+  //        (e.g. `panel.kaiad.dev/php-image:...` for builds that depend
+  //        on another in-house image). Without this, crane append
+  //        returns "Token lacks pull access to repository:<base>".
+  //
+  //    See `buildKaiadRegistryAuthEntry` — it falls back to Basic auth
+  //    only when the worker can't read the registry-auth keypair (i.e.
+  //    standalone worker, not embedded in a kaiad container).
   const dockerCfgDir = path.join(rootDir, "docker-config");
   await fs.mkdir(dockerCfgDir, { recursive: true });
-  const basic = Buffer.from(`${REGISTRY_PUSH_USER}:${REGISTRY_PUSH_PASSWORD}`).toString("base64");
+  // Push-scoped repos (the service image we're producing).
+  const pushRepos = [serviceName];
+  // Pull-scoped repos (everything crane needs to fetch). Default
+  // includes kaiad-agent; add the base image's repo when it's kaiad-
+  // hosted so crane append's pull is authorized.
+  const pullRepos = ["kaiad-agent"];
+  const baseRepo = kaiadRepoFromImageRef(runtime.image);
+  if (baseRepo && baseRepo !== serviceName) pullRepos.push(baseRepo);
+  const pushAccess: RegistryAccess[] = pushRepos.map((name) => ({
+    type: "repository",
+    name,
+    actions: ["push", "pull"]
+  }));
+  const pullAccess: RegistryAccess[] = pullRepos.map((name) => ({
+    type: "repository",
+    name,
+    actions: ["pull"]
+  }));
+  const kaiadAuthEntry = buildKaiadRegistryAuthEntryWithAccess([
+    ...pushAccess,
+    ...pullAccess
+  ]);
 
   let inheritedAuths: Record<string, unknown> = {};
   try {
@@ -777,10 +985,11 @@ async function buildRuntimeImage(params: {
       {
         auths: {
           ...inheritedAuths,
-          // Our Basic auth always wins for the kaiad registry (the
-          // inherited registrytoken would 401 with the wrong scope).
-          [REGISTRY_INTERNAL]: { auth: basic },
-          [REGISTRY_HOST]: { auth: basic }
+          // Our entry always wins for the kaiad registry (the inherited
+          // registrytoken from a previous build would have the wrong
+          // repo scope).
+          [REGISTRY_INTERNAL]: kaiadAuthEntry,
+          [REGISTRY_HOST]: kaiadAuthEntry
         }
       },
       null,
@@ -1204,19 +1413,18 @@ async function buildViaDockerfile(params: {
   //
   // Why not `docker push`: the host docker daemon authenticates with
   // Basic auth from ~/.docker/config.json, but the kaiad registry
-  // demands a JWT minted by /registry/token. docker login can't do
-  // that exchange. crane CAN — it's the same auth setup runtime-mode
-  // builds use successfully today. So we route the dockerfile-mode
-  // image through crane via `docker save | crane push -`.
+  // demands a JWT. docker login can't do the JWT exchange; crane CAN.
+  // So we route the dockerfile-mode image through crane via
+  // `docker save | crane push -`.
   //
   // The DOCKER_CONFIG dir is a private overlay: it inherits the
   // worker's existing config (so private upstream registries the
   // user `docker login`ed to still resolve) but overrides the kaiad
-  // registry entries with our Basic creds. /registry/token will
-  // accept those and hand back a JWT scoped to this repo.
+  // registry entries with an in-process-minted JWT scoped to this
+  // service's repo. See buildKaiadRegistryAuthEntry.
   const dockerCfgDir = path.join(rootDir, "docker-config");
   await fs.mkdir(dockerCfgDir, { recursive: true });
-  const basic = Buffer.from(`${REGISTRY_PUSH_USER}:${REGISTRY_PUSH_PASSWORD}`).toString("base64");
+  const kaiadAuthEntry = buildKaiadRegistryAuthEntry([serviceName]);
   let inheritedAuths: Record<string, unknown> = {};
   try {
     const home = process.env.HOME ?? "/";
@@ -1235,8 +1443,8 @@ async function buildViaDockerfile(params: {
       {
         auths: {
           ...inheritedAuths,
-          [REGISTRY_INTERNAL]: { auth: basic },
-          [REGISTRY_HOST]: { auth: basic }
+          [REGISTRY_INTERNAL]: kaiadAuthEntry,
+          [REGISTRY_HOST]: kaiadAuthEntry
         }
       },
       null,

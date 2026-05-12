@@ -20,6 +20,7 @@
     "@sm/db": "workspace:^",
     "@sm/domain": "workspace:*",
     "@sm/queue": "workspace:*",
+    "@sm/registry-auth": "workspace:*",
     "bullmq": "^5.47.2",
     "pg": "^8.14.1"
   },
