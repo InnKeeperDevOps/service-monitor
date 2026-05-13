@@ -1,0 +1,14 @@
+<pre class="mermaid">flowchart TB
+  CR["KaiadAgent CR<br/>(spec.manages, controlPlane,<br/>enrollment.secretRef, image, ...)"]
+  CR --> R1{manages rules<br/>on allowlist?}
+  R1 -->|no| F1["Ready=False<br/>Reason=InvalidSpec"]
+  R1 -->|yes| R2{enrollment Secret<br/>+ key present?}
+  R2 -->|no| F2["EnrollmentValid=False<br/>Reason=SecretNotFound /<br/>MissingKey / EmptyToken"]
+  R2 -->|yes| R3[Ensure ServiceAccount + Roles / ClusterRoles<br/>per manages rules]
+  R3 --> R4[Ensure Deployment<br/>image, env, imagePullSecrets]
+  R4 --> R5{Pod Ready?}
+  R5 -->|no, transient| F3["Ready=False<br/>Reason=DeploymentPending"]
+  R5 -->|yes| R6{Control plane<br/>sees agent online?}
+  R6 -->|no| F4["Ready=False<br/>Reason=AgentNotOnline"]
+  R6 -->|yes| OK["Ready=True<br/>status.enrolledAgentId set<br/>Reconciling=False"]
+</pre>

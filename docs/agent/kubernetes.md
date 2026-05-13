@@ -153,6 +153,11 @@ check:
 
 ## RBAC scope: what `manages` actually allows
 
+For the field-by-field CRD reference (every spec/status field, the
+full allow-list, condition types and reasons), see
+[KaiadAgent CRD reference]({% link reference/kaiad-agent-crd.md %}).
+The summary version is below.
+
 The operator validates `spec.manages` against an allow-list. As of v0.1
 the allow-list contains:
 
@@ -209,6 +214,7 @@ processing.
 
 ## See also
 
+- [KaiadAgent CRD reference]({% link reference/kaiad-agent-crd.md %}) — every field, the RBAC allow-list, status conditions, reconcile lifecycle.
 - [Install Agent (Linux/VM)]({% link agent/install.md %}) — manual flow for non-k8s.
 - [Agent runtimes]({% link agent/runtimes.md %}) — what `docker` / `podman` / `shell` / `kubernetes` actually do.
 - [Agent networking]({% link security/agent-networking.md %}) — egress and TLS.

@@ -18,6 +18,14 @@ The build pipeline and registry have their own reference pages — start here wh
 
 For the panel walkthrough (SSH key, service creation, first build), see [Onboarding a service]({% link getting-started/onboarding-services.md %}).
 
+## Kubernetes custom resources
+
+The Kaiad operator reconciles a single CRD that wires an agent + its scoped RBAC into a cluster:
+
+- **[`KaiadAgent` CRD reference]({% link reference/kaiad-agent-crd.md %})** — `kaiad.dev/v1alpha1`, spec fields, the RBAC allow-list, status condition types + reasons, reconcile lifecycle diagram.
+
+For the install path (helm chart, operator credential, first CR), see [Install on Kubernetes]({% link agent/kubernetes.md %}).
+
 ## OpenAPI
 
 The HTTP contract is captured in the **OpenAPI 3.1** document generated from shared contracts:

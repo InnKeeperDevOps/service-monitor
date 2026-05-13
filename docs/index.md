@@ -72,6 +72,7 @@ Agents are **egress-only** toward Kaiad for the SaaS path; customers firewall **
 - [`kaiad.yaml` reference]({% link reference/pipeline.md %}) — full pipeline schema, build modes, environments, validation rules.
 - [Pipeline variables]({% link reference/pipeline-variables.md %}) — `{var}` interpolation: system vars, dependency vars, naming rules.
 - [Built-in OCI registry]({% link reference/registry.md %}) — Kaiad's native registry: endpoints, auth, storage, GC.
+- [`KaiadAgent` CRD reference]({% link reference/kaiad-agent-crd.md %}) — the Kubernetes custom resource the operator reconciles into an agent + scoped RBAC.
 
 ## Runbooks
 
