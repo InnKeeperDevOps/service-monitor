@@ -261,6 +261,38 @@ The pod should reach `Ready 1/1` within a minute.
 
 ## 3. Apply a `KaiadAgent` resource
 
+> **Verify the CRD is installed first.** A `kubectl apply` of a
+> `KaiadAgent` against a cluster that doesn't have the CRD yet fails
+> with:
+>
+> ```
+> error: resource mapping not found for name: "<name>" namespace: "<ns>"
+> no matches for kind "KaiadAgent" in version "kaiad.dev/v1alpha1"
+> ensure CRDs are installed first
+> ```
+>
+> Quick check:
+>
+> ```bash
+> kubectl get crd kaiadagents.kaiad.dev
+> # NAME                       CREATED AT
+> # kaiadagents.kaiad.dev      2026-…
+> ```
+>
+> If that returns `(NotFound)`, install the CRD before continuing:
+>
+> ```bash
+> kubectl apply -f https://raw.githubusercontent.com/InnKeeperDevOps/kaiad/main/deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml
+> ```
+>
+> CRDs are **cluster-scoped** — once installed, every namespace can
+> apply `KaiadAgent` resources. Option A (Helm) installs the CRD as
+> part of `helm install`; Option B's first step does the same.
+> **`helm template | kubectl apply -f -`** does NOT install CRDs (Helm
+> only renders templates from `templates/`, not from `crds/`); use
+> `helm install` proper, or apply the CRD URL above as a separate
+> step.
+
 First, generate an enrollment token in the panel under **Settings →
 Enrollment tokens → Generate token** and create a Secret holding it in
 the agent's namespace:
@@ -393,6 +425,21 @@ owner refs) are deleted explicitly by the controller during finalizer
 processing.
 
 ## Troubleshooting
+
+**`error: resource mapping not found for name: "<n>" namespace: "<ns>"`
+ / `no matches for kind "KaiadAgent" in version "kaiad.dev/v1alpha1"`
+ / `ensure CRDs are installed first`**
+:   The CRD isn't installed in the cluster. Apply it before applying
+    any `KaiadAgent` resource:
+
+    ```bash
+    kubectl apply -f https://raw.githubusercontent.com/InnKeeperDevOps/kaiad/main/deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml
+    kubectl get crd kaiadagents.kaiad.dev   # should now exist
+    ```
+
+    Helm's `helm install` applies the chart's `crds/` directory
+    automatically; `helm template | kubectl apply -f -` does NOT —
+    apply the CRD URL above separately if you use the template flow.
 
 **`Ready=False, Reason=InvalidSpec`**
 :   `spec.manages` contains a rule outside the allow-list. The status

@@ -266,6 +266,21 @@ Behavior:
 
 ## Troubleshooting condition values
 
+Before any of these reasons can show up, the CRD must actually be
+installed. A `kubectl apply` of a `KaiadAgent` against a cluster
+without the CRD fails at `kubectl` time (not in the operator) with:
+
+```
+error: resource mapping not found for name: "<name>" namespace: "<ns>"
+no matches for kind "KaiadAgent" in version "kaiad.dev/v1alpha1"
+ensure CRDs are installed first
+```
+
+Apply the CRD once per cluster — see
+[Install on Kubernetes]({% link agent/kubernetes.md %}#3-apply-a-kaiadagent-resource)
+for the install command — then retry your CR apply. The CRD is
+cluster-scoped, so every namespace inherits it.
+
 | Reason | Meaning | Next step |
 |--------|---------|-----------|
 | `InvalidSpec` | A `manages[]` rule names a tuple outside the allow-list. | Fix the rule or open an issue arguing for the new allow-list entry. |
