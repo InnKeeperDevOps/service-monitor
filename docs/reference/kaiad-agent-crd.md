@@ -11,13 +11,16 @@ running agent Pod plus the supporting Kubernetes objects (Deployment,
 ServiceAccount, scoped RBAC, optional ImagePullSecret reference). This
 page is the field-level reference for the CR.
 
-For the install narrative (helm chart, operator credential, first CR),
-see [Install on Kubernetes]({% link agent/kubernetes.md %}). For the
+For the install narrative (operator credential, first CR), see
+[Install on Kubernetes]({% link agent/kubernetes.md %}) — both Helm
+and plain `kubectl apply` paths are documented there. For the
 underlying agent binary itself, see [Install Agent]({% link agent/install.md %}).
 
 The CRD source of truth is **`deploy/operator/api/v1alpha1/kaiadagent_types.go`**;
-the rendered CRD ships in the helm chart at
-**`deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml`**.
+the rendered CRD YAML lives at
+**`deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml`** (the
+file is plain `apiextensions.k8s.io/v1`, applicable with `kubectl apply
+-f` whether or not you use Helm).
 
 ## Identity
 
@@ -275,7 +278,7 @@ Behavior:
 
 ## See also
 
-- [Install on Kubernetes]({% link agent/kubernetes.md %}) — install narrative + helm chart.
+- [Install on Kubernetes]({% link agent/kubernetes.md %}) — install narrative with both Helm and plain `kubectl apply` paths.
 - [Binding services to agents]({% link agent/binding-services.md %}) — many-to-many binding lifecycle.
 - [Built-in OCI registry]({% link reference/registry.md %}) — what the `imagePullSecrets` Secret authenticates against.
 - [Agent networking]({% link security/agent-networking.md %}) — egress and TLS expectations.

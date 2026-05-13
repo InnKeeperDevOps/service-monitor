@@ -26,10 +26,11 @@ workloads.
 ## Prerequisites
 
 - A Kubernetes cluster (1.27+) and `kubectl` access.
-- `helm` 3.14+.
 - Network egress from the cluster to your Kaiad control plane on HTTPS/WSS.
 - An admin or owner login on the Kaiad panel (you'll need to mint an
   operator API credential).
+- `helm` 3.14+ **only if you take the helm install path** — there's an
+  equivalent plain `kubectl apply` path below.
 
 ## 1. Mint an operator API credential
 
@@ -51,6 +52,12 @@ lose it, revoke the credential and mint a new one.
 
 ## 2. Install the operator
 
+Two equivalent paths — pick one. Both install the same objects: the
+`kaiadagents.kaiad.dev` CRD, a 1-replica operator Deployment, and the
+operator's own ServiceAccount + ClusterRole + ClusterRoleBinding.
+
+### Option A: Helm
+
 ```bash
 kubectl create namespace kaiad-system
 
@@ -63,19 +70,207 @@ kubectl create secret generic kaiad-operator-credentials \
 helm install kaiad-operator \
   oci://ghcr.io/innkeeperdevops/charts/kaiad-operator \
   --namespace kaiad-system \
-  --set kaiad.apiBaseURL=https://panel.example.com
+  --set kaiad.apiBaseURL=https://panel.example.com \
+  --set kaiad.apiCredentialSecret.name=kaiad-operator-credentials
 ```
 
-The chart installs the `kaiadagents.kaiad.dev` CRD, a 1-replica operator
-Deployment, and the operator's own ServiceAccount + ClusterRole.
+### Option B: plain `kubectl apply` (no Helm)
 
-Confirm it's healthy:
+Three `kubectl apply` invocations: install the CRD, create the namespace
++ credential Secret, install the operator manifests.
+
+**1. Install the CRD.** Pinned to a release tag — bump when upgrading.
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/InnKeeperDevOps/kaiad/main/deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml
+```
+
+**2. Create the namespace and credential Secret.**
+
+```bash
+kubectl create namespace kaiad-system
+
+kubectl create secret generic kaiad-operator-credentials \
+  --namespace kaiad-system \
+  --from-literal=token="$KAIAD_OPERATOR_TOKEN"
+```
+
+**3. Install the operator manifests.** Save as `kaiad-operator.yaml`
+(adjust the image tag and `KAIAD_API_BASE_URL`) and apply.
+
+```yaml
+# kaiad-operator.yaml — operator ServiceAccount, RBAC, Deployment.
+# Equivalent to `helm template kaiad-operator deploy/operator/charts/kaiad-operator
+# --namespace kaiad-system --set kaiad.apiBaseURL=https://panel.example.com
+# --set kaiad.apiCredentialSecret.name=kaiad-operator-credentials`.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kaiad-operator
+  namespace: kaiad-system
+---
+# The ClusterRole grants both the operator's own management surface
+# AND the union of every (group, resource, verb) in the agent RBAC
+# allow-list — Kubernetes prevents the operator from creating Roles
+# for permissions it doesn't itself hold. Keep this in sync with
+# deploy/operator/internal/controller/allowlist.go.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kaiad-operator
+rules:
+  # --- Operator's own management surface ---
+  - apiGroups: ["kaiad.dev"]
+    resources: ["kaiadagents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kaiad.dev"]
+    resources: ["kaiadagents/status", "kaiadagents/finalizers"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "delete"]
+  # --- Agent allow-list union (must mirror allowlist.go) ---
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kaiad-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kaiad-operator
+subjects:
+  - kind: ServiceAccount
+    name: kaiad-operator
+    namespace: kaiad-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kaiad-operator
+  namespace: kaiad-system
+  labels:
+    app.kubernetes.io/name: kaiad-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kaiad-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kaiad-operator
+    spec:
+      serviceAccountName: kaiad-operator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          # Pin to a release tag — :latest works but skews silently.
+          image: ghcr.io/innkeeperdevops/kaiad-operator:vX.Y.Z
+          imagePullPolicy: IfNotPresent
+          args:
+            - --leader-elect              # disable in dev with --leader-elect=false
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+          env:
+            # Required when you want Ready=True to wait for the control
+            # plane to confirm the agent is online. Omit both env vars
+            # to get pod-readiness-only behavior.
+            - name: KAIAD_API_BASE_URL
+              value: https://panel.example.com
+            - name: KAIAD_API_CREDENTIAL
+              valueFrom:
+                secretKeyRef:
+                  name: kaiad-operator-credentials
+                  key: token
+            - name: KAIAD_OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+          readinessProbe:
+            httpGet: { path: /readyz,  port: health }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+```
+
+```bash
+kubectl apply -f kaiad-operator.yaml
+```
+
+### Confirm
+
+Either install path:
 
 ```bash
 kubectl -n kaiad-system get pods,deploy,clusterrole | grep kaiad
 ```
 
+The pod should reach `Ready 1/1` within a minute.
+
 ## 3. Apply a `KaiadAgent` resource
+
+First, generate an enrollment token in the panel under **Settings →
+Enrollment tokens → Generate token** and create a Secret holding it in
+the agent's namespace:
+
+```bash
+kubectl -n kaiad-system create secret generic kaiad-enrollment \
+  --from-literal=token='<paste-token-here>'
+```
+
+Then write the CR:
 
 ```yaml
 # edge-agent.yaml
@@ -88,9 +283,11 @@ spec:
   controlPlane:
     realtimeUrl: wss://panel.example.com/realtime
   enrollment:
-    autoMint: true            # operator mints a token via the API
-  image: ghcr.io/innkeeperdevops/kaiad-agent:latest
-  serviceId: svc-api-1        # optional: pin log frames to a Kaiad service
+    secretRef:
+      name: kaiad-enrollment      # the Secret you created above
+      key: token                  # default; omit to use 'token'
+  image: ghcr.io/innkeeperdevops/kaiad-agent:vX.Y.Z
+  serviceId: svc-api-1            # optional: pin log frames to one Kaiad service
   manages:
     - apiGroups: ["apps"]
       resources: ["deployments", "statefulsets"]
@@ -107,12 +304,16 @@ spec:
 ```
 
 The Kaiad panel (Agents → Enrollment Tokens → "Kubernetes (operator)" tab)
-generates this YAML for you with the right `realtimeUrl` pre-filled. Copy
-it from there to avoid typos.
+generates this YAML for you with the right `realtimeUrl` pre-filled and
+the right enrollment Secret name. Copy it from there to avoid typos.
 
 ```bash
 kubectl apply -f edge-agent.yaml
 ```
+
+For the full field-by-field schema (every spec/status field, the
+namespaceSelector semantics, what each Condition reason means), see
+[KaiadAgent CRD reference]({% link reference/kaiad-agent-crd.md %}).
 
 ## 4. Verify
 
