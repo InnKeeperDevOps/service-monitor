@@ -119,6 +119,10 @@ import {
 import { createNamedQueue, createRedisConnectionFromEnv } from "@sm/queue";
 import { buildRealtimeAgentHello } from "./agentHelloPayload.js";
 import {
+  buildOperatorInstallYaml,
+  parseOperatorInstallOptions
+} from "./operatorInstallYaml.js";
+import {
   ensureCoreSchema,
   enqueueManualBuild,
   getBuild,
@@ -2029,6 +2033,34 @@ export function buildServer(opts: BuildServerOptions = {}) {
         })
       );
     }
+  });
+
+  // Operator install bundle download. Renders a single YAML containing the
+  // CRD, namespace, ServiceAccount, ClusterRole, ClusterRoleBinding, and
+  // Deployment needed to run the Kaiad operator. Unauthenticated by design:
+  // contains no tenant-specific data, just static manifests templated with
+  // the operator namespace + image. The panel UI links to this endpoint as
+  // a download for the "Step 0 — install operator" section.
+  app.get("/api/v1/operator/install.yaml", async (req, reply) => {
+    const parsed = parseOperatorInstallOptions(
+      req.query as Record<string, string | string[] | undefined>
+    );
+    if (!parsed.ok) {
+      return reply.status(400).send(
+        apiErrorSchema.parse({
+          code: "INVALID_REQUEST",
+          message: parsed.reason,
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    const yaml = buildOperatorInstallYaml(parsed.value);
+    reply.header("Content-Type", "application/yaml; charset=utf-8");
+    reply.header(
+      "Content-Disposition",
+      'attachment; filename="kaiad-operator-install.yaml"'
+    );
+    return reply.send(yaml);
   });
 
   // --- SSH Keys ---

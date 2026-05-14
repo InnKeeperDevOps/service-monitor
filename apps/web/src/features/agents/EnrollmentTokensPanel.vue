@@ -68,6 +68,32 @@ const DEFAULT_KUBE_AGENT_NAME = "edge-agent";
 const DEFAULT_KUBE_NAMESPACE = "kaiad-system";
 const KUBE_SECRET_KEY = "token";
 
+// Operator install bundle defaults. The operator runs in its own namespace
+// (separate from any agent's namespace) and is pulled from GHCR by default
+// — only the agent image lives in this Kaiad's built-in registry.
+const DEFAULT_OPERATOR_NAMESPACE = "kaiad-system";
+const DEFAULT_OPERATOR_IMAGE = "ghcr.io/innkeeperdevops/kaiad-operator:0.1.0";
+
+function buildOperatorInstallUrl(opts: { namespace: string; image: string }): string {
+  const params = new URLSearchParams();
+  const ns = opts.namespace.trim() || DEFAULT_OPERATOR_NAMESPACE;
+  const img = opts.image.trim() || DEFAULT_OPERATOR_IMAGE;
+  if (ns !== DEFAULT_OPERATOR_NAMESPACE) params.set("namespace", ns);
+  if (img !== DEFAULT_OPERATOR_IMAGE) params.set("image", img);
+  const qs = params.toString();
+  return `/api/v1/operator/install.yaml${qs ? `?${qs}` : ""}`;
+}
+
+function buildOperatorInstallAbsoluteUrl(opts: { namespace: string; image: string }): string {
+  const path = buildOperatorInstallUrl(opts);
+  if (typeof window === "undefined") return `https://your-kaiad.example.com${path}`;
+  return `${window.location.protocol}//${window.location.host}${path}`;
+}
+
+function buildOperatorApplyCommand(opts: { namespace: string; image: string }): string {
+  return `kubectl apply -f ${buildOperatorInstallAbsoluteUrl(opts)}`;
+}
+
 function defaultAgentImage(): string {
   if (typeof window === "undefined") {
     return "panel.example.com/kaiad-agent:latest";
@@ -215,6 +241,9 @@ const pullSecretCopyMessage = ref<string | null>(null);
 const kubeAgentName = ref<string>(DEFAULT_KUBE_AGENT_NAME);
 const kubeNamespace = ref<string>(DEFAULT_KUBE_NAMESPACE);
 const kubeImage = ref<string>(defaultAgentImage());
+const operatorNamespace = ref<string>(DEFAULT_OPERATOR_NAMESPACE);
+const operatorImage = ref<string>(DEFAULT_OPERATOR_IMAGE);
+const operatorApplyCopyMessage = ref<string | null>(null);
 // We render only ACTIVE tokens by default. A long-lived tenant can have
 // thousands of expired/used tokens; rendering them all blocks the main
 // thread. The user can opt in via the "Show inactive" button.
@@ -347,6 +376,21 @@ async function handleCopyKubectlCommand() {
     kubectlCopyMessage.value = "Copied kubectl command to clipboard.";
   } catch {
     kubectlCopyMessage.value = "Unable to copy command automatically.";
+  }
+}
+
+async function handleCopyOperatorApplyCommand() {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(
+      buildOperatorApplyCommand({
+        namespace: operatorNamespace.value,
+        image: operatorImage.value
+      })
+    );
+    operatorApplyCopyMessage.value = "Copied kubectl command to clipboard.";
+  } catch {
+    operatorApplyCopyMessage.value = "Unable to copy command automatically.";
   }
 }
 
@@ -580,6 +624,60 @@ const kubeCopyBtn: CSSProperties = {
         agents in the same namespace don't share tokens. The agent consumes its token on first
         connect and persists its own credential.
       </p>
+
+      <fieldset :style="kubeFieldset">
+        <legend :style="kubeLegend">0 · Install operator (once per cluster)</legend>
+        <p :style="{ ...mutedText, margin: '0 0 0.55rem' }">
+          Apply the bundled YAML — CRD, namespace, ServiceAccount, ClusterRole,
+          ClusterRoleBinding, and Deployment in a single file. Skip this step if
+          the operator is already installed in this cluster.
+        </p>
+        <div :style="kubeRow">
+          <label :style="kubeFieldLabel">
+            <span :style="kubeFieldHint">Operator namespace</span>
+            <input
+              v-model="operatorNamespace"
+              aria-label="Operator namespace"
+              :placeholder="DEFAULT_OPERATOR_NAMESPACE"
+              :style="kubeMonoInput"
+            />
+          </label>
+          <label :style="kubeFieldLabel">
+            <span :style="kubeFieldHint">Operator image</span>
+            <input
+              v-model="operatorImage"
+              aria-label="Operator image"
+              :placeholder="DEFAULT_OPERATOR_IMAGE"
+              :style="{ ...kubeMonoInput, minWidth: '380px' }"
+            />
+          </label>
+        </div>
+        <div :style="{ ...kubeCopyRow, marginTop: '0.65rem' }">
+          <a
+            :href="buildOperatorInstallUrl({ namespace: operatorNamespace, image: operatorImage })"
+            download="kaiad-operator-install.yaml"
+            :style="{
+              ...kubePrimaryBtn(false),
+              textDecoration: 'none',
+              display: 'inline-block'
+            }"
+          >Download install.yaml</a>
+          <button type="button" :style="kubeCopyBtn" @click="handleCopyOperatorApplyCommand">
+            Copy kubectl apply command
+          </button>
+          <span
+            v-if="operatorApplyCopyMessage"
+            :style="{
+              fontSize: '0.8rem',
+              color: operatorApplyCopyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
+            }"
+          >{{ operatorApplyCopyMessage }}</span>
+        </div>
+        <pre
+          aria-label="kubectl apply operator command"
+          :style="{ ...kubeCommandBox, marginTop: '0.5rem' }"
+        >{{ buildOperatorApplyCommand({ namespace: operatorNamespace, image: operatorImage }) }}</pre>
+      </fieldset>
 
       <fieldset :style="kubeFieldset">
         <legend :style="kubeLegend">1 · Identity</legend>
