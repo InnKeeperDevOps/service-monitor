@@ -1,6 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // This is a Vite-bundled SPA, not a Node program — override the
+    // shared base's NodeNext (which makes vue-tsc treat the .vue virtual
+    // module as CJS and reject `import.meta`, TS1470). ESNext + bundler
+    // is the standard Vite/vue-tsc setup and matches tsconfig.node.json.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "jsx": "preserve",
     "rootDir": "src",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],

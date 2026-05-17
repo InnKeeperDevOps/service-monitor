@@ -328,7 +328,9 @@ describe("api", () => {
 
       const listedResponse = await app.inject({
         method: "GET",
-        url: "/api/v1/agents/enrollment-tokens",
+        // The list defaults to active-only; this token was just consumed
+        // (now inactive), so opt into the full list to assert on it.
+        url: "/api/v1/agents/enrollment-tokens?includeInactive=true",
         headers: { authorization: "Bearer dev-token" }
       });
       expect(listedResponse.statusCode).toBe(200);
@@ -414,7 +416,9 @@ describe("api", () => {
 
       const listedResponse = await app.inject({
         method: "GET",
-        url: "/api/v1/agents/enrollment-tokens",
+        // Just deactivated → inactive; opt into the full list (the
+        // default is active-only) to assert revoked state.
+        url: "/api/v1/agents/enrollment-tokens?includeInactive=true",
         headers: { authorization: "Bearer dev-token" }
       });
       const listed = listedResponse.json() as {

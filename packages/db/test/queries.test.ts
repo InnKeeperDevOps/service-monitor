@@ -310,6 +310,7 @@ describe("listAgents", () => {
         certFingerprint: "fp",
         allowedCapabilities: ["a", "b"],
         environment: "development",
+        runtimeBackend: null,
       },
     ]);
   });
@@ -328,7 +329,7 @@ describe("recordAgentHeartbeat", () => {
     await recordAgentHeartbeat(query, "t1", { agentId: "a1", version: "1.0.0" });
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO agents"),
-      ["a1", "t1", "1.0.0"],
+      ["a1", "t1", "1.0.0", null],
     );
   });
 
@@ -337,7 +338,7 @@ describe("recordAgentHeartbeat", () => {
     await recordAgentHeartbeat(query, "t1", { agentId: "a1", version: null });
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("ON CONFLICT (id) DO UPDATE"),
-      ["a1", "t1", null],
+      ["a1", "t1", null, null],
     );
   });
 });

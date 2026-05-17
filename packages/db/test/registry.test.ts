@@ -7,6 +7,10 @@ import {
   getRegistryBlobMeta,
   getRegistryManifestByDigest,
   getRegistryManifestByTag,
+  getRegistryManifestForRepo,
+  isManifestReachableInRepo,
+  repoHasTagForManifest,
+  deleteRegistryManifestIfUnreferenced,
   getRegistryUpload,
   insertRegistryBlob,
   insertRegistryManifest,
@@ -285,5 +289,103 @@ describe("registry: GC helpers", () => {
     expect(sql).toContain("NOT EXISTS");
     expect(sql).toContain("registry_tags");
     expect(sql).toContain("referenced_manifest_digests");
+  });
+});
+
+describe("registry: cross-repo content-dedup helpers", () => {
+  const mrow = {
+    digest: "sha256:7313",
+    repo: "voxel-rts-image",
+    media_type: "application/vnd.docker.distribution.manifest.v2+json",
+    body: Buffer.from('{"schemaVersion":2}'),
+    size_bytes: 19,
+    config_digest: null,
+    layer_digests: [],
+    referenced_manifest_digests: [],
+    created_at: "2026-05-17"
+  };
+
+  it("isManifestReachableInRepo: true when rows, false when empty; scoped SQL", async () => {
+    const yes = mockQuery([{ ok: 1 }]);
+    expect(await isManifestReachableInRepo(yes, "voxel-rts", "sha256:7313")).toBe(true);
+    const [sql, params] = (yes as any).mock.calls[0];
+    expect(sql).toContain("registry_tags");
+    expect(sql).toContain("referenced_manifest_digests");
+    expect(params).toEqual(["voxel-rts", "sha256:7313"]);
+    expect(await isManifestReachableInRepo(mockQuery([]), "voxel-rts", "sha256:7313")).toBe(
+      false
+    );
+  });
+
+  it("repoHasTagForManifest: true/false on rows; repo+digest scoped", async () => {
+    const q = mockQuery([{ ok: 1 }]);
+    expect(await repoHasTagForManifest(q, "voxel-rts", "sha256:7313")).toBe(true);
+    const [sql, params] = (q as any).mock.calls[0];
+    expect(sql).toContain("FROM registry_tags WHERE repo");
+    expect(sql).toContain("manifest_digest");
+    expect(params).toEqual(["voxel-rts", "sha256:7313"]);
+    expect(await repoHasTagForManifest(mockQuery([]), "voxel-rts", "x")).toBe(false);
+  });
+
+  it("deleteRegistryManifestIfUnreferenced: deleted vs kept", async () => {
+    const del = mockQuery([{ digest: "sha256:7313" }]);
+    expect(await deleteRegistryManifestIfUnreferenced(del, "sha256:7313")).toBe("deleted");
+    const [sql] = (del as any).mock.calls[0];
+    expect(sql).toContain("DELETE FROM registry_manifests");
+    expect(sql).toContain("NOT EXISTS");
+    expect(await deleteRegistryManifestIfUnreferenced(mockQuery([]), "sha256:7313")).toBe(
+      "kept"
+    );
+  });
+
+  it("getRegistryManifestForRepo: by tag delegates to the tag join", async () => {
+    const q = mockQuery([mrow]);
+    const m = await getRegistryManifestForRepo(q, {
+      repo: "voxel-rts",
+      reference: "a916",
+      isDigest: false
+    });
+    expect(m?.digest).toBe("sha256:7313");
+    const [sql] = (q as any).mock.calls[0];
+    expect(sql).toContain("JOIN registry_tags");
+  });
+
+  it("getRegistryManifestForRepo: by digest served only when reachable", async () => {
+    // reachable: getByDigest → row, then reachability → row.
+    const reachable = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [mrow] })
+      .mockResolvedValueOnce({ rows: [{ ok: 1 }] }) as unknown as QueryFn;
+    expect(
+      (
+        await getRegistryManifestForRepo(reachable, {
+          repo: "voxel-rts",
+          reference: "sha256:7313",
+          isDigest: true
+        })
+      )?.digest
+    ).toBe("sha256:7313");
+
+    // present but NOT reachable from this repo → null (no disclosure).
+    const blocked = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [mrow] })
+      .mockResolvedValueOnce({ rows: [] }) as unknown as QueryFn;
+    expect(
+      await getRegistryManifestForRepo(blocked, {
+        repo: "some-unrelated",
+        reference: "sha256:7313",
+        isDigest: true
+      })
+    ).toBeNull();
+
+    // absent entirely → null.
+    expect(
+      await getRegistryManifestForRepo(mockQuery([]), {
+        repo: "voxel-rts",
+        reference: "sha256:deadbeef",
+        isDigest: true
+      })
+    ).toBeNull();
   });
 });
