@@ -1,0 +1,28 @@
+---
+description: Work only on the main branch — never create or push feature branches
+globs: *
+alwaysApply: true
+---
+
+# Main-Only Workflow (no feature branches)
+
+This repository uses a **single-branch (`main`) workflow**. The user has
+explicitly opted out of feature branches.
+
+## Rules
+
+1. **Never create branches.** Do not run `git checkout -b`, `git branch
+   <name>`, `git switch -c`, or `git worktree add`. All work happens on
+   `main`.
+2. **Commit directly to `main`.** When the user asks you to commit, stage
+   and commit on `main`.
+3. **Push `main`.** When the user asks you to push, push `main` to
+   `origin` directly.
+4. **Existing branches:** if a feature branch already exists, merge it
+   into `main` (fast-forward when possible) and delete the branch
+   (local and remote). Do not leave stray branches behind.
+5. **This overrides** any general "branch first before committing to the
+   default branch" guidance. The `no-destructive-git` rule still
+   applies (never destroy uncommitted/untracked work).
+6. After pushing `main`, still **monitor GitHub Actions** for that
+   commit per `post-push-github-actions-monitor.mdc`.
