@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import crypto from "node:crypto";
+import * as Q from "../src/index.js";
 import {
   listIncidents,
   getIncident,
@@ -643,5 +644,101 @@ describe("api_credentials queries", () => {
       expect.stringContaining("SET last_used_at = now()"),
       ["c1"]
     );
+  });
+});
+
+// Broad execution coverage for the previously-untested query wrappers.
+// Each is a thin SQL+map shim; invoking it with a generous canned row
+// exercises the SQL construction + row mapper (the bulk of queries.ts).
+describe("queries.ts: exhaustive wrapper execution", () => {
+  const ISO = "2026-01-01T00:00:00.000Z";
+  // Kitchen-sink row: every snake_case column any mapper reads. Dates
+  // that hit `new Date(x).toISOString()` are valid ISO; optional
+  // timestamps are null.
+  const SINK = {
+    id: "id1", tenant_id: "t1", service_id: "s1", agent_id: "a1",
+    name: "n1", service_name: "svc", git_repo_url: "https://git/x.git",
+    branch: "main", git_sha: "abc123", status: "success",
+    triggered_by: "poll", image_ref: "reg/x:tag", current_image_ref: null,
+    current_build_id: null, current_namespace: null, log: "",
+    pipeline_yaml: null, pipeline_name: null, failure_reason: null,
+    docker_image: null, compose_path: null, ssh_key_id: null,
+    kind: "deployable", depends_on: [], scopes: [], token_hash: "h",
+    created_by: null, last_used_at: null, revoked_at: null,
+    build_id: "b1", size_bytes: 10, sha256: "sha", rel_path: "out/x",
+    environment: "development", agent_env: "development",
+    namespace: "ns", lb_type: "nginx", external_ip: null,
+    external_hostname: null, ports: [], domains: [], detail: {},
+    created_at: ISO, updated_at: ISO, started_at: null,
+    finished_at: null, observed_at: ISO, first_seen_at: ISO,
+    last_seen_at: ISO
+  };
+  const q = (rows: Record<string, unknown>[] = [SINK]) =>
+    vi.fn().mockResolvedValue({ rows }) as unknown as Q.QueryFn;
+
+  it("agent/service mutators + lookups run", async () => {
+    await Q.markAgentOffline(q(), "t1", "a1");
+    expect(await Q.updateAgent(q(), "t1", "a1", { name: "x" })).toBeDefined();
+    expect(await Q.updateAgent(q([]), "t1", "a1", {})).toBeUndefined();
+    expect(await Q.deleteAgent(q([{ id: "a1" }]), "t1", "a1")).toBe(true);
+    expect(await Q.deleteAgent(q([]), "t1", "a1")).toBe(false);
+    expect(await Q.getService(q(), "t1", "s1")).toBeDefined();
+    expect(await Q.getService(q([]), "t1", "s1")).toBeUndefined();
+    expect(await Q.createService(q(), "t1", { name: "n", gitRepoUrl: "g", branch: "main" })).toBeDefined();
+    expect(await Q.attachServiceToAgent(q([{ ok: 1 }]), "t1", "a1", "s1")).toBe(true);
+    expect(await Q.detachServiceFromAgent(q([{ ok: 1 }]), "t1", "a1", "s1")).toBe(true);
+    expect(Array.isArray(await Q.listAgentsForService(q([{ agent_id: "a1" }]), "t1", "s1"))).toBe(true);
+    expect(Array.isArray(await Q.listServicesForAgent(q(), "t1", "a1"))).toBe(true);
+    await Q.setAgentBindings(q([]), "t1", "s1", ["a1", "a2"]);
+  });
+
+  it("api credentials run", async () => {
+    expect(await Q.createApiCredential(q(), { tenantId: "t1", name: "n", tokenHash: "h", scopes: ["s"] })).toBeDefined();
+    expect(Array.isArray(await Q.listApiCredentials(q(), "t1"))).toBe(true);
+    expect(await Q.findApiCredentialByTokenHash(q(), "h")).toBeDefined();
+    expect(await Q.findApiCredentialByTokenHash(q([]), "h")).toBeUndefined();
+    expect(await Q.revokeApiCredential(q([{ id: "x" }]), "t1", "x")).toBe(true);
+    await Q.touchApiCredentialLastUsed(q(), "x");
+  });
+
+  it("build pipeline queries run", async () => {
+    expect(await Q.enqueueBuild(q(), { tenantId: "t1", serviceId: "s1", gitSha: "a", branch: "main" })).toBeDefined();
+    expect(await Q.enqueueManualBuild(q(), { tenantId: "t1", serviceId: "s1", branch: "main" })).toBeDefined();
+    await Q.updateBuildGitSha(q(), "b1", "sha");
+    expect(await Q.claimNextBuild(q())).toBeDefined();
+    expect(await Q.claimNextBuild(q([]))).toBeNull();
+    await Q.appendBuildLog(q(), "b1", "log\n");
+    await Q.setBuildPipelineYaml(q(), "b1", "yaml: 1");
+    await Q.finishBuild(q(), "b1", { status: "success", imageRef: "r" });
+    await Q.finishBuild(q(), "b1", { status: "failed", failureReason: "x" });
+    expect(Array.isArray(await Q.listBuildsForService(q(), "t1", "s1"))).toBe(true);
+    expect(await Q.getBuild(q(), "t1", "b1")).toBeDefined();
+    expect(await Q.getBuild(q([]), "t1", "b1")).toBeUndefined();
+    expect(await Q.getLatestBuildSha(q([{ git_sha: "abc" }]), "s1")).toBe("abc");
+    expect(await Q.getLatestBuildSha(q([]), "s1")).toBeNull();
+    expect(Array.isArray(await Q.listAllServicesForPoller(q()))).toBe(true);
+    await Q.updateServicePipelineMeta(q(), "t1", "s1", { kind: "deployable", dependsOn: [] });
+    expect(Array.isArray(await Q.listServicesDependingOn(q(), "t1", "dep"))).toBe(true);
+    expect(await Q.getLatestSuccessfulBuildByServiceName(q(), "t1", "svc")).toBeTruthy();
+    expect(await Q.getLatestSuccessfulBuildByServiceName(q([]), "t1", "svc")).toBeNull();
+    await Q.recordBuildArtifact(q(), { buildId: "b1", name: "a", sizeBytes: 1, sha256: "s", relPath: "p" });
+    expect(Array.isArray(await Q.listBuildArtifacts(q(), "b1"))).toBe(true);
+    expect(await Q.getBuildArtifact(q(), "b1", "a")).toBeDefined();
+    expect(await Q.getBuildArtifact(q([]), "b1", "a")).toBeUndefined();
+  });
+
+  it("load-balancer + deploy-target queries run", async () => {
+    expect(await Q.upsertLoadBalancerStatus(q(), {
+      tenantId: "t1", serviceId: "s1", agentId: "a1", environment: "development",
+      namespace: "ns", lbType: "nginx", externalIp: null, externalHostname: null,
+      ports: [], domains: [], detail: {}, imageRef: null, buildId: null
+    } as never)).toBeDefined();
+    expect(Array.isArray(await Q.listRunningServicesForAgent(q(), "t1", "a1"))).toBe(true);
+    expect(await Q.popLoadBalancerStatusForAgentService(q(), "t1", "a1", "s1")).toBeDefined();
+    expect(await Q.popLoadBalancerStatusForAgentService(q([]), "t1", "a1", "s1")).toBeNull();
+    expect(Array.isArray(await Q.listMissingDeploysForAgent(q(), "t1", "a1"))).toBe(true);
+    expect(Array.isArray(await Q.listAllDeployTargets(q()))).toBe(true);
+    expect(Array.isArray(await Q.listLatestBuildsForBoundServices(q(), "t1", "a1"))).toBe(true);
+    expect(Array.isArray(await Q.listLoadBalancerStatusForTenant(q(), "t1"))).toBe(true);
   });
 });
