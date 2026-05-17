@@ -8,6 +8,24 @@ on:
 jobs:
   test-and-coverage:
     runs-on: ubuntu-latest
+    # Postgres-backed integration tests (apps/api/test/server.integration*,
+    # *_pg) opt in via TEST_DATABASE_URL. Without it the suites skip and
+    # the DB-bound server.ts surface stays uncovered, failing the 80%
+    # gate — so CI provides a throwaway Postgres service.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kaiad_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kaiad_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/kaiad_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
