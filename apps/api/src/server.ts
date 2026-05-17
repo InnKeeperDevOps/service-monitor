@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { bootstrapEnv, getDataDir, isSetupRequired } from "./bootstrapEnv.js";
 import { setupRoutes, type SetupCompleteCallback } from "./setupRoutes.js";
@@ -125,6 +129,10 @@ import {
 import {
   ensureCoreSchema,
   enqueueManualBuild,
+  getRegistryRepoVisibility,
+  setRegistryRepoVisibility,
+  listRegistryRepoVisibility,
+  getRegistryManifestByTag,
   getBuild,
   getBuildArtifact,
   listBuildArtifacts,
@@ -539,6 +547,48 @@ export function buildServer(opts: BuildServerOptions = {}) {
   // Generate the keypair eagerly so the registry can read cert.pem at startup.
   ensureRegistryAuth(registryAuthConfig);
 
+  // Repositories that are ALWAYS anonymously pullable, regardless of the
+  // registry_repository_visibility table. `kaiad-agent` and
+  // `kaiad-operator` are baked into the kaiad image and force-published
+  // public on boot (see the bootstrap after listen), so
+  // `docker pull <host>/kaiad-agent:latest`, the operator install
+  // bundle's image, and KaiadAgent pods always work without GHCR
+  // access. Extra always-public repos can be added via
+  // KAIAD_REGISTRY_PUBLIC_PULL_REPOS="repo-a,repo-b".
+  const FORCED_PUBLIC_REPOS = new Set(
+    [
+      "kaiad-agent",
+      "kaiad-operator",
+      ...(process.env.KAIAD_REGISTRY_PUBLIC_PULL_REPOS ?? "").split(",")
+    ]
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+
+  /**
+   * Is `repo` anonymously pullable? True when it is force-public, or its
+   * registry_repository_visibility row is public. Falls back to the
+   * force-public set when the registry DB is unavailable so the baked-in
+   * agent image stays pullable even without Postgres.
+   */
+  async function isRepoPubliclyPullable(repo: string): Promise<boolean> {
+    if (FORCED_PUBLIC_REPOS.has(repo)) return true;
+    try {
+      const pool = await getRegistryPool();
+      if (!pool) return false;
+      const visible = await getRegistryRepoVisibility(
+        async (sql: string, params: unknown[]) => {
+          const r = await pool.query(sql, params as unknown[]);
+          return { rows: r.rows as Record<string, unknown>[] };
+        },
+        repo
+      );
+      return visible === true;
+    } catch {
+      return false;
+    }
+  }
+
   app.get("/registry/token", async (req, reply) => {
     // Docker daemons frequently request the same realm with multiple
     // ?scope= params (one per repo touched in the operation), and
@@ -568,28 +618,52 @@ export function buildServer(opts: BuildServerOptions = {}) {
       }
     }
 
-    if (!password) {
-      reply.header("WWW-Authenticate", 'Basic realm="kaiad-registry"');
-      return reply.status(401).send({ errors: [{ code: "UNAUTHORIZED", message: "Basic auth required" }] });
-    }
+    const requested = parseScopes(scope);
 
-    // Resolve credential. Try kaiad session first (admin-class push).
+    // Resolve credential. Try kaiad session first (admin-class push),
+    // then a (peeked) enrollment token. Skipped entirely when no Basic
+    // auth was sent — anonymous callers can still get a public-pull
+    // token below.
     type Grant = { subject: string; canPush: boolean };
     let grant: Grant | null = null;
-    const session = await resolveSession(authStore, `Bearer ${password}`);
-    if (session) {
-      const adminLike = session.role === "owner" || session.role === "admin";
-      grant = { subject: session.id, canPush: adminLike };
-    }
-    if (!grant) {
-      const enroll = await peekEnrollmentToken(password);
-      if (enroll) {
-        grant = { subject: `enrollment:${enroll.tokenId}`, canPush: false };
+    if (password) {
+      const session = await resolveSession(authStore, `Bearer ${password}`);
+      if (session) {
+        const adminLike = session.role === "owner" || session.role === "admin";
+        grant = { subject: session.id, canPush: adminLike };
+      }
+      if (!grant) {
+        const enroll = await peekEnrollmentToken(password);
+        if (enroll) {
+          grant = { subject: `enrollment:${enroll.tokenId}`, canPush: false };
+        }
       }
     }
+
+    // Anonymous public pull: when every requested scope is pull-only on
+    // a default-public repo (kaiad-agent), hand back a token without
+    // credentials. This is the standard public-registry behaviour and
+    // is what makes `<host>/kaiad-agent:latest` pullable out of the box.
+    if (!grant && requested.length > 0) {
+      const pullOnlyRepos = requested.every(
+        (r) =>
+          r.type === "repository" &&
+          r.actions.length > 0 &&
+          r.actions.every((a) => a === "pull")
+      );
+      const allPublic =
+        pullOnlyRepos &&
+        (await Promise.all(requested.map((r) => isRepoPubliclyPullable(r.name)))).every(Boolean);
+      if (allPublic) {
+        grant = { subject: "anonymous", canPush: false };
+      }
+    }
+
     if (!grant) {
       reply.header("WWW-Authenticate", 'Basic realm="kaiad-registry"');
-      return reply.status(401).send({ errors: [{ code: "UNAUTHORIZED", message: "Invalid credentials" }] });
+      return reply
+        .status(401)
+        .send({ errors: [{ code: "UNAUTHORIZED", message: password ? "Invalid credentials" : "Basic auth required" }] });
     }
 
     // Translate the requested scope into what we'll grant.
@@ -600,7 +674,6 @@ export function buildServer(opts: BuildServerOptions = {}) {
     // Catalog and other registry-wide ops aren't granted to either —
     // browsing /v2/_catalog needs an explicit per-tenant scope we
     // don't model yet.
-    const requested = parseScopes(scope);
     const granted: RegistryAccess[] =
       requested.length === 0
         ? []
@@ -666,6 +739,95 @@ export function buildServer(opts: BuildServerOptions = {}) {
     };
   }
 
+  /**
+   * Publish one baked OCI bundle to the local registry if its `:latest`
+   * tag is missing, then (re)assert the repo public. Best-effort: logs
+   * and swallows failures so the API still serves.
+   */
+  async function publishBakedBundle(
+    repo: string,
+    bundle: string,
+    version: string
+  ): Promise<void> {
+    const port = Number(process.env.PORT ?? 3001);
+    const registry = `127.0.0.1:${port}`; // kaiad serves /v2/* itself
+    const craneBin = process.env.KAIAD_CRANE_BIN || "/usr/local/bin/crane";
+
+    try {
+      const ctx = await getRegistryAdminContext();
+      if (!ctx) {
+        console.error(`[image-bootstrap] registry DB unavailable; skipping ${repo}`);
+        return;
+      }
+
+      const existing = await getRegistryManifestByTag(ctx.queryFn, repo, "latest");
+      if (existing) {
+        await setRegistryRepoVisibility(ctx.queryFn, repo, true);
+        console.error(`[image-bootstrap] ${repo}:latest already present; ensured public`);
+        return;
+      }
+
+      if (!fs.existsSync(bundle)) {
+        console.error(`[image-bootstrap] no baked bundle at ${bundle}; skipping ${repo}`);
+        return;
+      }
+      if (!fs.existsSync(craneBin)) {
+        console.error(`[image-bootstrap] crane not found at ${craneBin}; cannot publish ${repo}`);
+        return;
+      }
+
+      // Mint our own push token (the dev-token shortcut is disabled in
+      // prod, so don't rely on it). Signed with the same registry key
+      // the /v2 verifier checks.
+      const { token } = signRegistryToken(registryAuthConfig, {
+        subject: "system:image-bootstrap",
+        access: [{ type: "repository", name: repo, actions: ["push", "pull"] }]
+      });
+
+      const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), `kaiad-${repo}-push-`));
+      try {
+        fs.writeFileSync(
+          path.join(cfgDir, "config.json"),
+          JSON.stringify({ auths: { [registry]: { registrytoken: token } } })
+        );
+        const run = promisify(execFile);
+        const env = { ...process.env, DOCKER_CONFIG: cfgDir };
+        for (const tag of [version, "latest"]) {
+          console.error(`[image-bootstrap] pushing ${bundle} → ${registry}/${repo}:${tag}`);
+          await run(craneBin, ["--insecure", "push", bundle, `${registry}/${repo}:${tag}`], {
+            env
+          });
+        }
+        await setRegistryRepoVisibility(ctx.queryFn, repo, true);
+        console.error(`[image-bootstrap] published ${repo} and set public`);
+      } finally {
+        fs.rmSync(cfgDir, { recursive: true, force: true });
+      }
+    } catch (err) {
+      console.error(`[image-bootstrap] ${repo} failed (non-fatal):`, err);
+    }
+  }
+
+  /**
+   * Boot-time guarantee for the images baked into the kaiad image at
+   * docker-build time (no runtime toolchain needed — the Go binaries
+   * were compiled in the Dockerfile): publish kaiad-agent and
+   * kaiad-operator if missing and keep them public, so agents and the
+   * operator install bundle pull from this Kaiad without GHCR access.
+   */
+  async function ensureBundledImagesPublished(): Promise<void> {
+    await publishBakedBundle(
+      "kaiad-agent",
+      process.env.KAIAD_AGENT_BUNDLE || "/opt/kaiad-agent.tar",
+      process.env.KAIAD_AGENT_VERSION || "0.1.0"
+    );
+    await publishBakedBundle(
+      "kaiad-operator",
+      process.env.KAIAD_OPERATOR_BUNDLE || "/opt/kaiad-operator.tar",
+      process.env.KAIAD_OPERATOR_VERSION || "0.1.0"
+    );
+  }
+
   // ── Registry-management API (panel-only) ───────────────────
   // Reads from Postgres directly. The native /v2/* server (registered
   // below) handles OCI distribution traffic; this surface returns the
@@ -716,9 +878,66 @@ export function buildServer(opts: BuildServerOptions = {}) {
         })
       );
     }
-    const repositories = await registryListRepositories(ctx.queryFn);
-    return { repositories };
+    const [repositories, visibilityRows] = await Promise.all([
+      registryListRepositories(ctx.queryFn),
+      listRegistryRepoVisibility(ctx.queryFn)
+    ]);
+    const visById = new Map(visibilityRows.map((v) => [v.repo, v.public]));
+    return {
+      repositories: repositories.map((r) => {
+        const forcedPublic = FORCED_PUBLIC_REPOS.has(r.name);
+        return {
+          ...r,
+          public: forcedPublic || visById.get(r.name) === true,
+          // UI locks the toggle for force-public repos (e.g. kaiad-agent).
+          forcedPublic
+        };
+      })
+    };
   });
+
+  // Set a repository's anonymous-pull visibility. Force-public repos
+  // (kaiad-agent) cannot be made private — the agent image must stay
+  // pullable for unattended operator deployments.
+  app.put<{ Params: { name: string }; Body: { public?: unknown } }>(
+    "/api/v1/registry/repositories/:name/visibility",
+    async (req, reply) => {
+      const session = await requireAdminSession(req, reply);
+      if (!session) return;
+      const isPublic = (req.body as { public?: unknown })?.public;
+      if (typeof isPublic !== "boolean") {
+        return reply.status(400).send(
+          apiErrorSchema.parse({
+            code: "INVALID_REQUEST",
+            message: "Body must be { public: boolean }",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const name = req.params.name;
+      if (FORCED_PUBLIC_REPOS.has(name) && !isPublic) {
+        return reply.status(409).send(
+          apiErrorSchema.parse({
+            code: "FORCED_PUBLIC",
+            message: `${name} is always public and cannot be made private`,
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const ctx = await getRegistryAdminContext();
+      if (!ctx) {
+        return reply.status(503).send(
+          apiErrorSchema.parse({
+            code: "REGISTRY_UNAVAILABLE",
+            message: "Registry storage not configured (DATABASE_URL missing)",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      await setRegistryRepoVisibility(ctx.queryFn, name, isPublic);
+      return { name, public: isPublic || FORCED_PUBLIC_REPOS.has(name) };
+    }
+  );
 
   // Repo names can contain slashes (e.g. `library/alpine`). Fastify
   // doesn't accept '/' inside a single :name param, so the panel must
@@ -784,7 +1003,10 @@ export function buildServer(opts: BuildServerOptions = {}) {
     // honour KAIAD_REGISTRY_REALM if set; otherwise default to the
     // service-relative path and let the host nginx rewrite if needed.
     tokenRealm: process.env.KAIAD_REGISTRY_REALM || "/registry/token",
-    service: registryAuthConfig.service
+    service: registryAuthConfig.service,
+    // Lets the /v2 pull routes serve public repos with no bearer token
+    // at all (same predicate the token minter uses for anonymous grants).
+    isPubliclyPullable: isRepoPubliclyPullable
   });
 
   // WebSocket routes must live in an async child plugin (Fastify 5 + @fastify/websocket);
@@ -3254,7 +3476,7 @@ export function buildServer(opts: BuildServerOptions = {}) {
     return reply.status(404).send({ code: "NOT_FOUND", message: "Route not found" });
   });
 
-  return Object.assign(app, { realtimeManager });
+  return Object.assign(app, { realtimeManager, ensureBundledImagesPublished });
 }
 
 /** Avoid auto-listen in test runners; allow normal `node dist/server.js` startup. */
@@ -3371,6 +3593,12 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
     app.log.error(err);
     process.exit(1);
   }
+
+  // Ensure the baked agent + operator images are published + public.
+  // Runs after listen so the loopback /v2 endpoint it pushes to is
+  // accepting connections. Detached: self-logs, never throws, must not
+  // delay readiness.
+  void app.ensureBundledImagesPublished();
 
   process.on("SIGTERM", () => {
     void shutdownFn();

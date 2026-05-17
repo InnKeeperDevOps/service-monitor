@@ -81,6 +81,39 @@ RUN crane append \
       --new_tag kaiad-agent:bundle \
       --output /opt/kaiad-agent.tar
 
+# ── Build stage: kaiad-operator Go binary ──────────────────
+# Same rationale as the agent: build here so the OCI tarball is baked
+# into the kaiad image and published to the registry on first boot —
+# clusters install the operator from this Kaiad, no GHCR access needed.
+# go.mod requires go 1.26 (newer than the agent's toolchain).
+FROM golang:1.26 AS operator-build
+WORKDIR /src
+COPY deploy/operator/go.mod deploy/operator/go.sum ./
+RUN go mod download
+COPY deploy/operator/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/manager ./cmd/manager
+
+# ── Build stage: assemble kaiad-operator OCI tarball ───────
+# Output /opt/kaiad-operator.tar is a `crane push`-able image of
+# distroless/static:nonroot (same non-root base the operator's own
+# Dockerfile uses) with /manager layered in AND `ENTRYPOINT
+# ["/manager"]` set, so it's a proper self-contained operator image —
+# parity with the GHCR build, no k8s `command:` override needed. The
+# distroless `:nonroot` base's User (65532) is preserved by mutate, so
+# the Deployment's runAsNonRoot is satisfied without a runAsUser.
+FROM crane-bin AS operator-bundle
+COPY --from=operator-build /out/manager /tmp/oprootfs/manager
+RUN chmod +x /tmp/oprootfs/manager \
+ && cd /tmp/oprootfs && tar -cf /tmp/operator-layer.tar manager
+# `crane mutate <base> --append <layer> --entrypoint …` does base-pull +
+# layer-append + config(entrypoint) in one step and writes a pushable
+# tarball — unlike `crane append`, which can't set the entrypoint.
+RUN crane mutate gcr.io/distroless/static:nonroot \
+      --append /tmp/operator-layer.tar \
+      --entrypoint /manager \
+      -t kaiad-operator:bundle \
+      -o /opt/kaiad-operator.tar
+
 # ── Runtime stage ──────────────────────────────────────────
 FROM node:22-slim AS runtime
 WORKDIR /app
@@ -120,8 +153,9 @@ COPY --from=build /build/apps/worker/package.json ./apps/worker/
 COPY --from=build /build/apps/worker/node_modules ./apps/worker/node_modules
 COPY --from=build /build/packages ./packages
 
-# Bake the agent OCI tarball + crane + the push-on-boot shim.
+# Bake the agent + operator OCI tarballs + crane + the push-on-boot shim.
 COPY --from=agent-bundle /opt/kaiad-agent.tar /opt/kaiad-agent.tar
+COPY --from=operator-bundle /opt/kaiad-operator.tar /opt/kaiad-operator.tar
 COPY --from=crane-bin /usr/local/bin/crane /usr/local/bin/crane
 COPY deploy/docker/push-agent-on-boot.sh /usr/local/bin/push-agent-on-boot.sh
 RUN chmod +x /usr/local/bin/push-agent-on-boot.sh
@@ -130,15 +164,18 @@ ENV NODE_ENV=production
 ENV PORT=3001
 ENV SM_EMBED_WORKER=1
 ENV KAIAD_DATA_DIR=/data
-# Defaults the push-on-boot script reads. Override per environment.
+# Defaults the boot-time publisher reads. Override per environment.
 ENV KAIAD_AGENT_BUNDLE=/opt/kaiad-agent.tar
 ENV KAIAD_AGENT_VERSION=0.1.0
+ENV KAIAD_OPERATOR_BUNDLE=/opt/kaiad-operator.tar
+ENV KAIAD_OPERATOR_VERSION=0.1.0
 ENV KAIAD_REGISTRY_INTERNAL=registry:5000
 
 VOLUME ["/data"]
 EXPOSE 3001
 
-# Background the push so a slow / failing image push never blocks the
-# API from coming up. nohup detaches it from the shell so kaiad doesn't
-# leave a zombie when the script exits.
-CMD ["/bin/sh", "-c", "nohup /usr/local/bin/push-agent-on-boot.sh > /tmp/push-agent.log 2>&1 & exec node apps/api/dist/server.js"]
+# The API itself publishes the baked kaiad-agent bundle on boot if it's
+# missing and asserts it public (see ensureAgentImagePublished in
+# apps/api/src/server.ts). push-agent-on-boot.sh is kept in the image as
+# a manual fallback but is no longer wired into the entrypoint.
+CMD ["node", "apps/api/dist/server.js"]

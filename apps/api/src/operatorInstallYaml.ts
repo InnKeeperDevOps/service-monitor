@@ -212,7 +212,19 @@ const CLUSTER_ROLE_RULES = `  - apiGroups: ["kaiad.dev"]
 `;
 
 const DEFAULT_OPERATOR_NAMESPACE = "kaiad-system";
-const DEFAULT_OPERATOR_IMAGE = `ghcr.io/innkeeperdevops/kaiad-operator:${APP_VERSION}`;
+
+// Default operator image. When this Kaiad hosts images in its own
+// registry (KAIAD_REGISTRY_HOST set — e.g. panel.kaiad.dev), default to
+// that registry's kaiad-operator, matching the panel UI and the on-boot
+// publisher so the generated manifest reflects what's actually deployed.
+// Falls back to the portable, version-pinned GHCR ref for setups with
+// no built-in registry (and for tests, where the host is unset).
+function defaultOperatorImage(): string {
+  const host = process.env.KAIAD_REGISTRY_HOST?.trim();
+  return host
+    ? `${host}/kaiad-operator:latest`
+    : `ghcr.io/innkeeperdevops/kaiad-operator:${APP_VERSION}`;
+}
 
 const NAMESPACE_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 // Loose image reference check; rejects whitespace and shell metacharacters so
@@ -222,7 +234,7 @@ const IMAGE_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$/;
 export function defaultOperatorInstallOptions(): OperatorInstallOptions {
   return {
     namespace: DEFAULT_OPERATOR_NAMESPACE,
-    image: DEFAULT_OPERATOR_IMAGE
+    image: defaultOperatorImage()
   };
 }
 
@@ -342,6 +354,8 @@ ${labels8}
         - name: manager
           image: ${image}
           imagePullPolicy: IfNotPresent
+          # No command override: both the GHCR build and the Kaiad
+          # registry-baked bundle ship ENTRYPOINT ["/manager"].
           args:
             - --leader-elect
             - --metrics-bind-address=:8080

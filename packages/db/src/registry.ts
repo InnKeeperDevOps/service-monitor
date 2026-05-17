@@ -147,6 +147,36 @@ export async function getRegistryManifestByDigest(
   return rows.length > 0 ? mapManifest(rows[0]) : null;
 }
 
+/**
+ * Is `digest` reachable within `repo`? True when a tag in this repo
+ * points at it directly, or it's a child of a manifest-list/index that
+ * is tagged in this repo. Used to scope by-digest manifest pulls so a
+ * globally-deduped manifest (the row's `repo` is just the first writer)
+ * can't be read from a repo that never received that content — without
+ * this, cross-repo/tenant manifest disclosure would be possible.
+ */
+export async function isManifestReachableInRepo(
+  query: QueryFn,
+  repo: string,
+  digest: string
+): Promise<boolean> {
+  const { rows } = await query(
+    `SELECT 1
+       WHERE EXISTS (
+         SELECT 1 FROM registry_tags
+         WHERE repo = $1 AND manifest_digest = $2
+       )
+       OR EXISTS (
+         SELECT 1 FROM registry_manifests parent
+         JOIN registry_tags t
+           ON t.manifest_digest = parent.digest AND t.repo = $1
+         WHERE $2 = ANY(parent.referenced_manifest_digests)
+       )`,
+    [repo, digest]
+  );
+  return rows.length > 0;
+}
+
 export async function getRegistryManifestByTag(
   query: QueryFn,
   repo: string,
@@ -159,6 +189,35 @@ export async function getRegistryManifestByTag(
     [repo, tag]
   );
   return rows.length > 0 ? mapManifest(rows[0]) : null;
+}
+
+/**
+ * Resolve a manifest for `repo` by tag or digest, applying correct
+ * content-addressed repo scoping. THIS is the only function handlers
+ * should use to fetch a manifest for a repo — never read or compare
+ * `RegistryManifestRow.repo` (it's just the first writer; identical
+ * content pushed to several repos shares one row). See the invariant
+ * note on `registry_manifests` in schema.ts.
+ *
+ *  - by tag: the tag→manifest join is already scoped to `repo`, so a
+ *    hit proves the tag belongs here regardless of who wrote the blob.
+ *  - by digest: only served if the digest is reachable within `repo`
+ *    (tagged here, or a child of a manifest tagged here), so a deduped
+ *    digest can't be read from an unrelated repo/tenant.
+ */
+export async function getRegistryManifestForRepo(
+  query: QueryFn,
+  args: { repo: string; reference: string; isDigest: boolean }
+): Promise<RegistryManifestRow | null> {
+  if (!args.isDigest) {
+    return getRegistryManifestByTag(query, args.repo, args.reference);
+  }
+  const manifest = await getRegistryManifestByDigest(query, args.reference);
+  if (!manifest) return null;
+  if (await isManifestReachableInRepo(query, args.repo, manifest.digest)) {
+    return manifest;
+  }
+  return null;
 }
 
 export async function insertRegistryManifest(
@@ -199,6 +258,47 @@ export async function deleteRegistryManifest(
   const { rows } = await query(
     `DELETE FROM registry_manifests WHERE digest = $1 RETURNING digest`,
     [digest]
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Delete the shared manifest row ONLY if it is globally unreferenced —
+ * no tag in ANY repo points at it and no manifest list references it as
+ * a child. This is what makes per-repo manifest delete safe under
+ * content dedup: removing repo A's tags must never destroy content repo
+ * B still serves. Returns "deleted" or "kept". (When kept, GC reclaims
+ * it once it actually becomes orphaned.)
+ */
+export async function deleteRegistryManifestIfUnreferenced(
+  query: QueryFn,
+  digest: string
+): Promise<"deleted" | "kept"> {
+  const { rows } = await query(
+    `DELETE FROM registry_manifests m
+      WHERE m.digest = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM registry_tags t WHERE t.manifest_digest = $1
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM registry_manifests parent
+          WHERE $1 = ANY(parent.referenced_manifest_digests)
+        )
+      RETURNING digest`,
+    [digest]
+  );
+  return rows.length > 0 ? "deleted" : "kept";
+}
+
+/** Does any tag in `repo` point directly at `digest`? */
+export async function repoHasTagForManifest(
+  query: QueryFn,
+  repo: string,
+  digest: string
+): Promise<boolean> {
+  const { rows } = await query(
+    `SELECT 1 FROM registry_tags WHERE repo = $1 AND manifest_digest = $2 LIMIT 1`,
+    [repo, digest]
   );
   return rows.length > 0;
 }
@@ -406,4 +506,51 @@ export async function listOrphanRegistryManifests(
     []
   );
   return rows.map((r) => ({ digest: r.digest as string, repo: r.repo as string }));
+}
+
+// ─── Repository visibility (public/private pull) ────────────────────────
+
+export interface RegistryRepoVisibility {
+  repo: string;
+  public: boolean;
+}
+
+/** Visibility for one repo. `null` = no row (treated as private). */
+export async function getRegistryRepoVisibility(
+  query: QueryFn,
+  repo: string
+): Promise<boolean | null> {
+  const { rows } = await query(
+    `SELECT public FROM registry_repository_visibility WHERE repo = $1`,
+    [repo]
+  );
+  if (rows.length === 0) return null;
+  return rows[0].public === true;
+}
+
+/** Upsert a repo's visibility. */
+export async function setRegistryRepoVisibility(
+  query: QueryFn,
+  repo: string,
+  isPublic: boolean
+): Promise<void> {
+  await query(
+    `INSERT INTO registry_repository_visibility (repo, public, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (repo) DO UPDATE
+       SET public = excluded.public,
+           updated_at = excluded.updated_at`,
+    [repo, isPublic]
+  );
+}
+
+/** All explicitly-set visibility rows. */
+export async function listRegistryRepoVisibility(
+  query: QueryFn
+): Promise<RegistryRepoVisibility[]> {
+  const { rows } = await query(
+    `SELECT repo, public FROM registry_repository_visibility`,
+    []
+  );
+  return rows.map((r) => ({ repo: r.repo as string, public: r.public === true }));
 }

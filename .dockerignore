@@ -1,0 +1,31 @@
+# Build-context excludes for deploy/docker/Dockerfile.unified (context = repo root).
+# Keep the image small and the build off the disk cliff: none of the paths
+# below are inputs to `pnpm run build` or the Go agent build.
+
+# VCS / tooling
+.git
+.github
+.cursor
+.claude
+.playwright-mcp
+
+# Dependencies & build outputs (reinstalled/rebuilt inside the image)
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+**/.turbo
+.pnpm-store
+**/.pnpm-store
+
+# Local environment stacks: compose files + multi-GB Postgres/Redis/build
+# data volumes. Never belongs in the image.
+env
+
+# Worktrees and unrelated projects checked out under the repo
+.worktrees
+other-projects
+
+# Misc
+*.log

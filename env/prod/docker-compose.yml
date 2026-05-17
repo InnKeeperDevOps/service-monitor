@@ -27,12 +27,13 @@ services:
       # kubelets pull from.
       - KAIAD_REGISTRY_INTERNAL=127.0.0.1:8091
       - KAIAD_REGISTRY_HOST=panel.kaiad.dev
-      # WWW-Authenticate realm URL. Must be absolute — crane's go-http
-      # client rejects relative paths with "unsupported protocol scheme".
-      # Internal pushes (build worker, push-agent) hit loopback. External
-      # docker clients should use pre-minted enrollment tokens and won't
-      # follow the realm.
-      - KAIAD_REGISTRY_REALM=http://127.0.0.1:8091/registry/token
+      # WWW-Authenticate realm URL. MUST be the public, externally
+      # reachable token endpoint: every standard Docker/containerd client
+      # follows this realm after the 401 to fetch a (possibly anonymous)
+      # bearer token. A loopback URL here makes the k8s node's runtime
+      # dial its own 127.0.0.1 and fail with ImagePullBackOff. Internal
+      # self-pushes use KAIAD_REGISTRY_INTERNAL (loopback), not the realm.
+      - KAIAD_REGISTRY_REALM=https://panel.kaiad.dev/registry/token
     volumes:
       - ./data/kaiad:/data
       # Registry-auth keypair. Kaiad writes key.pem + cert.pem on first

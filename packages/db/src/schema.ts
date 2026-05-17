@@ -382,10 +382,15 @@ create table if not exists registry_blobs (
 create table if not exists registry_manifests (
   -- "sha256:<hex>" of body, computed at PUT time.
   digest text primary key,
-  -- Repository this manifest was first pushed under. The same content
-  -- could in theory be pushed to multiple repos with different digests
-  -- (no — same content has the same digest). Kept here so the panel can
-  -- show "which repo does this manifest belong to" without joining tags.
+  -- INVARIANT: repo is the FIRST WRITER only and is INFORMATIONAL.
+  -- Manifests are content-addressed: identical content pushed to many
+  -- repos (e.g. the build pushes the same image to svc-image AND
+  -- svc) shares ONE row, owned by whoever pushed first. Therefore
+  -- repo scoping for reads/deletes MUST go through tags/reachability
+  -- (registry_tags + manifest-list parents), NEVER by comparing this
+  -- column to the requested repo — doing so 404s legitimate cross-repo
+  -- pulls. Use getRegistryManifestForRepo / repoHasTagForManifest /
+  -- deleteRegistryManifestIfUnreferenced; never read .repo to gate.
   repo text not null,
   -- "application/vnd.docker.distribution.manifest.v2+json" or the OCI
   -- variants ("application/vnd.oci.image.manifest.v1+json"). Echoed in
@@ -433,4 +438,14 @@ create table if not exists registry_uploads (
   created_at timestamptz not null default now()
 );
 create index if not exists registry_uploads_repo_idx on registry_uploads(repo);
+
+-- Per-repository pull visibility. A row with public=true means anonymous
+-- (unauthenticated) pull is allowed for that repo. Absent row = private
+-- (default). kaiad-agent is force-published public by the API on boot
+-- regardless of any row here, so the agent image is always pullable.
+create table if not exists registry_repository_visibility (
+  repo text primary key,
+  public boolean not null default false,
+  updated_at timestamptz not null default now()
+);
 `;

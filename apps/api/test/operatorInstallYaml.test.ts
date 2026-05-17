@@ -39,12 +39,34 @@ describe("buildOperatorInstallYaml", () => {
 });
 
 describe("parseOperatorInstallOptions", () => {
-  it("returns defaults for empty query", () => {
-    const r = parseOperatorInstallOptions({});
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.value.namespace).toBe("kaiad-system");
-      expect(r.value.image.startsWith("ghcr.io/innkeeperdevops/kaiad-operator:")).toBe(true);
+  it("defaults to the portable GHCR ref when no built-in registry host", () => {
+    const prev = process.env.KAIAD_REGISTRY_HOST;
+    delete process.env.KAIAD_REGISTRY_HOST;
+    try {
+      const r = parseOperatorInstallOptions({});
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.value.namespace).toBe("kaiad-system");
+        expect(r.value.image.startsWith("ghcr.io/innkeeperdevops/kaiad-operator:")).toBe(true);
+      }
+    } finally {
+      if (prev === undefined) delete process.env.KAIAD_REGISTRY_HOST;
+      else process.env.KAIAD_REGISTRY_HOST = prev;
+    }
+  });
+
+  it("defaults to the built-in registry image when KAIAD_REGISTRY_HOST is set", () => {
+    const prev = process.env.KAIAD_REGISTRY_HOST;
+    process.env.KAIAD_REGISTRY_HOST = "panel.kaiad.dev";
+    try {
+      const r = parseOperatorInstallOptions({});
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.value.image).toBe("panel.kaiad.dev/kaiad-operator:latest");
+      }
+    } finally {
+      if (prev === undefined) delete process.env.KAIAD_REGISTRY_HOST;
+      else process.env.KAIAD_REGISTRY_HOST = prev;
     }
   });
 

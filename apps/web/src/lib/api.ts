@@ -272,6 +272,10 @@ export type ServiceBuildArtifact = {
 
 export type RegistryRepository = {
   name: string;
+  /** Anonymous pull allowed. */
+  public?: boolean;
+  /** Always-public (e.g. kaiad-agent) — visibility toggle is locked. */
+  forcedPublic?: boolean;
 };
 
 export type RegistryTag = {
@@ -474,6 +478,12 @@ export const api = {
     apiFetch<{ deleted: boolean; digest?: string }>(
       `/api/v1/registry/repositories/${encodeURIComponent(name)}/tags/${encodeURIComponent(tag)}`,
       { method: "DELETE" }
+    ),
+
+  setRegistryVisibility: (name: string, isPublic: boolean) =>
+    apiFetch<{ name: string; public: boolean }>(
+      `/api/v1/registry/repositories/${encodeURIComponent(name)}/visibility`,
+      { method: "PUT", body: JSON.stringify({ public: isPublic }) }
     ),
 
   getSettings: () => getTenantSettings(),

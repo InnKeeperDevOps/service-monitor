@@ -69,17 +69,30 @@ const DEFAULT_KUBE_NAMESPACE = "kaiad-system";
 const KUBE_SECRET_KEY = "token";
 
 // Operator install bundle defaults. The operator runs in its own namespace
-// (separate from any agent's namespace) and is pulled from GHCR by default
-// — only the agent image lives in this Kaiad's built-in registry.
+// (separate from any agent's namespace). Its image is pulled from this
+// Kaiad's built-in registry by default (same host as the agent image),
+// so clusters don't need GHCR access to install the operator.
 const DEFAULT_OPERATOR_NAMESPACE = "kaiad-system";
-const DEFAULT_OPERATOR_IMAGE = "ghcr.io/innkeeperdevops/kaiad-operator:0.1.0";
+
+function defaultOperatorImage(): string {
+  if (typeof window === "undefined") {
+    return "panel.example.com/kaiad-operator:latest";
+  }
+  // Mirrors defaultAgentImage(): window.location.host already includes any
+  // non-standard port; for HTTPS prod this is the panel host that routes
+  // /v2/ to the Kaiad-hosted registry.
+  return `${window.location.host}/kaiad-operator:latest`;
+}
 
 function buildOperatorInstallUrl(opts: { namespace: string; image: string }): string {
   const params = new URLSearchParams();
   const ns = opts.namespace.trim() || DEFAULT_OPERATOR_NAMESPACE;
-  const img = opts.image.trim() || DEFAULT_OPERATOR_IMAGE;
+  const img = opts.image.trim() || defaultOperatorImage();
   if (ns !== DEFAULT_OPERATOR_NAMESPACE) params.set("namespace", ns);
-  if (img !== DEFAULT_OPERATOR_IMAGE) params.set("image", img);
+  // Always pin the image: the server-side install.yaml default is the
+  // GHCR build and it can't derive this panel's host, so the registry
+  // image must be passed explicitly.
+  params.set("image", img);
   const qs = params.toString();
   return `/api/v1/operator/install.yaml${qs ? `?${qs}` : ""}`;
 }
@@ -242,7 +255,7 @@ const kubeAgentName = ref<string>(DEFAULT_KUBE_AGENT_NAME);
 const kubeNamespace = ref<string>(DEFAULT_KUBE_NAMESPACE);
 const kubeImage = ref<string>(defaultAgentImage());
 const operatorNamespace = ref<string>(DEFAULT_OPERATOR_NAMESPACE);
-const operatorImage = ref<string>(DEFAULT_OPERATOR_IMAGE);
+const operatorImage = ref<string>(defaultOperatorImage());
 const operatorApplyCopyMessage = ref<string | null>(null);
 // We render only ACTIVE tokens by default. A long-lived tenant can have
 // thousands of expired/used tokens; rendering them all blocks the main
@@ -647,7 +660,7 @@ const kubeCopyBtn: CSSProperties = {
             <input
               v-model="operatorImage"
               aria-label="Operator image"
-              :placeholder="DEFAULT_OPERATOR_IMAGE"
+              :placeholder="defaultOperatorImage()"
               :style="{ ...kubeMonoInput, minWidth: '380px' }"
             />
           </label>

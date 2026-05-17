@@ -197,6 +197,44 @@ describe("registry routes: manifests", () => {
     expect(res.rawPayload).toEqual(body);
   });
 
+  it("serves a tag whose manifest is deduped under another repo (cross-repo content)", async () => {
+    // Build pipeline pushes identical content to `voxel-rts-image` then
+    // `voxel-rts`; the manifest row is owned by the first repo. A tag
+    // pull from `voxel-rts` must still succeed — getRegistryManifestByTag
+    // is already scoped by t.repo, so manifest.repo must not gate it.
+    const body = Buffer.from('{"schemaVersion":2}');
+    const pool = makePool([
+      {
+        rows: [
+          {
+            digest: "sha256:7313",
+            repo: "voxel-rts-image", // first writer owns the row
+            media_type: "application/vnd.docker.distribution.manifest.v2+json",
+            body,
+            size_bytes: body.length,
+            config_digest: null,
+            layer_digests: [],
+            referenced_manifest_digests: [],
+            created_at: "2026-05-17"
+          }
+        ]
+      }
+    ]);
+    const app = buildApp(pool);
+    const auth = bearerFor({
+      subject: "u",
+      access: [{ type: "repository", name: "voxel-rts", actions: ["pull"] }]
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/v2/voxel-rts/manifests/a916e292df17e79e09b004ba626513c58a9ee274",
+      headers: { authorization: auth }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["docker-content-digest"]).toBe("sha256:7313");
+    expect(res.rawPayload).toEqual(body);
+  });
+
   it("HEAD returns headers without body", async () => {
     const body = Buffer.from('{"schemaVersion":2}');
     const pool = makePool([

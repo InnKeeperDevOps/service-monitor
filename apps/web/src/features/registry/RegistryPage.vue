@@ -15,6 +15,10 @@ type RepoState = {
   tags: RegistryTag[] | null;
   /** tag → "deleting" | "error" — UI feedback only */
   pendingTagOp: Record<string, "deleting" | "error">;
+  public: boolean;
+  /** Always-public (kaiad-agent) — toggle is locked. */
+  forcedPublic: boolean;
+  visibilityBusy: boolean;
 };
 
 const auth = useAuth();
@@ -46,7 +50,10 @@ async function fetchRepos(opts: { silent?: boolean } = {}) {
         loading: false,
         error: null,
         tags: prev?.tags ?? null,
-        pendingTagOp: prev?.pendingTagOp ?? {}
+        pendingTagOp: prev?.pendingTagOp ?? {},
+        public: repo.public ?? false,
+        forcedPublic: repo.forcedPublic ?? false,
+        visibilityBusy: false
       };
     });
     // If anything that was expanded got refreshed, refetch its tags.
@@ -80,6 +87,20 @@ function toggle(repo: RepoState) {
   repo.expanded = !repo.expanded;
   if (repo.expanded && repo.tags === null && !repo.loading) {
     void fetchTags(repo);
+  }
+}
+
+async function setVisibility(repo: RepoState, makePublic: boolean) {
+  if (!canManage.value || repo.forcedPublic || repo.visibilityBusy) return;
+  repo.visibilityBusy = true;
+  repo.error = null;
+  try {
+    const r = await api.setRegistryVisibility(repo.name, makePublic);
+    repo.public = r.public;
+  } catch (e: unknown) {
+    repo.error = (e as Error).message;
+  } finally {
+    repo.visibilityBusy = false;
   }
 }
 
@@ -190,8 +211,9 @@ onMounted(() => {
 
     <Card v-else-if="repos.length === 0">
       <p :style="{ margin: 0, color: 'var(--color-text-secondary)' }">
-        No images pushed yet. The bundled <code>kaiad-agent</code> image is pushed automatically
-        on first boot — if it's not here, check the kaiad container's <code>/tmp/push-agent.log</code>.
+        No images pushed yet. The bundled <code>kaiad-agent</code> image is published automatically
+        on boot (and kept public) — if it's not here, check the kaiad container logs for
+        <code>[agent-bootstrap]</code>.
       </p>
     </Card>
 
@@ -202,29 +224,76 @@ onMounted(() => {
           :key="repo.name"
           :style="{ borderBottom: '1px solid var(--color-border)' }"
         >
-          <button
-            type="button"
+          <div
             :style="{
-              width: '100%',
               display: 'flex',
               alignItems: 'center',
               gap: '0.5rem',
-              padding: '0.65rem 0.9rem',
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              textAlign: 'left',
-              color: 'var(--color-text)',
-              fontSize: '0.95rem'
+              padding: '0.65rem 0.9rem'
             }"
-            @click="toggle(repo)"
           >
-            <component :is="repo.expanded ? ChevronDown : ChevronRight" :size="14" />
-            <strong>{{ repo.name }}</strong>
-            <Badge v-if="repo.tags" variant="muted" :style="{ marginLeft: '0.4rem' }">
-              {{ repo.tags.length }} {{ repo.tags.length === 1 ? "tag" : "tags" }}
+            <button
+              type="button"
+              :style="{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                textAlign: 'left',
+                color: 'var(--color-text)',
+                fontSize: '0.95rem'
+              }"
+              @click="toggle(repo)"
+            >
+              <component :is="repo.expanded ? ChevronDown : ChevronRight" :size="14" />
+              <strong>{{ repo.name }}</strong>
+              <Badge v-if="repo.tags" variant="muted" :style="{ marginLeft: '0.4rem' }">
+                {{ repo.tags.length }} {{ repo.tags.length === 1 ? "tag" : "tags" }}
+              </Badge>
+            </button>
+
+            <Badge :variant="repo.public ? 'success' : 'muted'">
+              {{ repo.public ? "Public" : "Private" }}
             </Badge>
-          </button>
+            <button
+              v-if="canManage"
+              type="button"
+              :disabled="repo.forcedPublic || repo.visibilityBusy"
+              :title="
+                repo.forcedPublic
+                  ? `${repo.name} is always public`
+                  : repo.public
+                    ? 'Make private (require auth to pull)'
+                    : 'Make public (anonymous pull)'
+              "
+              :style="{
+                display: 'inline-flex',
+                alignItems: 'center',
+                padding: '0.2rem 0.5rem',
+                background: 'transparent',
+                border: '1px solid var(--color-border)',
+                borderRadius: '3px',
+                fontSize: '0.75rem',
+                cursor: repo.forcedPublic || repo.visibilityBusy ? 'not-allowed' : 'pointer',
+                opacity: repo.forcedPublic ? 0.5 : 1,
+                color: 'var(--color-text-secondary)'
+              }"
+              @click="setVisibility(repo, !repo.public)"
+            >
+              {{
+                repo.visibilityBusy
+                  ? "…"
+                  : repo.forcedPublic
+                    ? "locked"
+                    : repo.public
+                      ? "Make private"
+                      : "Make public"
+              }}
+            </button>
+          </div>
 
           <div v-if="repo.expanded" :style="{ padding: '0 0.9rem 0.75rem 1.6rem' }">
             <p

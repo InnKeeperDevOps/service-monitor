@@ -32,12 +32,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import {
   deleteRegistryBlob,
-  deleteRegistryManifest,
   deleteRegistryTag,
   deleteRegistryUpload,
   getRegistryBlobMeta,
   getRegistryManifestByDigest,
-  getRegistryManifestByTag,
+  getRegistryManifestForRepo,
+  deleteRegistryManifestIfUnreferenced,
+  repoHasTagForManifest,
   getRegistryUpload,
   insertRegistryBlob,
   insertRegistryManifest,
@@ -91,6 +92,14 @@ export type RegistryRoutesDeps = {
   tokenRealm: string;
   /** `service` value clients should ask for. Default matches the minter. */
   service?: string;
+  /**
+   * Returns true if `repo` allows anonymous (no-bearer-token) pull.
+   * When set, GET/HEAD pull requests (manifest/blob/tags) for a public
+   * repo are served even with a missing/invalid token — matching what
+   * the /registry/token minter grants anonymously. Push and non-public
+   * repos still require a valid bearer. Omitted ⇒ no anonymous access.
+   */
+  isPubliclyPullable?: (repo: string) => Promise<boolean>;
 };
 
 export function registerRegistryRoutes(
@@ -206,15 +215,39 @@ export function registerRegistryRoutes(
     return reply;
   }
 
-  function requireAuth(
+  async function requireAuth(
     req: FastifyRequest,
     reply: FastifyReply,
     needed: RequiredScope[]
-  ): RegistryVerifyOk | null {
+  ): Promise<RegistryVerifyOk | null> {
     const result = verifyRegistryToken(req.headers.authorization, deps.authConfig, {
       audience: service
     });
     if (!result.ok) {
+      // Anonymous public pull: no/invalid bearer is fine when every
+      // requested scope is a pull on a publicly-pullable repo. Mirrors
+      // the anonymous token the /registry/token minter would issue, so
+      // `curl <host>/v2/<repo>/manifests/<ref>` works tokenless.
+      if (
+        deps.isPubliclyPullable &&
+        needed.length > 0 &&
+        needed.every((n) => n.type === "repository" && n.action === "pull")
+      ) {
+        const checks = await Promise.all(
+          needed.map((n) => deps.isPubliclyPullable!(n.name))
+        );
+        if (checks.every(Boolean)) {
+          return {
+            ok: true,
+            subject: "anonymous",
+            access: needed.map((n) => ({
+              type: n.type,
+              name: n.name,
+              actions: [n.action]
+            }))
+          };
+        }
+      }
       challenge(reply, needed);
       sendOciError(reply, 401, "UNAUTHORIZED", `Auth required: ${result.message}`);
       return null;
@@ -370,7 +403,7 @@ export function registerRegistryRoutes(
     // admin/owner kaiad sessions via the token minter. Phase 1 emits
     // the scope literally; the minter's logic in server.ts already
     // chooses whether to grant it.
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "registry", name: "catalog", action: "*" }
     ]);
     if (!grant) return reply;
@@ -398,7 +431,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "tagsList" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "pull" }
     ]);
     if (!grant) return reply;
@@ -428,18 +461,24 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "manifest" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "pull" }
     ]);
     if (!grant) return reply;
     const ctx = await withPool(reply);
     if (!ctx) return reply;
 
-    const manifest = isValidDigest(op.reference)
-      ? await getRegistryManifestByDigest(ctx.queryFn, op.reference)
-      : await getRegistryManifestByTag(ctx.queryFn, op.repo, op.reference);
+    // Content-addressed: a manifest digest is global and may be shared
+    // by many repos (e.g. the build pushes identical content to both
+    // `<svc>-image` and `<svc>`). Repo scoping is by tag/reachability,
+    // never by RegistryManifestRow.repo. See getRegistryManifestForRepo.
+    const manifest = await getRegistryManifestForRepo(ctx.queryFn, {
+      repo: op.repo,
+      reference: op.reference,
+      isDigest: isValidDigest(op.reference)
+    });
 
-    if (!manifest || manifest.repo !== op.repo) {
+    if (!manifest) {
       return sendOciError(reply, 404, "MANIFEST_UNKNOWN", `manifest unknown: ${op.reference}`);
     }
 
@@ -459,7 +498,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "blob" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "pull" }
     ]);
     if (!grant) return reply;
@@ -511,7 +550,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "manifest" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "push" }
     ]);
     if (!grant) return reply;
@@ -613,7 +652,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "manifest" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "delete" }
     ]);
     if (!grant) return reply;
@@ -631,19 +670,26 @@ export function registerRegistryRoutes(
         "DELETE by tag not supported; delete by digest"
       );
     }
-    const existing = await getRegistryManifestByDigest(ctx.queryFn, op.reference);
-    if (!existing || existing.repo !== op.repo) {
+    // You may only delete from `op.repo` content `op.repo` actually
+    // serves — i.e. a tag here points at this digest. Do NOT gate on
+    // RegistryManifestRow.repo (first-writer only); a deduped digest
+    // legitimately lives in several repos.
+    if (!(await repoHasTagForManifest(ctx.queryFn, op.repo, op.reference))) {
       return sendOciError(reply, 404, "MANIFEST_UNKNOWN", `manifest unknown: ${op.reference}`);
     }
-    // Tags pointing at this digest must be removed first (the FK has
-    // ON DELETE RESTRICT). Delete them, then the manifest.
+    // Remove ONLY this repo's tags for the digest (FK is ON DELETE
+    // RESTRICT, so the manifest row can't go while any tag remains).
     const tags = await listRegistryTagsForRepo(ctx.queryFn, op.repo);
     for (const t of tags) {
       if (t.manifestDigest === op.reference) {
         await deleteRegistryTag(ctx.queryFn, op.repo, t.tag);
       }
     }
-    await deleteRegistryManifest(ctx.queryFn, op.reference);
+    // Reclaim the shared content row only when no repo references it
+    // anymore (no tag anywhere, not a manifest-list child). Otherwise
+    // keep it — other repos still serve this digest; GC handles it once
+    // truly orphaned. Either way the delete is accepted.
+    await deleteRegistryManifestIfUnreferenced(ctx.queryFn, op.reference);
     return reply.status(202).send();
   }
 
@@ -652,7 +698,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "blob" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "delete" }
     ]);
     if (!grant) return reply;
@@ -679,7 +725,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "uploadInit" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "push" }
     ]);
     if (!grant) return reply;
@@ -787,7 +833,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "uploadSession" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "push" }
     ]);
     if (!grant) return reply;
@@ -810,7 +856,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "uploadSession" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "push" }
     ]);
     if (!grant) return reply;
@@ -867,7 +913,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "uploadSession" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "push" }
     ]);
     if (!grant) return reply;
@@ -956,7 +1002,7 @@ export function registerRegistryRoutes(
     reply: FastifyReply,
     op: Extract<RegistryOp, { kind: "uploadSession" }>
   ) {
-    const grant = requireAuth(req, reply, [
+    const grant = await requireAuth(req, reply, [
       { type: "repository", name: op.repo, action: "push" }
     ]);
     if (!grant) return reply;

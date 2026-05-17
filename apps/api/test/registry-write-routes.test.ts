@@ -232,6 +232,74 @@ function makeFakePool(state: FakeState): any {
       };
     }
 
+    // ── content-addressed cross-repo helpers (match BEFORE the
+    //    generic registry_manifests / registry_tags branches) ────────
+    const tagPointsAt = (repo: string, digest: string) => {
+      for (const [key, d] of state.tags.entries()) {
+        if (key.startsWith(`${repo}|`) && d === digest) return true;
+      }
+      return false;
+    };
+    const childOfTagged = (repo: string, digest: string) => {
+      for (const [key, parentDigest] of state.tags.entries()) {
+        if (!key.startsWith(`${repo}|`)) continue;
+        const pm = state.manifests.get(parentDigest);
+        if (pm?.referencedManifestDigests?.includes(digest)) return true;
+      }
+      return false;
+    };
+    // Order matters: the EXISTS/LIMIT-1 probes below also contain a
+    // JOIN in their subqueries, so match them BEFORE the getByTag JOIN.
+    // isManifestReachableInRepo — `SELECT 1 WHERE EXISTS (...)`.
+    if (/^\s*SELECT 1\s+WHERE EXISTS/i.test(s)) {
+      const [repo, digest] = params;
+      return tagPointsAt(repo, digest) || childOfTagged(repo, digest)
+        ? { rows: [{ ok: 1 }] }
+        : { rows: [] };
+    }
+    // repoHasTagForManifest — `SELECT 1 FROM registry_tags ... LIMIT 1`.
+    if (/SELECT 1 FROM registry_tags WHERE repo/i.test(s) && /manifest_digest/i.test(s)) {
+      const [repo, digest] = params;
+      return tagPointsAt(repo, digest) ? { rows: [{ ok: 1 }] } : { rows: [] };
+    }
+    // getRegistryManifestByTag — `SELECT m.* FROM registry_manifests m
+    // JOIN registry_tags t ...`. Repo-scoped by the tag, NOT by the
+    // manifest row's first-writer repo.
+    if (/SELECT m\.\*\s+FROM registry_manifests m\s+JOIN registry_tags/i.test(s)) {
+      const [repo, tag] = params;
+      const digest = state.tags.get(`${repo}|${tag}`);
+      const m = digest ? state.manifests.get(digest) : undefined;
+      if (!digest || !m) return { rows: [] };
+      return {
+        rows: [
+          {
+            digest,
+            repo: m.repo,
+            media_type: m.mediaType,
+            body: m.body,
+            size_bytes: m.body.length,
+            config_digest: m.configDigest,
+            layer_digests: m.layerDigests,
+            referenced_manifest_digests: m.referencedManifestDigests,
+            created_at: new Date()
+          }
+        ]
+      };
+    }
+    // deleteRegistryManifestIfUnreferenced (aliased table dodges the
+    // generic delete regex below — handle it explicitly).
+    if (/DELETE FROM registry_manifests/i.test(s) && /NOT EXISTS/i.test(s)) {
+      const digest = params[0];
+      let referenced = false;
+      for (const d of state.tags.values()) if (d === digest) referenced = true;
+      for (const m of state.manifests.values()) {
+        if (m.referencedManifestDigests?.includes(digest)) referenced = true;
+      }
+      if (referenced || !state.manifests.has(digest)) return { rows: [] };
+      state.manifests.delete(digest);
+      return { rows: [{ digest }] };
+    }
+
     // ── registry_manifests ──────────────────────────────────────────
     if (/INSERT INTO registry_manifests/i.test(s)) {
       const [digest, repo, mediaType, body, , configDigest, layerDigests, refManifestDigests] = params;
@@ -731,6 +799,112 @@ describe("DELETE manifest", () => {
       headers: { authorization: bearerForRepo("kaiad-agent", ["delete"]) }
     });
     expect(res.statusCode).toBe(405);
+  });
+});
+
+// General guarantee: identical content pushed to multiple repos shares
+// one digest/row (owned by the first writer). Reads, deletes and GC must
+// be correct for EVERY repo, not just the first writer. Reproduces the
+// build pipeline's `<svc>-image` + `<svc>` double-push for any service.
+describe("cross-repo content dedup invariant", () => {
+  const digest = "sha256:" + "a7".repeat(32);
+  function seedDeduped(state: FakeState) {
+    // First writer: voxel-rts-image. Same content later tagged in voxel-rts.
+    state.manifests.set(digest, {
+      repo: "voxel-rts-image",
+      mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+      body: Buffer.from('{"schemaVersion":2}'),
+      configDigest: null,
+      layerDigests: [],
+      referencedManifestDigests: []
+    });
+    state.tags.set("voxel-rts-image|a916", digest);
+    state.tags.set("voxel-rts-image|latest", digest);
+    state.tags.set("voxel-rts|a916", digest);
+    state.tags.set("voxel-rts|latest", digest);
+  }
+
+  it("GET by tag succeeds from the non-first-writer repo (the build bug)", async () => {
+    const state = newState();
+    seedDeduped(state);
+    const app = buildApp(makeFakePool(state));
+    const res = await app.inject({
+      method: "GET",
+      url: "/v2/voxel-rts/manifests/a916",
+      headers: { authorization: bearerForRepo("voxel-rts", ["pull"]) }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["docker-content-digest"]).toBe(digest);
+  });
+
+  it("GET by digest succeeds when reachable in the repo, 404 when not", async () => {
+    const state = newState();
+    seedDeduped(state);
+    const app = buildApp(makeFakePool(state));
+    const ok = await app.inject({
+      method: "GET",
+      url: `/v2/voxel-rts/manifests/${digest}`,
+      headers: { authorization: bearerForRepo("voxel-rts", ["pull"]) }
+    });
+    expect(ok.statusCode).toBe(200);
+    const leak = await app.inject({
+      method: "GET",
+      url: `/v2/some-unrelated/manifests/${digest}`,
+      headers: { authorization: bearerForRepo("some-unrelated", ["pull"]) }
+    });
+    expect(leak.statusCode).toBe(404); // no cross-repo/tenant disclosure
+  });
+
+  it("DELETE from one repo keeps shared content alive for the other", async () => {
+    const state = newState();
+    seedDeduped(state);
+    const app = buildApp(makeFakePool(state));
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/v2/voxel-rts/manifests/${digest}`,
+      headers: { authorization: bearerForRepo("voxel-rts", ["delete"]) }
+    });
+    expect(res.statusCode).toBe(202);
+    // voxel-rts tags gone; voxel-rts-image still serves; row survives.
+    expect(state.tags.has("voxel-rts|a916")).toBe(false);
+    expect(state.tags.has("voxel-rts|latest")).toBe(false);
+    expect(state.tags.has("voxel-rts-image|a916")).toBe(true);
+    expect(state.manifests.has(digest)).toBe(true);
+    const stillThere = await app.inject({
+      method: "GET",
+      url: "/v2/voxel-rts-image/manifests/a916",
+      headers: { authorization: bearerForRepo("voxel-rts-image", ["pull"]) }
+    });
+    expect(stillThere.statusCode).toBe(200);
+  });
+
+  it("DELETE removes the shared row only when the last repo lets go", async () => {
+    const state = newState();
+    seedDeduped(state);
+    const app = buildApp(makeFakePool(state));
+    for (const repo of ["voxel-rts", "voxel-rts-image"]) {
+      const r = await app.inject({
+        method: "DELETE",
+        url: `/v2/${repo}/manifests/${digest}`,
+        headers: { authorization: bearerForRepo(repo, ["delete"]) }
+      });
+      expect(r.statusCode).toBe(202);
+    }
+    expect(state.tags.size).toBe(0);
+    expect(state.manifests.has(digest)).toBe(false); // now globally orphaned
+  });
+
+  it("DELETE by digest 404s from a repo that doesn't tag it", async () => {
+    const state = newState();
+    seedDeduped(state);
+    const app = buildApp(makeFakePool(state));
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/v2/some-unrelated/manifests/${digest}`,
+      headers: { authorization: bearerForRepo("some-unrelated", ["delete"]) }
+    });
+    expect(res.statusCode).toBe(404);
+    expect(state.manifests.has(digest)).toBe(true);
   });
 });
 
