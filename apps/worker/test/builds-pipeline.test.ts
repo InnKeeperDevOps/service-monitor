@@ -174,6 +174,44 @@ describe("builds pipeline (mocked spawn/fs/db)", () => {
     }
   });
 
+  it("full deployable build: build-steps + artifacts + dependents + redeploy dispatch", async () => {
+    state.yaml = `
+version: 1
+build:
+  image: alpine
+  steps:
+    - echo hi > /artifacts/out.txt
+artifacts:
+  - out.txt
+runtime:
+  image: nginx:alpine
+  command: ["nginx"]
+ports:
+  - port: 80
+`;
+    const query = vi.fn(async (sql: string) => {
+      const s = String(sql);
+      if (/FROM monitored_services/i.test(s) && /depends_on @>/i.test(s)) {
+        return { rows: [{ id: "dep-1", name: "dep-svc", branch: "main" }] };
+      }
+      if (/FROM monitored_services/i.test(s) && /SELECT/i.test(s)) {
+        return { rows: [{ id: "svc-1", tenant_id: "t-1", name: "svc-1", git_repo_url: "https://e/r.git", branch: "main", ssh_key_id: null, pipeline_name: null, kind: "deployable", depends_on: [] }] };
+      }
+      if (/FROM agent_services/i.test(s) || /JOIN agents a/i.test(s)) {
+        return { rows: [{ agent_id: "ag-1", environment: "production" }] };
+      }
+      if (/FROM ssh_keys/i.test(s)) return { rows: [] };
+      if (/UPDATE service_builds SET status = 'running'|FOR UPDATE SKIP LOCKED/i.test(s)) {
+        return { rows: [{ id: "bld-1", tenant_id: "t-1", service_id: "svc-1", git_sha: SHA, branch: "main", status: "running", log: "", created_at: new Date().toISOString() }] };
+      }
+      if (/INSERT INTO service_builds/i.test(s)) {
+        return { rows: [{ id: "dep-bld", tenant_id: "t-1", service_id: "dep-1", git_sha: "", branch: "main", status: "queued" }] };
+      }
+      return { rows: [] };
+    }) as unknown as QueryFn;
+    await expect(runDrainOnce(query, logger)).resolves.toBeUndefined();
+  });
+
   it("runtime build resolves declared dependencies", async () => {
     state.yaml = `
 version: 1
