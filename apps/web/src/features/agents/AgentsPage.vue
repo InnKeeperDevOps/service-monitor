@@ -5,7 +5,8 @@ import {
   api,
   type Agent,
   type AgentTelemetry,
-  type MonitoredService
+  type MonitoredService,
+  type ServiceBuild
 } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
 import Badge from "../../components/Badge.vue";
@@ -85,6 +86,81 @@ const serviceCountByAgent = computed(() => {
   }
   return m;
 });
+
+// ── Per-agent deploy: pick a bound service + version → this agent ──
+const canDeploy = computed(() => !isViewer.value);
+const deployFor = ref<string | null>(null); // open panel's agentId
+const deploySvcId = ref<string>("");
+const deployBuilds = ref<ServiceBuild[]>([]);
+const deployBuildId = ref<string>("");
+const deployBuildsLoading = ref(false);
+const deploying = ref(false);
+const deployMsg = ref<string | null>(null);
+const deployErr = ref<string | null>(null);
+
+function boundServicesFor(agentId: string): MonitoredService[] {
+  return services.value.filter((s) => (s.agents ?? []).some((b) => b.agentId === agentId));
+}
+
+function toggleDeploy(agentId: string) {
+  if (deployFor.value === agentId) {
+    deployFor.value = null;
+    return;
+  }
+  deployFor.value = agentId;
+  deploySvcId.value = "";
+  deployBuilds.value = [];
+  deployBuildId.value = "";
+  deployMsg.value = null;
+  deployErr.value = null;
+}
+
+async function onDeployServiceChange() {
+  deployBuilds.value = [];
+  deployBuildId.value = "";
+  deployMsg.value = null;
+  deployErr.value = null;
+  if (!deploySvcId.value) return;
+  deployBuildsLoading.value = true;
+  try {
+    const r = await api.listServiceBuilds(deploySvcId.value);
+    deployBuilds.value = r.builds.filter((b) => b.status === "success" && !!b.imageRef);
+    deployBuildId.value = deployBuilds.value[0]?.id ?? "";
+  } catch (e: unknown) {
+    deployErr.value = (e as Error).message;
+  } finally {
+    deployBuildsLoading.value = false;
+  }
+}
+
+function deployBuildLabel(b: ServiceBuild): string {
+  const sha = b.gitSha ? b.gitSha.slice(0, 12) : "(no sha)";
+  const when = new Date(b.startedAt ?? b.createdAt).toLocaleString();
+  const img = b.imageRef ? b.imageRef.split("/").slice(-1)[0] : "";
+  return img ? `${sha} · ${when} · ${img}` : `${sha} · ${when}`;
+}
+
+async function submitAgentDeploy(agentId: string) {
+  if (deploying.value || !canDeploy.value) return;
+  if (!deploySvcId.value || !deployBuildId.value) return;
+  deploying.value = true;
+  deployMsg.value = null;
+  deployErr.value = null;
+  try {
+    const r = await api.deployToAgent(agentId, deploySvcId.value, deployBuildId.value);
+    const offline = r.results.filter((x) => x.queued && !x.delivered).length;
+    deployMsg.value =
+      r.dispatched > 0
+        ? `Deployed${offline > 0 ? " (queued — agent offline)" : " to the agent"}.`
+        : r.skipped.length > 0
+          ? `Skipped: ${r.skipped.join("; ")}`
+          : "No command dispatched.";
+  } catch (e: unknown) {
+    deployErr.value = (e as Error).message;
+  } finally {
+    deploying.value = false;
+  }
+}
 
 // Merge live telemetry presence into the static row data so "Live"
 // reflects the WebSocket state in real time. Sorted by display name
@@ -188,14 +264,12 @@ const summary = computed(() => {
             <th scope="col" :style="thStyle">Environment</th>
             <th scope="col" :style="thStyle">Last seen</th>
             <th scope="col" :style="thStyle">Services</th>
+            <th v-if="canDeploy" scope="col" :style="thStyle">Deploy</th>
           </tr>
         </thead>
         <tbody>
-          <tr
-            v-for="a in displayedAgents"
-            :key="a.id"
-            :style="{ borderTop: '1px solid var(--color-border)' }"
-          >
+          <template v-for="a in displayedAgents" :key="a.id">
+          <tr :style="{ borderTop: '1px solid var(--color-border)' }">
             <td :style="tdStyle">
               <a
                 :href="`#agent/${encodeURIComponent(a.id)}`"
@@ -245,7 +319,117 @@ const summary = computed(() => {
             <td :style="{ ...tdStyle, fontSize: '0.85rem' }">
               {{ serviceCountByAgent.get(a.id) ?? 0 }}
             </td>
+            <td v-if="canDeploy" :style="tdStyle">
+              <button
+                type="button"
+                :disabled="(serviceCountByAgent.get(a.id) ?? 0) === 0"
+                :title="(serviceCountByAgent.get(a.id) ?? 0) === 0 ? 'No services bound to this agent' : 'Deploy a service version to this agent'"
+                :style="{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  padding: '0.2rem 0.55rem',
+                  background: deployFor === a.id ? 'var(--color-surface)' : 'var(--color-primary)',
+                  color: deployFor === a.id ? 'var(--color-text)' : 'var(--color-primary-foreground)',
+                  border: deployFor === a.id ? '1px solid var(--color-border)' : 'none',
+                  borderRadius: '4px',
+                  fontSize: '0.75rem',
+                  cursor: (serviceCountByAgent.get(a.id) ?? 0) === 0 ? 'not-allowed' : 'pointer',
+                  opacity: (serviceCountByAgent.get(a.id) ?? 0) === 0 ? 0.5 : 1
+                }"
+                @click="toggleDeploy(a.id)"
+              >
+                {{ deployFor === a.id ? "Close" : "Deploy" }}
+              </button>
+            </td>
           </tr>
+          <tr v-if="canDeploy && deployFor === a.id">
+            <td :colspan="8" :style="{ ...tdStyle, background: 'var(--color-bg)' }">
+              <div
+                :style="{
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                  fontSize: '0.78rem'
+                }"
+              >
+                <strong>Service</strong>
+                <select
+                  v-model="deploySvcId"
+                  aria-label="Service to deploy"
+                  :style="{
+                    fontSize: '0.75rem',
+                    padding: '0.2rem 0.35rem',
+                    background: 'var(--color-surface)',
+                    color: 'var(--color-text)',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: '4px'
+                  }"
+                  @change="onDeployServiceChange"
+                >
+                  <option value="">Select a bound service…</option>
+                  <option v-for="s in boundServicesFor(a.id)" :key="s.id" :value="s.id">
+                    {{ s.name }}
+                  </option>
+                </select>
+
+                <strong>Version</strong>
+                <select
+                  v-model="deployBuildId"
+                  aria-label="Version to deploy"
+                  :disabled="deployBuildsLoading || deployBuilds.length === 0"
+                  :style="{
+                    fontSize: '0.75rem',
+                    padding: '0.2rem 0.35rem',
+                    maxWidth: '320px',
+                    background: 'var(--color-surface)',
+                    color: 'var(--color-text)',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: '4px'
+                  }"
+                >
+                  <option v-if="deployBuildsLoading" value="">Loading versions…</option>
+                  <option v-else-if="!deploySvcId" value="">Pick a service first</option>
+                  <option v-else-if="deployBuilds.length === 0" value="">
+                    No successful builds for this service
+                  </option>
+                  <option v-for="b in deployBuilds" :key="b.id" :value="b.id">
+                    {{ deployBuildLabel(b) }}
+                  </option>
+                </select>
+
+                <button
+                  type="button"
+                  :disabled="deploying || !deploySvcId || !deployBuildId"
+                  :style="{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.25rem',
+                    padding: '0.2rem 0.6rem',
+                    background: 'var(--color-primary)',
+                    color: 'var(--color-primary-foreground)',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontSize: '0.75rem',
+                    cursor: deploying || !deploySvcId || !deployBuildId ? 'not-allowed' : 'pointer',
+                    opacity: deploying || !deploySvcId || !deployBuildId ? 0.6 : 1
+                  }"
+                  @click="submitAgentDeploy(a.id)"
+                >
+                  {{ deploying ? "Deploying…" : "Deploy to this agent" }}
+                </button>
+
+                <span v-if="deployMsg" :style="{ color: 'var(--color-text-secondary)' }">
+                  {{ deployMsg }}
+                </span>
+                <span v-if="deployErr" :style="{ color: 'var(--color-danger)' }">
+                  {{ deployErr }}
+                </span>
+              </div>
+            </td>
+          </tr>
+          </template>
         </tbody>
       </table>
     </div>

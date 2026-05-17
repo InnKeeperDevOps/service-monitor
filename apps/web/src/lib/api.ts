@@ -270,6 +270,12 @@ export type ServiceBuildArtifact = {
   createdAt: string;
 };
 
+export type DeployResult = {
+  dispatched: number;
+  results: Array<{ agentId: string; delivered: boolean; queued: boolean }>;
+  skipped: string[];
+};
+
 export type RegistryRepository = {
   name: string;
   /** Anonymous pull allowed. */
@@ -455,6 +461,20 @@ export const api = {
   getServiceBuild: (serviceId: string, buildId: string) =>
     apiFetch<{ build: ServiceBuild; artifacts: ServiceBuildArtifact[] }>(
       `/api/v1/services/${encodeURIComponent(serviceId)}/builds/${encodeURIComponent(buildId)}`
+    ),
+
+  /** Deploy a specific build (version) of a service to ALL its bound agents. */
+  deployServiceVersion: (serviceId: string, buildId: string) =>
+    apiFetch<DeployResult & { boundAgents: number }>(
+      `/api/v1/services/${encodeURIComponent(serviceId)}/deploy`,
+      { method: "POST", body: JSON.stringify({ buildId }) }
+    ),
+
+  /** Deploy a specific build (version) of a bound service to ONE agent. */
+  deployToAgent: (agentId: string, serviceId: string, buildId: string) =>
+    apiFetch<DeployResult>(
+      `/api/v1/agents/${encodeURIComponent(agentId)}/deploy`,
+      { method: "POST", body: JSON.stringify({ serviceId, buildId }) }
     ),
 
   /** Fully-qualified URL for downloading an artifact (Authorization header is on the API path). */

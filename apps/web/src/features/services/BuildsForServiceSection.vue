@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { ChevronDown, ChevronRight, RefreshCw, Download, FileCode, Play } from "lucide-vue-next";
+import { ChevronDown, ChevronRight, RefreshCw, Download, FileCode, Play, Rocket } from "lucide-vue-next";
 import { api, type ServiceBuild, type ServiceBuildArtifact } from "../../lib/api.js";
 import { useAuth } from "../../lib/useAuth.js";
 
@@ -12,6 +12,59 @@ const props = defineProps<{
 const auth = useAuth();
 const canTrigger = computed(() => auth.value.isAdmin);
 const triggering = ref(false);
+
+// ── Deploy a specific version (successful build) to bound agents ──
+const deploySelectedId = ref<string>("");
+const deploying = ref(false);
+const deployMsg = ref<string | null>(null);
+const deployErr = ref<string | null>(null);
+
+const successfulBuilds = computed(() =>
+  rows.value
+    .map((r) => r.build)
+    .filter((b) => b.status === "success" && !!b.imageRef)
+);
+
+// Default to the newest successful build until the user picks one.
+const effectiveDeployId = computed(() => {
+  const ids = successfulBuilds.value.map((b) => b.id);
+  if (deploySelectedId.value && ids.includes(deploySelectedId.value)) {
+    return deploySelectedId.value;
+  }
+  return ids[0] ?? "";
+});
+
+function buildVersionLabel(b: ServiceBuild): string {
+  const sha = b.gitSha ? b.gitSha.slice(0, 12) : "(no sha)";
+  const when = new Date(b.startedAt ?? b.createdAt).toLocaleString();
+  const img = b.imageRef ? b.imageRef.split("/").slice(-1)[0] : "";
+  return img ? `${sha} · ${when} · ${img}` : `${sha} · ${when}`;
+}
+
+async function handleDeploy() {
+  if (deploying.value || !canTrigger.value) return;
+  const buildId = effectiveDeployId.value;
+  if (!buildId) return;
+  deploying.value = true;
+  deployMsg.value = null;
+  deployErr.value = null;
+  try {
+    const r = await api.deployServiceVersion(props.serviceId, buildId);
+    if (r.boundAgents === 0) {
+      deployMsg.value = "No agents are bound to this service — nothing to deploy.";
+    } else {
+      const offline = r.results.filter((x) => x.queued && !x.delivered).length;
+      deployMsg.value =
+        `Dispatched to ${r.dispatched}/${r.boundAgents} agent(s)` +
+        (offline > 0 ? ` (${offline} queued for offline agents)` : "") +
+        (r.skipped.length > 0 ? ` — ${r.skipped.length} skipped` : "");
+    }
+  } catch (e: unknown) {
+    deployErr.value = (e as Error).message;
+  } finally {
+    deploying.value = false;
+  }
+}
 
 type RowState = {
   build: ServiceBuild;
@@ -257,6 +310,73 @@ onUnmounted(() => {
       >
         <RefreshCw :size="11" :class="refreshing ? 'spin' : ''" /> Refresh
       </button>
+    </div>
+
+    <div
+      v-if="canTrigger"
+      :style="{
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '0.5rem',
+        margin: '0 0 0.6rem',
+        padding: '0.5rem 0.65rem',
+        background: 'var(--color-bg)',
+        border: '1px solid var(--color-border)',
+        borderRadius: '6px'
+      }"
+    >
+      <Rocket :size="13" />
+      <strong :style="{ fontSize: '0.78rem' }">Deploy version</strong>
+      <select
+        v-model="deploySelectedId"
+        :disabled="deploying || successfulBuilds.length === 0"
+        aria-label="Version to deploy"
+        :style="{
+          fontSize: '0.75rem',
+          padding: '0.2rem 0.35rem',
+          maxWidth: '320px',
+          background: 'var(--color-surface)',
+          color: 'var(--color-text)',
+          border: '1px solid var(--color-border)',
+          borderRadius: '4px'
+        }"
+      >
+        <option v-if="successfulBuilds.length === 0" value="">No successful builds yet</option>
+        <option v-for="b in successfulBuilds" :key="b.id" :value="b.id">
+          {{ buildVersionLabel(b) }}
+        </option>
+      </select>
+      <button
+        type="button"
+        :disabled="deploying || !effectiveDeployId"
+        :title="`Deploy the selected version of ${serviceName} to all bound agents`"
+        :style="{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.25rem',
+          padding: '0.2rem 0.6rem',
+          background: 'var(--color-primary)',
+          color: 'var(--color-primary-foreground)',
+          border: 'none',
+          borderRadius: '4px',
+          fontSize: '0.75rem',
+          cursor: deploying || !effectiveDeployId ? 'not-allowed' : 'pointer',
+          opacity: deploying || !effectiveDeployId ? 0.6 : 1
+        }"
+        @click="handleDeploy"
+      >
+        <Rocket :size="11" />
+        {{ deploying ? "Deploying…" : "Deploy" }}
+      </button>
+      <span
+        v-if="deployMsg"
+        :style="{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }"
+      >{{ deployMsg }}</span>
+      <span
+        v-if="deployErr"
+        :style="{ fontSize: '0.75rem', color: 'var(--color-danger)' }"
+      >{{ deployErr }}</span>
     </div>
 
     <p v-if="error" :style="{ color: 'var(--color-danger)', margin: '0 0 0.5rem', fontSize: '0.8rem' }">

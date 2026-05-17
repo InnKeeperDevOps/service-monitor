@@ -2982,6 +2982,231 @@ export function buildServer(opts: BuildServerOptions = {}) {
     return { dispatched, skipped };
   }
 
+  // Typed error so the deploy helper can signal HTTP status/code back
+  // to either deploy route without coupling to `reply`.
+  class DeployError extends Error {
+    constructor(
+      public status: number,
+      public code: string,
+      message: string
+    ) {
+      super(message);
+    }
+  }
+
+  /**
+   * Deploy a SPECIFIC build (version) of a service to a set of target
+   * agents. Resolves the build's captured kaiad.yaml per each agent's
+   * environment and dispatches `redeploy_service` (same payload the
+   * post-build auto-redeploy uses). Shared by the Services-page Deploy
+   * (all bound agents) and the Agents-page Deploy (one agent).
+   */
+  async function deployBuildToAgents(
+    tenantId: string,
+    serviceId: string,
+    buildId: string,
+    targets: Array<{ agentId: string; environment: string }>
+  ): Promise<{
+    dispatched: number;
+    results: Array<{ agentId: string; delivered: boolean; queued: boolean }>;
+    skipped: string[];
+  }> {
+    const out = {
+      dispatched: 0,
+      results: [] as Array<{ agentId: string; delivered: boolean; queued: boolean }>,
+      skipped: [] as string[]
+    };
+    const q = await getBuildsQuery();
+    if (!q) {
+      throw new DeployError(503, "REGISTRY_UNAVAILABLE", "Build store not configured (DATABASE_URL missing)");
+    }
+    const svc = await domainStore.getService(tenantId, serviceId);
+    if (!svc) throw new DeployError(404, "NOT_FOUND", "Service not found");
+    const build = await getBuild(q, tenantId, buildId);
+    if (!build || build.serviceId !== serviceId) {
+      throw new DeployError(404, "NOT_FOUND", "Build not found for this service");
+    }
+    if (build.status !== "success" || !build.imageRef) {
+      throw new DeployError(400, "BAD_REQUEST", "Only a successful build with an image can be deployed");
+    }
+
+    // Per-env config from the build's captured kaiad.yaml; pipeline-less
+    // or unparseable older builds fall back to safe defaults so the
+    // deploy still goes out.
+    let pickedPipeline: Parameters<typeof resolveEnvironment>[0] | null = null;
+    if (build.pipelineYaml) {
+      const parsed = parsePipelineYaml(build.pipelineYaml);
+      if (parsed.ok) {
+        const picked = selectPipeline(parsed, svc.pipelineName ?? null);
+        if (picked.ok) pickedPipeline = picked.pipeline;
+      }
+    }
+
+    for (const t of targets) {
+      const resolved = pickedPipeline
+        ? resolveEnvironment(pickedPipeline, t.environment)
+        : { instances: 1, domains: [], loadBalancer: { type: "none" }, namespace: "" };
+      const commandId = crypto.randomUUID();
+      const command = {
+        type: "redeploy_service",
+        commandId,
+        serviceId,
+        serviceName: svc.name,
+        imageRef: build.imageRef,
+        buildId: build.id,
+        environment: t.environment,
+        instances: resolved.instances,
+        domains: resolved.domains,
+        loadBalancer: resolved.loadBalancer,
+        namespace: resolved.namespace
+      };
+      try {
+        const r = await realtimeManager.sendCommand(t.agentId, JSON.stringify(command));
+        out.dispatched += 1;
+        out.results.push({
+          agentId: t.agentId,
+          delivered: !!r.delivered,
+          queued: !!r.queued
+        });
+      } catch (err) {
+        out.skipped.push(`${t.agentId}: ${(err as Error).message}`);
+      }
+    }
+    return out;
+  }
+
+  function sendDeployError(req: any, reply: any, err: unknown) {
+    if (err instanceof DeployError) {
+      return reply.status(err.status).send(
+        apiErrorSchema.parse({
+          code: err.code,
+          message: err.message,
+          correlationId: (req as any).correlationId
+        })
+      );
+    }
+    return reply.status(500).send(
+      apiErrorSchema.parse({
+        code: "INTERNAL",
+        message: err instanceof Error ? err.message : "Deploy failed",
+        correlationId: (req as any).correlationId
+      })
+    );
+  }
+
+  // Deploy a chosen version of a service to ALL its bound agents.
+  app.post<{ Params: { id: string }; Body: { buildId?: unknown } }>(
+    "/api/v1/services/:id/deploy",
+    async (req, reply) => {
+      const session = await requireAdminSession(req, reply);
+      if (!session) return;
+      const buildId = (req.body as { buildId?: unknown } | undefined)?.buildId;
+      if (typeof buildId !== "string" || !buildId) {
+        return reply.status(400).send(
+          apiErrorSchema.parse({
+            code: "BAD_REQUEST",
+            message: "buildId is required",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const q = await getBuildsQuery();
+      if (!q) {
+        return reply.status(503).send(
+          apiErrorSchema.parse({
+            code: "REGISTRY_UNAVAILABLE",
+            message: "Build store not configured (DATABASE_URL missing)",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const { rows } = await q(
+        `SELECT a.id AS agent_id, a.environment
+           FROM agent_services s
+           JOIN agents a ON a.id = s.agent_id
+          WHERE s.service_id = $1`,
+        [req.params.id]
+      );
+      const targets = rows.map((r) => ({
+        agentId: String(r.agent_id),
+        environment: String(r.environment ?? "development")
+      }));
+      try {
+        const result = await deployBuildToAgents(
+          session.tenantId,
+          req.params.id,
+          buildId,
+          targets
+        );
+        return { ...result, boundAgents: targets.length };
+      } catch (err) {
+        return sendDeployError(req, reply, err);
+      }
+    }
+  );
+
+  // Deploy a chosen version of a (bound) service to ONE agent.
+  app.post<{ Params: { agentId: string }; Body: { serviceId?: unknown; buildId?: unknown } }>(
+    "/api/v1/agents/:agentId/deploy",
+    async (req, reply) => {
+      const session = await requireAdminSession(req, reply);
+      if (!session) return;
+      const body = req.body as { serviceId?: unknown; buildId?: unknown } | undefined;
+      if (
+        typeof body?.serviceId !== "string" || !body.serviceId ||
+        typeof body?.buildId !== "string" || !body.buildId
+      ) {
+        return reply.status(400).send(
+          apiErrorSchema.parse({
+            code: "BAD_REQUEST",
+            message: "serviceId and buildId are required",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const agent = await domainStore.getAgent(session.tenantId, req.params.agentId);
+      if (!agent) {
+        return reply.status(404).send(
+          apiErrorSchema.parse({
+            code: "NOT_FOUND",
+            message: "Agent not found",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const q = await getBuildsQuery();
+      if (!q) {
+        return reply.status(503).send(
+          apiErrorSchema.parse({
+            code: "REGISTRY_UNAVAILABLE",
+            message: "Build store not configured (DATABASE_URL missing)",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      const { rows } = await q(
+        `SELECT 1 FROM agent_services WHERE agent_id = $1 AND service_id = $2 LIMIT 1`,
+        [req.params.agentId, body.serviceId]
+      );
+      if (rows.length === 0) {
+        return reply.status(400).send(
+          apiErrorSchema.parse({
+            code: "BAD_REQUEST",
+            message: "Agent is not bound to this service",
+            correlationId: (req as any).correlationId
+          })
+        );
+      }
+      try {
+        return await deployBuildToAgents(session.tenantId, body.serviceId, body.buildId, [
+          { agentId: req.params.agentId, environment: agent.environment ?? "development" }
+        ]);
+      } catch (err) {
+        return sendDeployError(req, reply, err);
+      }
+    }
+  );
+
   /**
    * Re-deploy services bound to an agent whose env just flipped.
    *
