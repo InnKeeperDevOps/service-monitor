@@ -206,9 +206,20 @@ func (r *KaiadAgentReconciler) applyClusterRBAC(ctx context.Context, agent *kaia
 		// label-select and delete explicitly.
 		return r.deleteClusterRBACForAgent(ctx, agent)
 	}
-	cr := rbac.ClusterRole
+	// IMPORTANT: pass a DeepCopy to CreateOrUpdate, not rbac.ClusterRole
+	// itself. CreateOrUpdate's internal Get() overwrites the passed
+	// object in place with the live cluster state; if that object IS
+	// rbac.ClusterRole, the mutate `cr.Rules = rbac.ClusterRole.Rules`
+	// becomes a self-assignment and the desired rules are lost — so the
+	// ClusterRole is correct on first create but every subsequent spec
+	// change (e.g. new manages verbs) is silently never applied. Mirror
+	// the (correct) DeepCopy pattern used by applyNamespacedRBAC.
+	desiredRules := rbac.ClusterRole.Rules
+	desiredCRLabels := rbac.ClusterRole.Labels
+	cr := rbac.ClusterRole.DeepCopy()
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
-		cr.Rules = rbac.ClusterRole.Rules
+		cr.Rules = desiredRules
+		cr.Labels = desiredCRLabels
 		// ClusterRoles cannot have namespaced owner refs; we rely on label-based
 		// cleanup in the agent's finalizer (out of MVP scope) or explicit delete.
 		return nil
@@ -216,10 +227,14 @@ func (r *KaiadAgentReconciler) applyClusterRBAC(ctx context.Context, agent *kaia
 	if err != nil {
 		return err
 	}
-	crb := rbac.ClusterRoleBinding
+	desiredRoleRef := rbac.ClusterRoleBinding.RoleRef
+	desiredSubjects := rbac.ClusterRoleBinding.Subjects
+	desiredCRBLabels := rbac.ClusterRoleBinding.Labels
+	crb := rbac.ClusterRoleBinding.DeepCopy()
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
-		crb.RoleRef = rbac.ClusterRoleBinding.RoleRef
-		crb.Subjects = rbac.ClusterRoleBinding.Subjects
+		crb.RoleRef = desiredRoleRef
+		crb.Subjects = desiredSubjects
+		crb.Labels = desiredCRBLabels
 		return nil
 	})
 	return err
