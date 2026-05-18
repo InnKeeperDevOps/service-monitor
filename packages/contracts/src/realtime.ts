@@ -414,7 +414,15 @@ const redeployDomainSchema = z.object({
 const redeployLoadBalancerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("none") }),
   z.object({ type: z.literal("k8s"), annotations: z.record(z.string()).default({}) }),
-  z.object({ type: z.literal("metallb"), addressPool: z.string().min(1).optional() }),
+  z.object({
+    type: z.literal("metallb"),
+    addressPool: z.string().min(1).optional(),
+    // Pinned IP(s). Mirrors the pipeline schema's metallb variant; must
+    // be carried here too or platformToAgentMessageSchema.parse() strips
+    // it from the redeploy command and the agent never renders the
+    // metallb.universe.tf/loadBalancerIPs annotation.
+    loadBalancerIPs: z.string().min(1).optional()
+  }),
   z.object({
     type: z.literal("nginx"),
     ingressClass: z.string().min(1).default("nginx"),

@@ -400,6 +400,13 @@ func buildAgentEnv(agent *kaiadv1alpha1.KaiadAgent, enroll *EnrollmentResolution
 	if agent.Spec.ServiceID != "" {
 		envs = append(envs, corev1.EnvVar{Name: "SM_SERVICE_ID", Value: agent.Spec.ServiceID})
 	}
+	// Thread the agent's image-pull Secret name through so the agent can
+	// attach it to the Deployments it renders for monitored services —
+	// their images live in the (private) Kaiad registry, same as the
+	// agent's own image. Without this every service pod ErrImagePulls.
+	if len(agent.Spec.ImagePullSecrets) > 0 && agent.Spec.ImagePullSecrets[0].Name != "" {
+		envs = append(envs, corev1.EnvVar{Name: "KAIAD_IMAGE_PULL_SECRET", Value: agent.Spec.ImagePullSecrets[0].Name})
+	}
 	return envs
 }
 

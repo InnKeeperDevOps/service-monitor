@@ -4,7 +4,7 @@
 // deploy/operator/charts/kaiad-operator/ is the source of truth — the
 // constants below MUST stay in sync with the chart templates.
 
-const APP_VERSION = "0.1.1";
+const APP_VERSION = "0.1.2";
 const NAME = "kaiad-operator";
 
 // Mirrors deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml.

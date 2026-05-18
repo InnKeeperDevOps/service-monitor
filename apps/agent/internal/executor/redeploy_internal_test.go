@@ -124,6 +124,26 @@ func TestRenderK8sManifestsMetalLBPinnedIP(t *testing.T) {
 	}
 }
 
+func TestRenderK8sManifestsImagePullSecret(t *testing.T) {
+	in, err := parseRedeployPayload(richPayload("metallb"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Unset: no imagePullSecrets stanza.
+	t.Setenv("KAIAD_IMAGE_PULL_SECRET", "")
+	if strings.Contains(renderK8sManifests(in, "prod"), "imagePullSecrets") {
+		t.Fatal("imagePullSecrets emitted when KAIAD_IMAGE_PULL_SECRET unset")
+	}
+
+	// Set: Deployment pod spec references the named secret.
+	t.Setenv("KAIAD_IMAGE_PULL_SECRET", "edge-agent-pull")
+	yaml := renderK8sManifests(in, "prod")
+	if !strings.Contains(yaml, "imagePullSecrets:") || !strings.Contains(yaml, `- name: "edge-agent-pull"`) {
+		t.Fatalf("rendered Deployment missing imagePullSecrets:\n%s", yaml)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

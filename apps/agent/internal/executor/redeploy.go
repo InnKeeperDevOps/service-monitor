@@ -925,7 +925,18 @@ func renderK8sManifests(in redeployInput, namespace string) string {
 	fmt.Fprintf(&b, "  template:\n    metadata:\n      labels:\n        %s\n",
 		labelStr,
 	)
-	b.WriteString("    spec:\n      containers:\n        - name: app\n")
+	b.WriteString("    spec:\n")
+	// Private service images live in the Kaiad registry (only the
+	// kaiad-agent/operator images are forced-public). The operator
+	// threads the KaiadAgent CR's pull-secret name through
+	// KAIAD_IMAGE_PULL_SECRET so the rendered Deployment can reference
+	// it; without this every service pod ErrImagePulls on the private
+	// panel.kaiad.dev/<service> image. The secret must exist in the
+	// deploy namespace (it does for the agent's own namespace).
+	if ps := strings.TrimSpace(os.Getenv("KAIAD_IMAGE_PULL_SECRET")); ps != "" {
+		fmt.Fprintf(&b, "      imagePullSecrets:\n        - name: %q\n", ps)
+	}
+	b.WriteString("      containers:\n        - name: app\n")
 	fmt.Fprintf(&b, "          image: %s\n", in.imageRef)
 	if len(ports) > 0 {
 		b.WriteString("          ports:\n")
