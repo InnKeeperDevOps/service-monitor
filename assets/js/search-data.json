@@ -1,0 +1,1374 @@
+{"0": {
+    "doc": "Agent networking",
+    "title": "Agent networking",
+    "content": "Customer agents run on customer infrastructure and connect outbound to the SaaS realtime endpoint; they are not a public ingress surface for the control plane. ",
+    "url": "/security/agent-networking.html",
+    
+    "relUrl": "/security/agent-networking.html"
+  },"1": {
+    "doc": "Agent networking",
+    "title": "Model",
+    "content": ". | Egress-only to SaaS: Agent initiates WSS (typically 443/TLS); customer firewall allows outbound to your hostname(s) and port. | No required inbound to the agent for the SaaS path: Worker → gateway → existing session delivers AgentCommand; the agent does not open a listener for the platform. | Image pulls: when the agent deploys a service Kaiad built (&lt;KAIAD_REGISTRY_HOST&gt;/&lt;service&gt;:&lt;sha&gt;), the host docker daemon or cluster kubelet — not the agent process itself — pulls from the built-in OCI registry over HTTPS/443 to the same hostname as the realtime URL. The agent presents a pre-minted bearer (registrytoken) so the kubelet authenticates without operator setup. | Local scope: Docker/Compose and local runners use local APIs (e.g. Docker socket); separate from SaaS network policy. | . ",
+    "url": "/security/agent-networking.html#model",
+    
+    "relUrl": "/security/agent-networking.html#model"
+  },"2": {
+    "doc": "Agent networking",
+    "title": "Egress allowlist",
+    "content": "| Destination | Port / Protocol | Used by | Notes | . | &lt;panel-host&gt;/realtime | 443 / WSS | Agent process | Long-lived control channel. | . | &lt;panel-host&gt;/api/v1/* | 443 / HTTPS | Agent process | Heartbeats, log frames, command acks. | . | &lt;panel-host&gt;/v2/*, &lt;panel-host&gt;/registry/token | 443 / HTTPS | Host docker daemon or k8s kubelet | Image pulls of services Kaiad builds. Only needed when an agent runtime backend (docker / kubernetes) actually deploys Kaiad-hosted images. | . In single-hostname deployments all three paths share one DNS entry and TLS cert — a single allowlist rule covers everything. ",
+    "url": "/security/agent-networking.html#egress-allowlist",
+    
+    "relUrl": "/security/agent-networking.html#egress-allowlist"
+  },"3": {
+    "doc": "Agent networking",
+    "title": "Hardening checklist",
+    "content": ". | TLS end-to-end at the edge; terminate at LB or gateway per deployment. | Agent identity: enforce token or mTLS per product contract; rotate on compromise. | Path isolation: restrict agent WSS route exposure vs browser HTTPS (separate listener or strict routing). | Registry pull credentials: pull tokens issued to agents are pull-only; never grant push to a kubelet’s image-pull Secret. Push is reserved for the build worker, which mints its own JWTs in-process. | Egress from jobs: outbound HTTP requests and webhook deliveries run in privileged contexts—treat as SSRF-sensitive; allowlist where possible. | . ",
+    "url": "/security/agent-networking.html#hardening-checklist",
+    
+    "relUrl": "/security/agent-networking.html#hardening-checklist"
+  },"4": {
+    "doc": "Agent networking",
+    "title": "Validation checks",
+    "content": ". | From agent host: WSS handshake succeeds to configured SM_REALTIME_URL (or equivalent). | From the same host: curl -sSf https://&lt;panel-host&gt;/v2/ returns 401 with a WWW-Authenticate: Bearer … challenge (not a TCP error). That proves egress + TLS + DNS to the registry surface. | Firewall: deny unsolicited inbound to agent; allow only required local ports. | Audit: agent enrollment and command delivery events match expected tenant and agent IDs. | . ",
+    "url": "/security/agent-networking.html#validation-checks",
+    
+    "relUrl": "/security/agent-networking.html#validation-checks"
+  },"5": {
+    "doc": "API Credentials",
+    "title": "API Credentials",
+    "content": "API credentials are long-lived bearer tokens for machine integrations. They are how the Kaiad agent operator mints enrollment tokens at install time, and how any other automation that needs to call the Kaiad API on its own schedule (CI jobs, custom webhook gateways, scripted tenant administration) authenticates without holding a human session. ",
+    "url": "/admin/api-credentials.html",
+    
+    "relUrl": "/admin/api-credentials.html"
+  },"6": {
+    "doc": "API Credentials",
+    "title": "How they differ from other tokens",
+    "content": "| Kind | Lifetime | Purpose | Created via | . | Session token | 24h | A signed-in human’s bearer for the panel and direct API calls. | POST /api/v1/auth/login | . | Enrollment token | minutes – days (caller picks TTL) | Single-use bootstrap for a Kaiad agent on first connect. | POST /api/v1/agents/enrollment-tokens | . | API credential | until revoked | Machine integration; carries explicit scopes. | POST /api/v1/admin/api-credentials (this page) | . A user session implicitly holds every scope (an owner can do anything an api credential can). API credentials hold only the scopes named at creation time — nothing more. ",
+    "url": "/admin/api-credentials.html#how-they-differ-from-other-tokens",
+    
+    "relUrl": "/admin/api-credentials.html#how-they-differ-from-other-tokens"
+  },"7": {
+    "doc": "API Credentials",
+    "title": "Available scopes",
+    "content": "| Scope | Unlocks | . | enrollment-tokens.create | POST /api/v1/agents/enrollment-tokens — mint short-TTL enrollment tokens for new agents. | . | agents.read | GET /api/v1/agents, GET /api/v1/agents/:id — for status polling. | . The scope set is intentionally narrow and grows by deliberate addition. If you need an action a machine integration can’t perform today, open an issue rather than minting a session and storing it as a service account — sessions are not designed for long-lived storage and they expire. ",
+    "url": "/admin/api-credentials.html#available-scopes",
+    
+    "relUrl": "/admin/api-credentials.html#available-scopes"
+  },"8": {
+    "doc": "API Credentials",
+    "title": "Mint a credential",
+    "content": "Owner or admin session required. curl -fsS -X POST $KAIAD_BASE_URL/api/v1/admin/api-credentials \\ -H \"Authorization: Bearer $YOUR_OWNER_SESSION_TOKEN\" \\ -H \"Content-Type: application/json\" \\ -d '{\"name\":\"k8s-operator\",\"scopes\":[\"enrollment-tokens.create\"]}' . Sample response: . { \"id\": \"apicred-c7e8d563-f03d-4509-ba11-20e308e56de2\", \"tenantId\": \"t-...\", \"name\": \"k8s-operator\", \"scopes\": [\"enrollment-tokens.create\"], \"createdAt\": \"2026-05-08T06:09:55Z\", \"createdBy\": \"u-...\", \"lastUsedAt\": null, \"revokedAt\": null, \"token\": \"kop_79cd7aab5048fd5e97127212c933f844c108d5427ef0f3c37e1576d8b8252431\" } . The token field is shown exactly once. The server stores only a SHA-256 hash; if you lose the plaintext you must revoke the credential and mint a new one. Tokens are formatted kop_ + 64 hex chars (the kop_ prefix is intentional so a leaked token is recognizable in log scrubbers and secret-scanning tools). ",
+    "url": "/admin/api-credentials.html#mint-a-credential",
+    
+    "relUrl": "/admin/api-credentials.html#mint-a-credential"
+  },"9": {
+    "doc": "API Credentials",
+    "title": "Use a credential",
+    "content": "Send the token as a regular Authorization: Bearer header. The API’s resolveSession falls through to the api-credentials store after the session lookup misses, so any route a credential’s scopes permit accepts it transparently. curl -fsS -X POST $KAIAD_BASE_URL/api/v1/agents/enrollment-tokens \\ -H \"Authorization: Bearer $KOP_TOKEN\" \\ -H \"Content-Type: application/json\" \\ -d '{\"ttlSeconds\": 300}' . ",
+    "url": "/admin/api-credentials.html#use-a-credential",
+    
+    "relUrl": "/admin/api-credentials.html#use-a-credential"
+  },"10": {
+    "doc": "API Credentials",
+    "title": "List and revoke",
+    "content": "Owner or admin session required for both. The list endpoint never returns the plaintext token — only the metadata. curl -fsS $KAIAD_BASE_URL/api/v1/admin/api-credentials \\ -H \"Authorization: Bearer $YOUR_OWNER_SESSION_TOKEN\" curl -fsS -X DELETE \\ $KAIAD_BASE_URL/api/v1/admin/api-credentials/apicred-... \\ -H \"Authorization: Bearer $YOUR_OWNER_SESSION_TOKEN\" . Revocation is by setting revoked_at, not by deleting the row, so the audit trail remains intact. A revoked token is rejected by the API immediately. ",
+    "url": "/admin/api-credentials.html#list-and-revoke",
+    
+    "relUrl": "/admin/api-credentials.html#list-and-revoke"
+  },"11": {
+    "doc": "API Credentials",
+    "title": "Privilege-escalation gate",
+    "content": "API credentials cannot create or revoke other API credentials, even if you grant them every published scope. The admin endpoints short-circuit on session.kind === \"apiCredential\" and return 403 before consulting scopes. This is deliberate: it means a leaked machine token cannot be used to mint a fresh one with broader scopes, extending the blast radius beyond what the original credential could already do. If a machine integration needs to bootstrap another machine integration, the answer is a human-in-the-loop step (an admin runs the mint command), not a programmatic chain. ",
+    "url": "/admin/api-credentials.html#privilege-escalation-gate",
+    
+    "relUrl": "/admin/api-credentials.html#privilege-escalation-gate"
+  },"12": {
+    "doc": "API Credentials",
+    "title": "Rotation",
+    "content": "API credentials never expire automatically. Treat them like any other long-lived secret: . | Storage: in a cluster Secret, a vault, or an environment-variable secret managed by your orchestrator. Never check into VCS. | Schedule: rotate on a calendar (every 90 days is reasonable), before personnel changes affect who has access to the storage system, and immediately on any suspected exposure. | Procedure: mint the new credential first, update the consumer to use it, confirm lastUsedAt advances, then revoke the old one. Never revoke before the new credential is live; you’ll take the consumer down. | . The lastUsedAt column on the metadata response is your check that a rotation succeeded — the new credential should show recent activity, the old one should stop showing it. ",
+    "url": "/admin/api-credentials.html#rotation",
+    
+    "relUrl": "/admin/api-credentials.html#rotation"
+  },"13": {
+    "doc": "API Credentials",
+    "title": "RBAC and tenant scope",
+    "content": "API credentials are tenant-scoped — each row belongs to one tenant and only authenticates that tenant’s endpoints. There is no concept of a cross-tenant operator credential; if you operate multiple Kaiad tenants, each one mints its own credentials and your integration holds each one separately. The role of an authenticated api-credential session is pinned to operator. This is not an administrative role and won’t satisfy the role === \"owner\" | \"admin\" checks on admin endpoints. Scopes are the only authorization signal that flows from the credential. ",
+    "url": "/admin/api-credentials.html#rbac-and-tenant-scope",
+    
+    "relUrl": "/admin/api-credentials.html#rbac-and-tenant-scope"
+  },"14": {
+    "doc": "API Credentials",
+    "title": "See also",
+    "content": ". | Install on Kubernetes — the operator’s install flow uses a enrollment-tokens.create credential. | HTTP API reference — full request/response schemas. | . ",
+    "url": "/admin/api-credentials.html#see-also",
+    
+    "relUrl": "/admin/api-credentials.html#see-also"
+  },"15": {
+    "doc": "API reference",
+    "title": "API reference",
+    "content": "Base URL is your deployed API origin (e.g. https://api.example.com). Versioned REST routes live under /api/v1. Authenticated routes expect: . Authorization: Bearer &lt;token&gt; . unless noted otherwise. Error bodies follow the shared apiError shape (code, message, optional correlationId). ",
+    "url": "/reference/api.html",
+    
+    "relUrl": "/reference/api.html"
+  },"16": {
+    "doc": "API reference",
+    "title": "Health and readiness",
+    "content": "| Method | Path | Auth | Description | . | GET | /health | No | Liveness: process up and uptime. | . | GET | /ready | No | Readiness: returns 503 if Postgres/Redis TCP checks fail when those dependencies are configured. | . ",
+    "url": "/reference/api.html#health-and-readiness",
+    
+    "relUrl": "/reference/api.html#health-and-readiness"
+  },"17": {
+    "doc": "API reference",
+    "title": "Authentication and session",
+    "content": "| Method | Path | Auth | Description | . | POST | /api/v1/auth/login | No | Body: email, password. Returns token and user session payload. | . | GET | /api/v1/me | Bearer | Current user and tenant membership. | . In non-production, a development bearer shortcut may exist—do not rely on it outside local dev. ",
+    "url": "/reference/api.html#authentication-and-session",
+    
+    "relUrl": "/reference/api.html#authentication-and-session"
+  },"18": {
+    "doc": "API reference",
+    "title": "Tenant settings",
+    "content": "| Method | Path | Auth | Description | . | GET | /api/v1/settings | Bearer | Returns tenant settings or 404 if none stored yet. | . | POST | /api/v1/settings | Bearer | Upsert tenant settings; body must match session tenantId (cross-tenant writes denied). | . ",
+    "url": "/reference/api.html#tenant-settings",
+    
+    "relUrl": "/reference/api.html#tenant-settings"
+  },"19": {
+    "doc": "API reference",
+    "title": "Monitored services",
+    "content": "A service can be bound to zero or more agents. The response shape carries agents: [{ agentId }, …]. Create/update accept agentIds: string[] to set the binding atomically with the service write. Per-binding endpoints below let you bind/unbind without touching the service row. | Method | Path | Auth | Description | . | GET | /api/v1/services | Bearer | List monitored services for the tenant. Each service includes its bound agents. | . | POST | /api/v1/services | Bearer | Create a monitored service (201). Optional agentIds initial bindings. Body fields include name, gitRepoUrl, sshKeyId, branch, dockerImage, composePath, and pipelineName (required when the repo’s kaiad.yaml is multi-pipeline — see Onboarding a service). | . | PATCH | /api/v1/services/:id | Bearer | Update fields. When agentIds is provided, replaces the full set of bindings. Pass [] to detach all. pipelineName: null clears the pin (revert to single-pipeline default); a non-empty string repins. | . | DELETE | /api/v1/services/:id | Bearer | Delete a service; its bindings are garbage-collected. | . Per-binding endpoints . These work without rewriting the whole service. Useful from the Agents page where you bind one service at a time. See Agent ↔ service binding for the full model. | Method | Path | Auth | Description | . | GET | /api/v1/agents/:agentId/services | Bearer | List services currently bound to one agent. | . | POST | /api/v1/agents/:agentId/services/:serviceId | Bearer | Bind a service to an agent. Idempotent: response bound=false on repeat. | . | DELETE | /api/v1/agents/:agentId/services/:serviceId | Bearer | Remove a binding (404 if not bound). | . Builds . The build worker turns service repos into pushed images. Build rows record git SHA, pipeline yaml, status, and (on success) the pushed image ref. See kaiad.yaml reference for what the worker actually runs. | Method | Path | Auth | Description | . | GET | /api/v1/services/:id/builds | Bearer | Build history for one service. Each row carries id, gitSha, status (queued/running/success/failed), imageRef, failureReason, timestamps. | . | POST | /api/v1/services/:id/builds | Bearer (owner/admin) | Manually trigger a build. The worker resolves HEAD of the configured branch via git ls-remote on claim. Successful deployable builds dispatch a redeploy to every bound agent. | . | GET | /api/v1/services/:id/builds/:buildId | Bearer | Get one build, including the full log buffer and resolved pipeline yaml. | . | GET | /api/v1/services/:id/builds/:buildId/artifacts/:name | Bearer | Stream a captured artifact (anything listed under artifacts: in the pipeline). Octet-stream body. | . ",
+    "url": "/reference/api.html#monitored-services",
+    
+    "relUrl": "/reference/api.html#monitored-services"
+  },"20": {
+    "doc": "API reference",
+    "title": "Incidents",
+    "content": "| Method | Path | Auth | Description | . | GET | /api/v1/incidents | Bearer | List incidents for the tenant. | . | GET | /api/v1/incidents/:id | Bearer | Get one incident by id; 404 if missing or out of scope. | . | PATCH | /api/v1/incidents/:id/status | Bearer | Update incident status (validated body); 404 if not found. | . Note: Status updates use the …/status sub-resource, not PATCH on the collection. ",
+    "url": "/reference/api.html#incidents",
+    
+    "relUrl": "/reference/api.html#incidents"
+  },"21": {
+    "doc": "API reference",
+    "title": "Agents and enrollment",
+    "content": "| Method | Path | Auth | Description | . | GET | /api/v1/agents | Bearer | List agents registered for the tenant. | . | GET | /api/v1/agents/:id | Bearer | Fetch one agent including live WebSocket presence. | . | PATCH | /api/v1/agents/:id | Bearer (admin) | Update agent metadata (name, allowedCapabilities). | . | DELETE | /api/v1/agents/:id | Bearer (admin) | Remove an agent registration; detaches it from any services and closes its realtime session. | . | GET | /api/v1/agents/enrollment-tokens | Bearer | List active enrollment tokens. | . | POST | /api/v1/agents/enrollment-tokens | Bearer or API credential with enrollment-tokens.create | Create enrollment token (ttlSeconds required). | . | POST | /api/v1/agents/enrollment-tokens/:tokenId/deactivate | Bearer | Mark an active token as revoked; agents using it are rejected on next connect. | . | DELETE | /api/v1/agents/enrollment-tokens/:tokenId | Bearer | Delete an inactive (revoked or expired) token row. Active tokens must be deactivated first. | . The enrollment endpoint accepts either a user session or an API credential carrying the enrollment-tokens.create scope. The latter is how the Kaiad agent operator mints tokens on a cluster’s behalf. ",
+    "url": "/reference/api.html#agents-and-enrollment",
+    
+    "relUrl": "/reference/api.html#agents-and-enrollment"
+  },"22": {
+    "doc": "API reference",
+    "title": "Admin / API credentials",
+    "content": "Long-lived bearer tokens for machine integrations. Owner or admin session is required for all three endpoints — API credentials cannot mint or revoke other API credentials. See the dedicated API Credentials page for scope documentation, rotation guidance, and the privilege-escalation gate. | Method | Path | Auth | Description | . | POST | /api/v1/admin/api-credentials | Bearer (owner/admin) | Mint a credential. Body: name, scopes[]. Returns metadata + the plaintext token (shown once). | . | GET | /api/v1/admin/api-credentials | Bearer (owner/admin) | List credentials for the tenant. Plaintext token is never returned. | . | DELETE | /api/v1/admin/api-credentials/:id | Bearer (owner/admin) | Revoke (sets revoked_at; row is preserved for audit). | . Token format: kop_ + 64 hex chars. Stored as a SHA-256 hash; recovery of a lost plaintext is impossible — revoke and re-mint instead. ",
+    "url": "/reference/api.html#admin--api-credentials",
+    
+    "relUrl": "/reference/api.html#admin--api-credentials"
+  },"23": {
+    "doc": "API reference",
+    "title": "Error groups",
+    "content": "Deduplicated buckets of error-level log frames the agent has shipped. See Error grouping &amp; auto-fix for the full lifecycle. | Method | Path | Auth | Description | . | GET | /api/v1/error-groups | Bearer | All error groups for the tenant. | . | GET | /api/v1/agents/:agentId/error-groups | Bearer | Groups originating from one agent. | . | GET | /api/v1/services/:id/error-groups | Bearer | Groups originating from one service. | . Status flips (open → fixing → fixed / paused / missing_auth) are driven by the auto-fix dispatcher and broadcast to the tenant’s panel sessions as error_group_updated UI telemetry events on the realtime channel. There is no public REST endpoint to set status manually today — the panel handles it. Programmatic control is a known gap. ",
+    "url": "/reference/api.html#error-groups",
+    
+    "relUrl": "/reference/api.html#error-groups"
+  },"24": {
+    "doc": "API reference",
+    "title": "GitHub",
+    "content": "| Method | Path | Auth | Description | . | GET | /api/v1/github/installations | Bearer | List GitHub installations recorded for the tenant. | . | POST | /api/v1/github/installations | Bearer | Upsert installation metadata; tenant scope enforced. | . | POST | /api/v1/github/policy/check | Bearer | Evaluate automation policy for a proposed action; 403 if policy denies. | . ",
+    "url": "/reference/api.html#github",
+    
+    "relUrl": "/reference/api.html#github"
+  },"25": {
+    "doc": "API reference",
+    "title": "Webhooks",
+    "content": "| Method | Path | Auth | Description | . | POST | /webhooks/github | Signature | GitHub webhooks: validates x-hub-signature-256 with GITHUB_WEBHOOK_SECRET; 401 if invalid. Enqueues processing jobs. | . ",
+    "url": "/reference/api.html#webhooks",
+    
+    "relUrl": "/reference/api.html#webhooks"
+  },"26": {
+    "doc": "API reference",
+    "title": "Realtime (agents)",
+    "content": "| Protocol | Path | Auth | Description | . | WebSocket | /realtime | Session on wire | Agents connect over WS/WSS; first valid heartbeat registers the agent. Messages include log_event ingestion and acknowledgements. | . Treat the WebSocket as a long-lived channel, not a REST substitute—pair with enrollment tokens and tenant policies for production. ",
+    "url": "/reference/api.html#realtime-agents",
+    
+    "relUrl": "/reference/api.html#realtime-agents"
+  },"27": {
+    "doc": "API reference",
+    "title": "OCI registry",
+    "content": "Kaiad serves an OCI Distribution v2 registry in the same process. Two surfaces: . Token endpoint . | Method | Path | Auth | Description | . | GET | /registry/token | Basic | Mints a registry-scoped JWT. Pass Authorization: Basic base64(user:password) and query params service=kaiad-registry&amp;scope=repository:&lt;name&gt;:&lt;actions&gt;. Returns { token, expires_in, issued_at }. Owner/admin sessions and API credentials grant pull,push,*; enrollment tokens grant pull only. In non-prod, admin:dev-token also works. | . /v2/* (OCI Distribution) . Standard pull/push surface. Auth is bearer JWT (mint via /registry/token). The build worker mints in-process and skips this endpoint entirely. | Method | Path | Required scope | . | GET | /v2/ | (any valid token) | . | GET | /v2/_catalog?n=&amp;last= | registry:catalog:* (admin) | . | GET | /v2/&lt;name&gt;/tags/list?n=&amp;last= | repository:&lt;name&gt;:pull | . | HEAD/GET | /v2/&lt;name&gt;/manifests/&lt;ref&gt; | repository:&lt;name&gt;:pull | . | PUT | /v2/&lt;name&gt;/manifests/&lt;ref&gt; | repository:&lt;name&gt;:push | . | DELETE | /v2/&lt;name&gt;/manifests/&lt;digest&gt; | repository:&lt;name&gt;:delete | . | HEAD/GET | /v2/&lt;name&gt;/blobs/&lt;digest&gt; | repository:&lt;name&gt;:pull | . | DELETE | /v2/&lt;name&gt;/blobs/&lt;digest&gt; | repository:&lt;name&gt;:delete | . | POST | /v2/&lt;name&gt;/blobs/uploads/ | repository:&lt;name&gt;:push | . | PATCH/PUT/GET/DELETE | /v2/&lt;name&gt;/blobs/uploads/&lt;uuid&gt; | repository:&lt;name&gt;:push | . The catalog and tags-list responses include OCI-standard pagination headers (Link: …; rel=\"next\"). Panel-facing admin . The Registry page in the panel uses these. They read directly from Postgres rather than calling /v2/* — richer response shape (digest + size + createdAt per tag) in a single round trip. | Method | Path | Auth | Description | . | GET | /api/v1/registry/repositories | Bearer (owner/admin) | Lists every repo with at least one manifest or tag. | . | GET | /api/v1/registry/repositories/:name/tags | Bearer (owner/admin) | Per-tag detail: name, manifest digest, total size (config + layers), creation timestamp from the image config blob’s created field when present. Repo names with slashes must be URL-encoded (library%2Falpine). | . | DELETE | /api/v1/registry/repositories/:name/tags/:tag | Bearer (owner/admin) | Drop the tag. If no other tag references the underlying manifest, the manifest is also deleted; orphan blobs are reclaimed by the GC sweep. | . ",
+    "url": "/reference/api.html#oci-registry",
+    
+    "relUrl": "/reference/api.html#oci-registry"
+  },"28": {
+    "doc": "API reference",
+    "title": "Related",
+    "content": ". | Reference index — OpenAPI path, queues, headers. | GitHub App setup — webhook headers and secrets. | kaiad.yaml reference — what the build endpoints actually run. | Built-in OCI registry — full registry semantics and GC. | . ",
+    "url": "/reference/api.html#related",
+    
+    "relUrl": "/reference/api.html#related"
+  },"29": {
+    "doc": "Binding services to agents",
+    "title": "Binding services to agents",
+    "content": "A MonitoredService and a Kaiad agent are linked through a many-to-many binding: one service can be observed by several agents at once (HA setups, multi-cluster deployments where each cluster has its own agent), and one agent can be the observer for many services. The binding is independent of the service’s other config — you can change the bound agent set without touching the repo URL, branch, or SSH key. A binding does two things: . | Routes log frames + auto-fix dispatch — covered below. | Makes the agent a deploy target. Every successful kind: deployable build of the service dispatches a redeploy command to every bound agent. The agent’s runtime backend (docker, kubernetes, shell) handles the actual rollout — see Agent runtimes. kind: supporting services (typically base images consumed by others via dependsOn: — see the pipeline reference) are never deployed even when bound. | . flowchart LR subgraph Svcs[Services] S1[api-prod] S2[worker-prod] S3[supportingbase-image] end subgraph Bind[\"agent_service_bindings(many-to-many)\"] direction TB B1[\"api-prod ↔ agt-east-1\"] B2[\"api-prod ↔ agt-east-2\"] B3[\"worker-prod ↔ agt-east-1\"] B4[\"supporting bindings allowedbut never trigger deploys\"] end subgraph Agents A1[agt-east-1k8s runtime] A2[agt-east-2docker runtime] end S1 --- B1 S1 --- B2 S2 --- B3 S3 --- B4 B1 --- A1 B2 --- A2 B3 --- A1 B4 --- A1 S1 -. \"successful build →redeploy to BOTH agents\" .-> A1 S1 -.-> A2 S2 -. \"redeploy to one agent\" .-> A1 S3 -. \"no deploy dispatch(kind: supporting)\" .-> A1 . ",
+    "url": "/agent/binding-services.html",
+    
+    "relUrl": "/agent/binding-services.html"
+  },"30": {
+    "doc": "Binding services to agents",
+    "title": "When to bind multiple agents to one service",
+    "content": ". | High-availability monitoring. Two agents on separate hosts watch the same service. The auto-fix dispatcher picks whichever is online when an error fingerprint lands; if both are offline the group flips to missing_auth (current dispatcher reuses the same status — see the error grouping doc for the lifecycle). | Multi-cluster Kubernetes. A workload runs in two clusters; each cluster has its own Kaiad operator install and its own KaiadAgent. Both bind to the same MonitoredService. The agents tail their in-cluster pods independently and report under the same serviceId; error groups dedupe across both clusters by fingerprint. | Migration windows. Bind the new agent before unbinding the old one to avoid an observability gap. | . ",
+    "url": "/agent/binding-services.html#when-to-bind-multiple-agents-to-one-service",
+    
+    "relUrl": "/agent/binding-services.html#when-to-bind-multiple-agents-to-one-service"
+  },"31": {
+    "doc": "Binding services to agents",
+    "title": "When not to bind multiple agents",
+    "content": ". | Single-host services with no HA need. One agent is fine. Multi-bind doesn’t add value and creates ambiguity in kubectl-style commands (“which agent runs this fix?” — currently: first online). | As a redundancy substitute for the agent process itself. If you need the agent to be HA, run the agent under a supervisor (k8s Deployment/systemd) — that’s the right tool. Multi-bind is for observability redundancy across hosts/clusters, not for agent uptime. | . ",
+    "url": "/agent/binding-services.html#when-not-to-bind-multiple-agents",
+    
+    "relUrl": "/agent/binding-services.html#when-not-to-bind-multiple-agents"
+  },"32": {
+    "doc": "Binding services to agents",
+    "title": "Editing bindings from the panel",
+    "content": "Two surfaces, both equivalent: . | Agents page → expand a row → Services subsection. Pick a service from the dropdown and click + Bind. Existing bindings appear with a Detach button. Best for “this agent should watch these services.” | Services page → edit a service → Bound agents fieldset. Multi-select checkboxes for every agent in the tenant. Best for “this service is watched by these agents.” | . Both call the same endpoints under the hood — pick whichever direction matches your mental model for the action. ",
+    "url": "/agent/binding-services.html#editing-bindings-from-the-panel",
+    
+    "relUrl": "/agent/binding-services.html#editing-bindings-from-the-panel"
+  },"33": {
+    "doc": "Binding services to agents",
+    "title": "Editing bindings from the API",
+    "content": "Per-binding (preferred for one-at-a-time changes; safe to call repeatedly): . # Bind curl -fsS -X POST $KAIAD/api/v1/agents/$AGENT_ID/services/$SERVICE_ID \\ -H \"Authorization: Bearer $TOKEN\" # {\"bound\":true,\"agentId\":\"...\",\"serviceId\":\"...\"} # Unbind curl -fsS -X DELETE $KAIAD/api/v1/agents/$AGENT_ID/services/$SERVICE_ID \\ -H \"Authorization: Bearer $TOKEN\" # 204 . Bulk replace via PATCH /api/v1/services/:id with agentIds[]: . curl -fsS -X PATCH $KAIAD/api/v1/services/$SERVICE_ID \\ -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" \\ -d '{\"agentIds\":[\"agt-1\",\"agt-2\"]}' . agentIds semantics on PATCH: . | Provided + non-empty: replace the full set of bindings (delete-not-in, insert-missing). | Provided + []: detach all agents from this service. | Omitted: bindings are left alone. | . ",
+    "url": "/agent/binding-services.html#editing-bindings-from-the-api",
+    
+    "relUrl": "/agent/binding-services.html#editing-bindings-from-the-api"
+  },"34": {
+    "doc": "Binding services to agents",
+    "title": "Auto-fix targeting",
+    "content": "When a service has multiple bindings and an app_log_error lands: . | The dispatcher reads the bindings list in creation order (oldest first). | It picks the first agent whose realtime session is currently connected. | If none are connected, the group reports skipped_no_online_agent — no command is queued, the group stays open for the next attempt. | . Round-robin and “least-loaded” strategies are tracked as a follow-up; the current behavior is deliberately simple. If you have a preference for which agent should win on a service that has both an HA pair, bind your preferred agent first. ",
+    "url": "/agent/binding-services.html#auto-fix-targeting",
+    
+    "relUrl": "/agent/binding-services.html#auto-fix-targeting"
+  },"35": {
+    "doc": "Binding services to agents",
+    "title": "Tenant scoping",
+    "content": "Both the agent and the service must live in the session’s tenant. A bind attempt that names an agent or service in another tenant returns 404 (the API doesn’t leak whether the resource exists in another tenant). Same on detach. ",
+    "url": "/agent/binding-services.html#tenant-scoping",
+    
+    "relUrl": "/agent/binding-services.html#tenant-scoping"
+  },"36": {
+    "doc": "Binding services to agents",
+    "title": "What deleting an agent does",
+    "content": "DELETE /api/v1/agents/:id removes the agent and garbage-collects all bindings for that agent. The services it was bound to remain — they just lose this one binding row. Same for DELETE /api/v1/services/:id on the service side. ",
+    "url": "/agent/binding-services.html#what-deleting-an-agent-does",
+    
+    "relUrl": "/agent/binding-services.html#what-deleting-an-agent-does"
+  },"37": {
+    "doc": "Binding services to agents",
+    "title": "See also",
+    "content": ". | HTTP API reference | Error grouping &amp; auto-fix — what the auto-fix dispatcher does with the chosen agent. | Plan that introduced this model: docs/superpowers/plans/2026-05-08-multi-agent-service-binding-plan.md | . ",
+    "url": "/agent/binding-services.html#see-also",
+    
+    "relUrl": "/agent/binding-services.html#see-also"
+  },"38": {
+    "doc": "Configure the control plane",
+    "title": "Configure the control plane",
+    "content": "This page covers environment variables, bootstrap identity, and how to run the API and worker processes. For a full stack layout (web, API, worker, Postgres, Redis), use the repository’s Docker Compose reference. ",
+    "url": "/getting-started/configure-control-plane.html",
+    
+    "relUrl": "/getting-started/configure-control-plane.html"
+  },"39": {
+    "doc": "Configure the control plane",
+    "title": "Environment variables (core)",
+    "content": "| Variable | Component | Purpose | . | DATABASE_URL | API | When set and Postgres is available, tenant settings and related data use Postgres. If unset or driver missing, the API may fall back to an in-memory store (suitable for dev only). | . | REDIS_URL | API, worker | Preferred single URL for Redis (also used by BullMQ). Alternatively REDIS_HOST / REDIS_PORT / REDIS_PASSWORD are supported by the queue layer. | . | PORT | API | HTTP listen port (default 3001 in code; 8091 in prod compose, 8092 in dev compose). | . | KAIAD_DATA_DIR | API | Root for persistent files written by the API process — /data in compose. Sub-paths include registry-auth/ (JWT signing keys), builds/ (artifact storage), and the registry-auth keypair if not explicitly overridden. | . | KAIAD_ENCRYPTION_KEY | API, worker | AES-256-GCM key used to encrypt stored secrets (SSH keys, …). Either 64 hex chars (32 raw bytes) or any string (sha256-hashed). Required when NODE_ENV=production; dev falls back to a fixed key. Must match across all processes that read the encrypted rows. | . | SM_EMBED_WORKER | API | When 1, the API process also runs the build worker and BullMQ consumers in-process. Default for both compose stacks — one container does everything (API + worker + native registry + web bundle). | . | GITHUB_WEBHOOK_SECRET | API | Shared secret for HMAC-SHA256 verification of POST /webhooks/github (x-hub-signature-256). Must match the secret configured in the GitHub App’s webhook settings. | . | NODE_ENV | API, worker | production disables dev-only shortcuts (e.g. seeded dev user, admin:dev-token Basic-auth shortcut on /registry/token); use development for local iteration. | . | WORKER_HEALTH_PORT | Worker | HTTP port for the worker health endpoint when run standalone (default derived in worker entry; standalone compose sets 9090). Unused with SM_EMBED_WORKER=1. | . | WORKER_HEALTH_HOST | Worker | Bind address (default 0.0.0.0). | . Readiness (GET /ready) uses TCP probes to Postgres and Redis when POSTGRES_* and REDIS_* host/port pairs are configured—see readyChecks in the API—so load balancers only route traffic when dependencies are reachable. ",
+    "url": "/getting-started/configure-control-plane.html#environment-variables-core",
+    
+    "relUrl": "/getting-started/configure-control-plane.html#environment-variables-core"
+  },"40": {
+    "doc": "Configure the control plane",
+    "title": "Build pipeline",
+    "content": "When SM_EMBED_WORKER=1 (the compose default), the API process also runs the build pipeline that turns service repos into pushed images. Configure it with: . | Variable | Purpose | . | KAIAD_BUILDS_HOST_DIR | Absolute host path to the bind-mounted builds workspace. The build worker shells out to docker build/docker run against the host daemon; the spawned containers need the workspace at a path the host can see. Compose: ${PWD}/data/kaiad-builds. | . | KAIAD_REGISTRY_HOST | External hostname recorded in image refs (e.g. panel.kaiad.dev). Agents pull from this. Used in DB rows and {kaiad_registry_host} template interpolation. | . | KAIAD_REGISTRY_INTERNAL | Loopback hostname the build worker uses for in-container crane pushes. Compose: 127.0.0.1:&lt;PORT&gt;. Falls back to KAIAD_REGISTRY_HOST if unset. | . | KAIAD_REGISTRY_REALM | Absolute URL of /registry/token advertised in WWW-Authenticate challenges. Must be absolute — crane’s Go HTTP client rejects relative paths with unsupported protocol scheme. Compose: http://127.0.0.1:&lt;PORT&gt;/registry/token. | . | KAIAD_REGISTRY_INSECURE | When 0, the registry endpoint is HTTPS. Default 1 (plain HTTP for internal pushes). | . The build pipeline also needs /var/run/docker.sock bind-mounted into the container so the worker can spawn build containers via the host docker daemon. Both compose stacks wire this — see env/dev/docker-compose.yml and env/prod/docker-compose.yml. For the build pipeline schema (kaiad.yaml) and variable interpolation, see kaiad.yaml reference and Pipeline variables. ",
+    "url": "/getting-started/configure-control-plane.html#build-pipeline",
+    
+    "relUrl": "/getting-started/configure-control-plane.html#build-pipeline"
+  },"41": {
+    "doc": "Configure the control plane",
+    "title": "Built-in OCI registry",
+    "content": "The same process serves an OCI Distribution v2 registry at /v2/*. Image blobs live in Postgres pg_largeobject; manifests inline as BYTEA. Auth uses JWTs minted by /registry/token. | Variable | Purpose | . | REGISTRY_AUTH_KEY_PATH | Private signing key (PEM). Default ${KAIAD_DATA_DIR}/registry-auth/key.pem. Generated on first boot if missing. | . | REGISTRY_AUTH_CERT_PATH | Public cert (PEM). Default ${KAIAD_DATA_DIR}/registry-auth/cert.pem. The libtrust kid is derived from its SPKI. | . | REGISTRY_AUTH_ISSUER | JWT iss claim. Default kaiad. | . | REGISTRY_AUTH_SERVICE | JWT aud claim. Default kaiad-registry. | . | REGISTRY_AUTH_TOKEN_TTL_SECONDS | Token lifetime. Default 3600 (bumped from the 5-min docker/distribution default so multi-GB layer pushes don’t 401 mid-upload). | . Persist KAIAD_DATA_DIR/registry-auth/ (a bind mount in compose) so the keypair survives restarts — otherwise every restart rotates the keypair, invalidating any tokens issued before the restart. For everything else about the registry (endpoints, GC, pulling from agents), see Built-in OCI registry. ",
+    "url": "/getting-started/configure-control-plane.html#built-in-oci-registry",
+    
+    "relUrl": "/getting-started/configure-control-plane.html#built-in-oci-registry"
+  },"42": {
+    "doc": "Configure the control plane",
+    "title": "First admin user",
+    "content": "Behavior depends on auth backend and environment: . | In non-production, the API may seed a development user (e.g. admin@example.com with a known password) so you can log in immediately—treat this as non-secret and never rely on it in production. | For production, plan explicit provisioning: create users and tenant memberships through your chosen auth path (or automation) as soon as a real user store is wired. Until then, document who owns bootstrap credentials and rotate them after first login. | . Use POST /api/v1/auth/login to obtain a Bearer token, then call GET /api/v1/me to confirm tenant scope. ",
+    "url": "/getting-started/configure-control-plane.html#first-admin-user",
+    
+    "relUrl": "/getting-started/configure-control-plane.html#first-admin-user"
+  },"43": {
+    "doc": "Configure the control plane",
+    "title": "Running the API",
+    "content": "From the monorepo (after install): . pnpm --filter @sm/api build pnpm --filter @sm/api start . The process listens on PORT (default 3001). Verify: . | GET /health — process up. | GET /ready — dependencies reachable (or 503 with a reason code). | . ",
+    "url": "/getting-started/configure-control-plane.html#running-the-api",
+    
+    "relUrl": "/getting-started/configure-control-plane.html#running-the-api"
+  },"44": {
+    "doc": "Configure the control plane",
+    "title": "Running the worker",
+    "content": "Workers consume BullMQ queues on Redis. Start the worker service with Redis reachable using the same connection settings as the API: . pnpm --filter @sm/worker build pnpm --filter @sm/worker start . Confirm the worker health HTTP endpoint (see WORKER_HEALTH_PORT) responds OK for orchestrators. ",
+    "url": "/getting-started/configure-control-plane.html#running-the-worker",
+    
+    "relUrl": "/getting-started/configure-control-plane.html#running-the-worker"
+  },"45": {
+    "doc": "Configure the control plane",
+    "title": "Docker Compose reference",
+    "content": "Two canonical stacks live in the repo: . | env/dev/docker-compose.yml — the unified-container dev stack. Builds Dockerfile.unified, runs API + worker + native registry + web bundle in one kaiad container alongside Postgres and Redis. Mounts ./data/kaiad, ./data/registry-auth, ./data/kaiad-builds, and /var/run/docker.sock. Listens on 8092. UID 1000. | env/prod/docker-compose.yml — same unified shape for production. Listens on 8091, runs as root, no perms-init sidecar. Secrets (KAIAD_ENCRYPTION_KEY) read from env/prod/.env (gitignored). | . The older deploy/docker/compose.yml runs API, worker, and web as separate containers (no embedded worker, no native registry) and is kept as a reference for layouts that prefer process isolation over the unified container. New deployments should follow the unified pattern. Use these files as references for port mappings, volume mounts, and dependency wiring—not as one-size-fits-all production charts. ",
+    "url": "/getting-started/configure-control-plane.html#docker-compose-reference",
+    
+    "relUrl": "/getting-started/configure-control-plane.html#docker-compose-reference"
+  },"46": {
+    "doc": "Configure the control plane",
+    "title": "Related",
+    "content": ". | GitHub App setup — webhook secret and GITHUB_WEBHOOK_SECRET. | Install Agent — point agents at wss://…/realtime (or ws:// in dev). | Onboarding a service — once the plane is up, add a service. | kaiad.yaml reference — pipeline schema. | Built-in OCI registry — pull/push, auth, garbage collection. | Reference — environment tables — extended list including queues and headers. | . ",
+    "url": "/getting-started/configure-control-plane.html#related",
+    
+    "relUrl": "/getting-started/configure-control-plane.html#related"
+  },"47": {
+    "doc": "Error grouping & auto-fix",
+    "title": "Error grouping &amp; auto-fix dispatch",
+    "content": "Kaiad watches the log stream from each enrolled agent for error-level lines, normalizes them into deduplicated error groups, and (when the service has the credentials and is eligible) dispatches an auto-fix run that clones the repo, runs the configured plan executor (cursor or claude) against the failing context, commits any changes, and pushes them back. This page covers the full loop: what you see, how groups are formed, when and why a fix is dispatched, and the lifecycle states a group moves through. ",
+    "url": "/agent/error-grouping.html#error-grouping--auto-fix-dispatch",
+    
+    "relUrl": "/agent/error-grouping.html#error-grouping--auto-fix-dispatch"
+  },"48": {
+    "doc": "Error grouping & auto-fix",
+    "title": "In the panel",
+    "content": "The Agents page shows an Error Groups section per agent. Each row is one error group with: . | Status badge (see Lifecycle below). | Sample message — one representative line; the full deduplicated set lives behind it. | First / last seen timestamps and an event count. | Service the group originated from. | . A live WebSocket subscription updates the section in place as new groups appear and existing groups change status. ",
+    "url": "/agent/error-grouping.html#in-the-panel",
+    
+    "relUrl": "/agent/error-grouping.html#in-the-panel"
+  },"49": {
+    "doc": "Error grouping & auto-fix",
+    "title": "How groups are formed",
+    "content": "Each app_log_error frame the agent emits carries: . | agentId, serviceId, message, contextLines (preceding lines for context), and ts. | The agent decides what counts as an error-level line; the API trusts the classification. | . The API normalizes the message before fingerprinting. The implementation lives in apps/api/src/errorGrouping.ts:13 and strips: . | Pattern | Replacement | . | ISO/RFC3339 timestamps | &lt;TS&gt; | . | HH:MM:SS times | &lt;TIME&gt; | . | UUIDs | &lt;UUID&gt; | . | IPv4 addresses (with optional :port) | &lt;IP&gt; | . | Long hex tokens (≥8 chars) | &lt;HEX&gt; | . | Quoted strings (\"…\" and '…') | \"&lt;STR&gt;\" / '&lt;STR&gt;' | . | path/file.ext:42[:7] line refs | path/file.ext:&lt;LINE&gt; | . | Bare numbers ≥3 digits | &lt;N&gt; | . Two errors with the same shape but different request ids therefore collide into the same group. The fingerprint is sha1(serviceId || ' ' || normalizedMessage), truncated to 16 hex chars. This is intentionally noisy on the side of grouping: identical exception classes from different code paths may collide. The contextLines array attached to the group is what disambiguates in the UI (and the auto-fix prompt) when collisions happen. ",
+    "url": "/agent/error-grouping.html#how-groups-are-formed",
+    
+    "relUrl": "/agent/error-grouping.html#how-groups-are-formed"
+  },"50": {
+    "doc": "Error grouping & auto-fix",
+    "title": "When auto-fix dispatches",
+    "content": "On every app_log_error the API: . | Skips obvious user-input errors. isProbablyUserInputError matches conservative patterns (HTTP 4xx, bad request, unauthorized, forbidden, not found, validation error/failed, invalid input/payload/json/body, missing required, unprocessable entity, schema validation, zod error). When it matches, the line is not turned into an error group at all — there’s nothing to auto-fix in user input. | Upserts the group. Either creates a new one or bumps the event count and last-seen timestamp on an existing fingerprint. | Calls the dispatcher (apps/api/src/autoFixDispatcher.ts). The dispatcher returns one of these outcomes: | . | Outcome | Meaning | . | dispatched | A run_fix_plan realtime command was queued for the agent and the group flipped to fixing. | . | skipped_paused | Group status is paused; the dispatcher does nothing. | . | skipped_already_fixing | An earlier fix is in flight; we don’t pile on. | . | skipped_missing_auth | The service has no SSH key or the key material can’t be loaded. Group flips to missing_auth. | . When dispatched, the agent receives a run_fix_plan command containing: . | errorGroupId, errorMessage, normalizedMessage, fingerprint | contextLines (the buffered context from the agent’s log shipper) | gitRepoUrl and branch from the service record | sshKeyType and sshKeyValue (resolved from the service’s sshKeyId) | . The agent clones the repo into a temp workspace, invokes the configured plan executor, commits any resulting diff, and pushes to the service’s branch. The whole flow is logged to the agent’s stdout and surfaced as an agent_command_status event back to the panel. ",
+    "url": "/agent/error-grouping.html#when-auto-fix-dispatches",
+    
+    "relUrl": "/agent/error-grouping.html#when-auto-fix-dispatches"
+  },"51": {
+    "doc": "Error grouping & auto-fix",
+    "title": "Lifecycle",
+    "content": "| Status | Set by | Meaning | . | open | API on first sighting / when a previous fix fails | The group is eligible for auto-fix on the next matching error. | . | fixing | Dispatcher when it queues run_fix_plan | A fix is in flight. New occurrences of this fingerprint are recorded but not re-dispatched. | . | fixed | API when the fix command reports completed | The dispatcher has confirmed the fix landed. The group remains visible in the UI; if the same fingerprint reappears, it flips back to open automatically. | . | paused | (currently UI-only; see Pausing below) | Auto-fix is disabled for this group; new errors still update the count. | . | missing_auth | Dispatcher when SSH key lookup fails | The group cannot be auto-fixed until the service is given an SSH key. Re-evaluated on the next matching error. | . ",
+    "url": "/agent/error-grouping.html#lifecycle",
+    
+    "relUrl": "/agent/error-grouping.html#lifecycle"
+  },"52": {
+    "doc": "Error grouping & auto-fix",
+    "title": "API endpoints",
+    "content": "All three list endpoints accept any authenticated session: . GET /api/v1/error-groups GET /api/v1/agents/:agentId/error-groups GET /api/v1/services/:id/error-groups . Response shape: { \"groups\": ErrorGroup[] } — see packages/contracts/src/realtime.ts for the full schema. There is no REST endpoint to set group status today. The dispatcher mutates fixing, fixed, and missing_auth internally; open is the default. If you need to manually mark a group paused, do it via the panel (the UI exposes a status toggle that calls an internal handler — flagged as a gap to formalize). ",
+    "url": "/agent/error-grouping.html#api-endpoints",
+    
+    "relUrl": "/agent/error-grouping.html#api-endpoints"
+  },"53": {
+    "doc": "Error grouping & auto-fix",
+    "title": "Pausing a group",
+    "content": "The paused status exists as a kill-switch for “I know about this error and I don’t want auto-fix to run on it” cases — for example, errors caused by an external dependency that you don’t own. Today this is set via the panel’s group menu; it is not yet exposed as a REST endpoint. If you find yourself wanting programmatic control, that’s a real gap — file an issue. ",
+    "url": "/agent/error-grouping.html#pausing-a-group",
+    
+    "relUrl": "/agent/error-grouping.html#pausing-a-group"
+  },"54": {
+    "doc": "Error grouping & auto-fix",
+    "title": "Realtime events",
+    "content": "When a group is created or its status changes the API broadcasts a error_group_updated UI telemetry event over the realtime channel to every panel session in the tenant. Schema: . { \"type\": \"error_group_updated\", \"group\": { \"id\": \"...\", \"status\": \"fixing\", ... } } . The Agents page subscribes via useTelemetryStream and patches the section in place, so a fix that lands within seconds of an error appears as a single status flip rather than a re-fetch. ",
+    "url": "/agent/error-grouping.html#realtime-events",
+    
+    "relUrl": "/agent/error-grouping.html#realtime-events"
+  },"55": {
+    "doc": "Error grouping & auto-fix",
+    "title": "Privacy and data flow",
+    "content": "What leaves the host: . | Lines the agent classifies as error-level (the app_log_error frame body). | Up to SM_LOGSHIP_BUFFER (default 50) preceding lines as contextLines for the same service. | . What stays on the agent host: . | The raw log file. The shipper buffers lines in memory, not on disk. | Anything the agent didn’t classify as error-level. | . What’s stored on the API side: . | Per-tenant: the error group rows (fingerprint, normalized message, sample message, context lines). | Per-tenant: any auto-fix dispatch metadata (commit SHAs from successful fixes). | . There is no cross-tenant aggregation. Error groups never travel beyond the tenant that owns the service the error came from. ",
+    "url": "/agent/error-grouping.html#privacy-and-data-flow",
+    
+    "relUrl": "/agent/error-grouping.html#privacy-and-data-flow"
+  },"56": {
+    "doc": "Error grouping & auto-fix",
+    "title": "See also",
+    "content": ". | Agent runtimes — SM_LOGSHIP_BUFFER and how the agent decides what’s an error-level line. | HTTP API reference — request/response schemas. | . ",
+    "url": "/agent/error-grouping.html#see-also",
+    
+    "relUrl": "/agent/error-grouping.html#see-also"
+  },"57": {
+    "doc": "Error grouping & auto-fix",
+    "title": "Error grouping & auto-fix",
+    "content": " ",
+    "url": "/agent/error-grouping.html",
+    
+    "relUrl": "/agent/error-grouping.html"
+  },"58": {
+    "doc": "GitHub App setup",
+    "title": "GitHub App setup",
+    "content": "The GitHub App lets Kaiad receive webhooks, obtain installation tokens, and perform mutations (PRs, merges, workflow dispatch) subject to your automation policy. This page covers permissions, installation flow, secrets, allowlists, and signature troubleshooting. ",
+    "url": "/getting-started/github-app.html",
+    
+    "relUrl": "/getting-started/github-app.html"
+  },"59": {
+    "doc": "GitHub App setup",
+    "title": "Required GitHub permissions",
+    "content": "Configure the App with the minimum set needed for your workflows (broad permissions increase blast radius): . | Permission | Typical use | . | Repository contents | Read/write files for branches and PRs driven by automation. | . | Pull requests | Create/update/merge PRs when policy allows. | . | Actions | Trigger or observe workflow runs where you integrate with Actions. | . | Workflows | Dispatch or interact with workflow_dispatch and related events. | . | Metadata | Always required; repository discovery and basic context. | . Subscribe to webhook events your workers actually handle (e.g. push, pull_request, workflow_dispatch, and any ingestion events you enable). Fewer events mean less noise and smaller queues. ",
+    "url": "/getting-started/github-app.html#required-github-permissions",
+    
+    "relUrl": "/getting-started/github-app.html#required-github-permissions"
+  },"60": {
+    "doc": "GitHub App setup",
+    "title": "Installation flow (multi-tenant)",
+    "content": ". | Create the GitHub App under your org or user account and note the App ID and private key (PEM) for the worker/runtime that calls GitHub’s API. | Install the App on each customer organization (or selected repositories) that should be managed. | Record the installation ID GitHub assigns to that installation. The platform stores it per tenant via POST /api/v1/github/installations (authenticated) together with tenant-scoped metadata your product requires. | Repeat per tenant: one GitHub installation maps to one row in your control plane for that tenant’s automation scope. | . Use GET /api/v1/github/installations to audit what is registered for the current session’s tenant. ",
+    "url": "/getting-started/github-app.html#installation-flow-multi-tenant",
+    
+    "relUrl": "/getting-started/github-app.html#installation-flow-multi-tenant"
+  },"61": {
+    "doc": "GitHub App setup",
+    "title": "Webhook secret",
+    "content": ". | Generate a long random secret (e.g. 32+ bytes). | Set the same value in: . | GitHub App Webhook settings (secret field). | Control plane GITHUB_WEBHOOK_SECRET for the API process that receives POST /webhooks/github. | . | . GitHub signs the raw body with HMAC-SHA256; the API expects header x-hub-signature-256 in the form sha256=&lt;hex&gt;. A mismatch returns 401 with a webhook signature error—no job is enqueued. ",
+    "url": "/getting-started/github-app.html#webhook-secret",
+    
+    "relUrl": "/getting-started/github-app.html#webhook-secret"
+  },"62": {
+    "doc": "GitHub App setup",
+    "title": "Allowlist (automation policy)",
+    "content": "Before automation runs, POST /api/v1/github/policy/check evaluates the tenant’s automation policy (repos, branches, allowed actions). Configure tenant settings so that: . | Only trusted repositories and branches appear in the allowlist. | Actions you intend to automate (e.g. merge, dispatch) are explicitly permitted. | . This is your policy gate between “webhook received” and “mutation enqueued or executed.” Treat allowlist changes as production changes and review them in PRs. ",
+    "url": "/getting-started/github-app.html#allowlist-automation-policy",
+    
+    "relUrl": "/getting-started/github-app.html#allowlist-automation-policy"
+  },"63": {
+    "doc": "GitHub App setup",
+    "title": "Troubleshooting webhook signatures",
+    "content": "| Symptom | What to check | . | 401 WEBHOOK_SIGNATURE_INVALID | Secret mismatch between GitHub and GITHUB_WEBHOOK_SECRET; whitespace or copy/paste errors; wrong environment (staging vs prod). | . | Signature always wrong | Body must be raw bytes the API received—reverse proxies that parse JSON and re-serialize break the signature. Ensure the webhook route uses the verbatim body string GitHub signed. | . | Intermittent failures | Multiple API instances with different secrets; load balancer hitting wrong stack; old deployment still receiving traffic. | . Rotate the webhook secret by updating GitHub first, then redeploying the API with the new value in a single coordinated change. ",
+    "url": "/getting-started/github-app.html#troubleshooting-webhook-signatures",
+    
+    "relUrl": "/getting-started/github-app.html#troubleshooting-webhook-signatures"
+  },"64": {
+    "doc": "GitHub App setup",
+    "title": "Related",
+    "content": ". | Configure the control plane — GITHUB_WEBHOOK_SECRET and API process. | API reference — GitHub installation and policy endpoints. | Security overview — threat model and boundaries. | . ",
+    "url": "/getting-started/github-app.html#related",
+    
+    "relUrl": "/getting-started/github-app.html#related"
+  },"65": {
+    "doc": "Reference",
+    "title": "Reference",
+    "content": "Material here is dense and factual: schemas, flags, queues, and headers. Use it when integrating agents, automating deployments, or debugging cross-service behavior. For narrative onboarding, start with Getting started. ",
+    "url": "/reference/",
+    
+    "relUrl": "/reference/"
+  },"66": {
+    "doc": "Reference",
+    "title": "Build &amp; deploy",
+    "content": "The build pipeline and registry have their own reference pages — start here when onboarding a repo or debugging a build: . | kaiad.yaml reference — every field, every option, the build-mode split (build/runtime vs dockerfile:), environments:, dependsOn:, kind:, validation rules. | Pipeline variables — {var} substitution, system vars (kaiad_registry_host), dependency vars ({&lt;dep&gt;_version}, {&lt;dep&gt;_image_ref}, …), naming rules. | Built-in OCI registry — /v2/* endpoints, JWT auth, Postgres-backed storage, pagination, garbage collection CLI, compose env vars. | . For the panel walkthrough (SSH key, service creation, first build), see Onboarding a service. ",
+    "url": "/reference/#build--deploy",
+    
+    "relUrl": "/reference/#build--deploy"
+  },"67": {
+    "doc": "Reference",
+    "title": "Kubernetes custom resources",
+    "content": "The Kaiad operator reconciles a single CRD that wires an agent + its scoped RBAC into a cluster: . | KaiadAgent CRD reference — kaiad.dev/v1alpha1, spec fields, the RBAC allow-list, status condition types + reasons, reconcile lifecycle diagram. | . For the install path (helm chart, operator credential, first CR), see Install on Kubernetes. ",
+    "url": "/reference/#kubernetes-custom-resources",
+    
+    "relUrl": "/reference/#kubernetes-custom-resources"
+  },"68": {
+    "doc": "Reference",
+    "title": "OpenAPI",
+    "content": "The HTTP contract is captured in the OpenAPI 3.1 document generated from shared contracts: . | Repository path: packages/contracts/openapi/openapi.yaml | . Regenerate or extend that spec when you add or change routes in @sm/contracts so clients, mocks, and docs stay aligned. ",
+    "url": "/reference/#openapi",
+    
+    "relUrl": "/reference/#openapi"
+  },"69": {
+    "doc": "Reference",
+    "title": "Agent binary",
+    "content": "The v1 agent is a Go binary that maintains a WebSocket to the control plane’s realtime endpoint. | Mechanism | Description | . | Planned CLI flags | --platform-url (WSS base, e.g. wss://api.example.com), --enrollment-token (one-time or rotating enrollment secret), --docker-socket (path to Docker socket for workload control). Use these in systemd units and containers when the CLI exposes them. | . | Current configuration | Today the sample binary reads SM_REALTIME_URL (defaults to ws://localhost:3001/realtime) and SM_AGENT_ID. Align env names with your orchestration until flag parity ships. | . See Install Agent for packaging and systemd. ",
+    "url": "/reference/#agent-binary",
+    
+    "relUrl": "/reference/#agent-binary"
+  },"70": {
+    "doc": "Reference",
+    "title": "Environment variables (summary)",
+    "content": "API . | Variable | Notes | . | PORT | HTTP port (default 3001). | . | DATABASE_URL | Postgres connection string when using Postgres-backed tenant store. | . | GITHUB_WEBHOOK_SECRET | Webhook HMAC secret for POST /webhooks/github. | . | DEFAULT_WEBHOOK_TENANT_ID | Tenant used when mapping certain webhook payloads (default t-webhook in code). | . | POSTGRES_HOST / POSTGRES_PORT | Used by readiness TCP checks when configured. | . | REDIS_HOST / REDIS_PORT or REDIS_URL | Readiness and queue connectivity. | . Worker . | Variable | Notes | . | REDIS_URL or REDIS_HOST / REDIS_PORT / REDIS_PASSWORD | BullMQ connection. | . | WORKER_HEALTH_PORT / WORKER_HEALTH_HOST | Worker HTTP health bind. | . | GITHUB_APP_PRIVATE_KEY | PEM for GitHub App (worker GitHub client). | . | SM_GITHUB_SIMULATE | When set to 1, simulates GitHub where implemented. | . | SM_EXECUTOR_SIMULATE | Simulates executors when set to 1. | . | REDIS_DISABLED | Worker entry may skip Redis in special modes—see worker entry for behavior. | . Agent . | Variable | Notes | . | SM_REALTIME_URL | WebSocket URL including path /realtime (or your routed path). | . | SM_AGENT_ID | Agent identity presented on the wire. | . ",
+    "url": "/reference/#environment-variables-summary",
+    
+    "relUrl": "/reference/#environment-variables-summary"
+  },"71": {
+    "doc": "Reference",
+    "title": "Queue names (BullMQ)",
+    "content": "Logical names are defined in @sm/contracts (QUEUE_NAMES): . | Key | Queue name string | . | remediation | remediation | . | github | github | . | agentCommands | agent-commands | . | logIngestion | log-ingestion | . Workers and producers must use the same strings so jobs land in the expected BullMQ queues on Redis. ",
+    "url": "/reference/#queue-names-bullmq",
+    
+    "relUrl": "/reference/#queue-names-bullmq"
+  },"72": {
+    "doc": "Reference",
+    "title": "Correlation header",
+    "content": "Use x-correlation-id (constant CORRELATION_HEADER in contracts) on requests that fan out through the API, workers, or agents so logs and traces can be joined end to end. Propagate the same value across retries. ",
+    "url": "/reference/#correlation-header",
+    
+    "relUrl": "/reference/#correlation-header"
+  },"73": {
+    "doc": "Reference",
+    "title": "Endpoint catalog",
+    "content": "For method-by-method coverage, see API reference. ",
+    "url": "/reference/#endpoint-catalog",
+    
+    "relUrl": "/reference/#endpoint-catalog"
+  },"74": {
+    "doc": "Security",
+    "title": "Security",
+    "content": "Network boundaries, agent connectivity, and controls that align with the platform threat model (multi-tenant control plane, customer-managed agents). | Agent networking | . ",
+    "url": "/security/",
+    
+    "relUrl": "/security/"
+  },"75": {
+    "doc": "Getting started",
+    "title": "Getting started",
+    "content": "Kaiad is a multi-tenant SaaS control plane: your team operates the platform in your environment, while customer agents run beside their workloads (typically Docker-based services), stream logs for error detection, and execute remediation you define. The plane deduplicates incidents (fingerprint + cooldown), queues remediation and automation jobs, and ties everything to tenants, services, and GitHub installations when you use the GitHub App path. ",
+    "url": "/getting-started/",
+    
+    "relUrl": "/getting-started/"
+  },"76": {
+    "doc": "Getting started",
+    "title": "What you are operating",
+    "content": "| Layer | Role | . | Admin SPA | Operators use the browser UI for configuration, incidents, agents, and services. | . | API + realtime | HTTP API for auth, settings, services, incidents, agents, GitHub metadata; WebSocket endpoint for long-lived agent sessions. | . | Agents | Connect outbound (WSS) to the control plane—no inbound firewall holes for agents. | . | Workers | Consume BullMQ queues on Redis: remediation runs, GitHub mutations, agent commands, log ingestion. | . | Postgres | Durable tenant and domain data when configured; otherwise dev-oriented in-memory stores may apply. | . | Redis | Job queues and realtime coordination (e.g. pending agent commands). | . Progressive disclosure: start here for the mental model, then configure the control plane, wire the GitHub App, and install agents where workloads run. ",
+    "url": "/getting-started/#what-you-are-operating",
+    
+    "relUrl": "/getting-started/#what-you-are-operating"
+  },"77": {
+    "doc": "Getting started",
+    "title": "Data and control flow (high level)",
+    "content": ". | Agents send heartbeats and log lines over the WSS channel; the platform evaluates error-level logs, applies deduplication, and opens or updates incidents as configured. | Workers pick up jobs from BullMQ to run remediation tasks, call GitHub when policy allows, and dispatch agent commands through the realtime tier. | Operators use the SPA and REST API under /api/v1 for day-2 configuration and incident handling. | . ",
+    "url": "/getting-started/#data-and-control-flow-high-level",
+    
+    "relUrl": "/getting-started/#data-and-control-flow-high-level"
+  },"78": {
+    "doc": "Getting started",
+    "title": "Next steps",
+    "content": ". | Configure the control plane — env vars, processes, Compose reference. | GitHub App setup — permissions, installation, webhooks, allowlists. | Install Agent — binary or container, SM_REALTIME_URL, systemd unit. | Onboarding a service — add a Git repo, write kaiad.yaml, watch the first build, deploy to bound agents. | . For HTTP/API details, see API reference and the Reference section. For the build pipeline and the built-in OCI registry, jump straight to the kaiad.yaml reference and registry reference. ",
+    "url": "/getting-started/#next-steps",
+    
+    "relUrl": "/getting-started/#next-steps"
+  },"79": {
+    "doc": "Runbooks",
+    "title": "Runbooks",
+    "content": "Operational procedures for control-plane dependencies and runtime components. Symptom → impact → action → validation; pair with metrics, logs, and on-call escalation policy. | Redis failure | PostgreSQL failure | Realtime gateway | Worker failure | . ",
+    "url": "/runbooks/",
+    
+    "relUrl": "/runbooks/"
+  },"80": {
+    "doc": "Kaiad",
+    "title": "Kaiad",
+    "content": "Kaiad is a multi-tenant control plane for operating services you care about: it brings together an operator-facing web app, a HTTP and WebSocket API, background workers, and customer-managed agents that run next to real workloads. Together they support incident detection and deduplication, queued remediation and automation, optional GitHub App flows (webhooks, PRs, workflow dispatch), and remote commands to agents over a long-lived realtime channel. This documentation site refers to the platform as Kaiad (also the name shown in the admin UI). The same codebase and releases live in the open-source kaiad repository on GitHub. ",
+    "url": "/",
+    
+    "relUrl": "/"
+  },"81": {
+    "doc": "Kaiad",
+    "title": "What Kaiad is for",
+    "content": "| You want to… | Kaiad provides… | . | See when things go wrong | Log-derived signals, incidents with deduplication (fingerprint + cooldown), and a place to triage them in the UI. | . | Automate response | Workers that run remediation steps on Redis-backed queues (BullMQ), including Git operations when policy allows. | . | Act where the software runs | Agents (Go) that connect outbound to your Kaiad deployment over WSS, then execute shell, Docker, or plan-based steps you send from the platform. | . | Tie identity to GitHub | A GitHub App installation per scope, signed webhooks into the API, and worker-side use of installation tokens for mutations. | . Kaiad is not a generic observability backend (it is not a full replacement for metrics APMs or log SaaS at large scale). It is an opinionated control plane plus agent model: operators configure tenants, services, agents, and automation; agents and workers carry out the work. ",
+    "url": "/#what-kaiad-is-for",
+    
+    "relUrl": "/#what-kaiad-is-for"
+  },"82": {
+    "doc": "Kaiad",
+    "title": "Architecture (high level)",
+    "content": "Operators use the browser UI and the REST API (/api/v1). Agents never require a public inbound port from the internet for the SaaS path—they dial out over WSS to the realtime endpoint on the API tier. Workers share Redis with the API for BullMQ jobs (remediation, GitHub work, agent commands, log ingestion). Postgres holds durable tenant and domain data when configured. flowchart TB subgraph gh[GitHub] GHC[Repositories and checks] end subgraph plane[Kaiad control plane] WEB[Web SPA] APINode[\"API: REST + WSS /realtime\"] WK[Workers] PG[(Postgres)] RD[(Redis / BullMQ)] end subgraph cust[Customer environment] AG[Agent] APP[Workloads / Docker] end WEB -->|HTTPS| APINode APINode --> PG APINode --> RD WK --> RD WK --> PG WK -->|GitHub App API| GHC GHC -->|signed webhooks| APINode AG -->|outbound WSS| APINode AG --> APP . Reading the diagram: GitHub pushes events into the API; workers pull work from Redis, may call GitHub, and coordinate agent commands and other jobs through the same control plane stack. The realtime gateway (WebSocket path used by agents) may live in the API process or behind a load balancer—see Realtime gateway for operations detail. ",
+    "url": "/#architecture-high-level",
+    
+    "relUrl": "/#architecture-high-level"
+  },"83": {
+    "doc": "Kaiad",
+    "title": "How a typical flow works",
+    "content": ". | An agent connects with an enrollment token, sends heartbeats, and may stream container logs; the platform can raise or merge incidents based on rules and deduplication. | Workers dequeue jobs from Redis: run remediation jobs, perform GitHub actions when allowed, enqueue agent commands, and process log ingestion jobs. | Operators use the SPA and API to configure tenants, review incidents, manage enrollment tokens, and inspect agents. | . For a deeper narrative, see Getting started. ",
+    "url": "/#how-a-typical-flow-works",
+    
+    "relUrl": "/#how-a-typical-flow-works"
+  },"84": {
+    "doc": "Kaiad",
+    "title": "Main moving parts",
+    "content": "| Piece | Role | . | Web (apps/web) | React/Vite admin UI: auth, settings, incidents, agents, services. | . | API (apps/api) | Fastify HTTP server: REST, auth, webhooks, tenant data; WebSocket endpoint for agent sessions. | . | Workers (apps/worker) | BullMQ consumers plus a small health HTTP server for orchestration. | . | Agent (apps/agent) | Go binary: outbound WSS, Docker socket (typical), command execution. | . | Postgres | Durable storage for tenant-scoped configuration and domain objects when DATABASE_URL is set. | . | Redis | Queues and coordination for workers and realtime-related paths. | . Ports commonly used in development: 3001 (API), 4173 or preview port (web), 9090 (worker health). Production hostnames and TLS are yours to configure. ",
+    "url": "/#main-moving-parts",
+    
+    "relUrl": "/#main-moving-parts"
+  },"85": {
+    "doc": "Kaiad",
+    "title": "Security and network posture",
+    "content": "Agents are egress-only toward Kaiad for the SaaS path; customers firewall outbound HTTPS/WSS to your hostname instead of opening the agent to the public internet. See Security overview and Agent networking. ",
+    "url": "/#security-and-network-posture",
+    
+    "relUrl": "/#security-and-network-posture"
+  },"86": {
+    "doc": "Kaiad",
+    "title": "Guides",
+    "content": ". | Getting started — mental model, then control plane, GitHub App, and agents. | Configure the control plane — environment variables, API/worker processes, Compose reference. | GitHub App setup — permissions, webhooks, secrets, troubleshooting. | Install Agent — release binaries, systemd, Docker, environment variables. | Onboarding a service — wire up a Git repo, author kaiad.yaml, ship the first build. | . ",
+    "url": "/#guides",
+    
+    "relUrl": "/#guides"
+  },"87": {
+    "doc": "Kaiad",
+    "title": "Reference",
+    "content": ". | Reference overview — OpenAPI location, queues, correlation headers, env summaries. | API reference — HTTP surface area. | kaiad.yaml reference — full pipeline schema, build modes, environments, validation rules. | Pipeline variables — {var} interpolation: system vars, dependency vars, naming rules. | Built-in OCI registry — Kaiad’s native registry: endpoints, auth, storage, GC. | KaiadAgent CRD reference — the Kubernetes custom resource the operator reconciles into an agent + scoped RBAC. | . ",
+    "url": "/#reference",
+    
+    "relUrl": "/#reference"
+  },"88": {
+    "doc": "Kaiad",
+    "title": "Runbooks",
+    "content": ". | Runbooks overview | Redis failure | PostgreSQL failure | Realtime gateway | Worker failure | . ",
+    "url": "/#runbooks",
+    
+    "relUrl": "/#runbooks"
+  },"89": {
+    "doc": "Kaiad",
+    "title": "Security",
+    "content": ". | Security overview | Agent networking | . ",
+    "url": "/#security",
+    
+    "relUrl": "/#security"
+  },"90": {
+    "doc": "Install Agent",
+    "title": "Install Agent",
+    "content": "On Kubernetes? Use the Kaiad operator — see Install on Kubernetes. The flow on this page targets VMs, bare metal, and dev laptops. Want to know what each runtime (Docker / Podman / Shell / Kubernetes) actually does? See Agent runtimes. The Kaiad agent is a small Go process that runs on infrastructure you control (bare metal, VM, or container host). It maintains an outbound WebSocket connection to the control plane realtime endpoint, receives AgentCommand messages, and can run shell steps, Docker operations, and plan executors (Cursor / Claude) against a workspace. You do not open an inbound port from the internet for the SaaS path: the agent only dials out. See Agent networking for firewall and TLS expectations. ",
+    "url": "/agent/install.html",
+    
+    "relUrl": "/agent/install.html"
+  },"91": {
+    "doc": "Install Agent",
+    "title": "Prerequisites",
+    "content": ". | Network: Egress to your Kaiad hostname on HTTPS/WSS (typically 443). The WebSocket URL usually ends with /realtime (see Configure the control plane). | Production enrollment: With NODE_ENV=production, the agent exits unless SM_ENROLLMENT_TOKEN is set or a credential file already exists from a previous successful enrollment. | Docker (optional but typical): For container inspection, Docker CLI ops, and log streaming, the host should expose the Docker API (default Unix socket /var/run/docker.sock). Override with SM_DOCKER_SOCKET if needed. | . ",
+    "url": "/agent/install.html#prerequisites",
+    
+    "relUrl": "/agent/install.html#prerequisites"
+  },"92": {
+    "doc": "Install Agent",
+    "title": "Install the binary",
+    "content": "Release binaries (CI builds) . Official static binaries are attached to GitHub Releases for each annotated version tag matching v* (for example v1.2.3). The go-release workflow cross-compiles the agent with CGO_ENABLED=0 and publishes artifacts plus checksums.txt. Download the file that matches your OS and CPU, verify it against checksums.txt, make it executable (on Unix), and install it as agent (or keep the release name and point ExecStart at that path): . | Asset | Platform | . | agent-agent_linux_amd64 | Linux x86_64 | . | agent-agent_linux_arm64 | Linux ARM64 | . | agent-agent_darwin_amd64 | macOS Intel | . | agent-agent_darwin_arm64 | macOS Apple silicon | . | agent-agent_windows_amd64.exe | Windows x86_64 | . Example (Linux amd64, replace vX.Y.Z with a real tag): . curl -fsSL -O \"https://github.com/InnKeeperDevOps/kaiad/releases/download/vX.Y.Z/agent-agent_linux_amd64\" \\ -O \"https://github.com/InnKeeperDevOps/kaiad/releases/download/vX.Y.Z/checksums.txt\" # Checksums are produced for paths under dist/; strip that prefix so sha256sum matches downloaded filenames. sed 's| dist/|' checksums.txt | sha256sum -c --ignore-missing chmod +x agent-agent_linux_amd64 sudo install -m 0755 agent-agent_linux_amd64 /usr/local/bin/agent . On macOS, use shasum -a 256 instead of sha256sum if the latter is not installed: sed 's| dist/|' checksums.txt | shasum -a 256 -c --ignore-missing . Build from source . From the monorepo root: . cd apps/agent go build -o agent ./cmd/agent . Install to a stable path (the sample systemd unit uses /usr/local/bin/agent): . sudo install -m 0755 agent /usr/local/bin/agent . Build the container image . The Dockerfile lives in apps/agent/. Build with that directory as context: . docker build -t kaiad-agent:latest apps/agent . The image entrypoint runs /usr/local/bin/agent with no default shell; pass configuration via -e / --env-file. ",
+    "url": "/agent/install.html#install-the-binary",
+    
+    "relUrl": "/agent/install.html#install-the-binary"
+  },"93": {
+    "doc": "Install Agent",
+    "title": "Environment variables",
+    "content": "| Variable | Required | Description | . | SM_REALTIME_URL | Yes (prod) | WebSocket URL for the realtime channel. Production: wss://&lt;your-host&gt;/realtime. Local dev: defaults to ws://localhost:3001/realtime if unset. | . | SM_ENROLLMENT_TOKEN | Yes in production (unless file persistence is enabled — see below) | One-time or rotating enrollment secret from the control plane. Default (stateless): keep supplying this via secrets on every start; nothing is written to disk. | . | NODE_ENV | Recommended | Set to production on real workloads so the agent fails closed without a token (or without persisted credentials when enabled). | . | SM_AGENT_ID | Optional | Logical agent id (default agent-local). When SM_AGENT_PERSIST_CREDENTIALS=1, a saved file may override this if you omit SM_AGENT_ID. | . | SM_AGENT_PERSIST_CREDENTIALS | Optional | Set to 1 to opt into reading/writing the JSON credential file. Default is off (stateless). | . | SM_CREDENTIAL_PATH | Optional | Filesystem path for the JSON credential file when persistence is enabled. Default: ~/.service-monitor/agent-credential.json. | . | SM_DOCKER_SOCKET | Optional | Path to the Docker API socket (default /var/run/docker.sock). | . | SM_ENABLE_LOG_STREAMING | Optional | Set to 0 to disable streaming logs from existing containers on startup. | . | SM_AGENT_VERSION | Optional | Reported agent version in heartbeats (defaults to 0.1.0 in code if unset). | . Optional: plan executors and isolation . For run_cursor_plan / run_claude_plan and related behavior, the agent reads additional variables (timeouts, binary paths, optional container-isolated runners). See apps/agent/README.md in the repository for SM_EXECUTOR_*, SM_CURSOR_BIN, and SM_CLAUDE_BIN. ",
+    "url": "/agent/install.html#environment-variables",
+    
+    "relUrl": "/agent/install.html#environment-variables"
+  },"94": {
+    "doc": "Install Agent",
+    "title": "Enrollment and credentials",
+    "content": ". | Create an enrollment token in the Kaiad UI under Agents → Enrollment Tokens (the panel includes a runtime selector that bakes the right SM_AGENT_RUNTIME_OVERRIDE / SM_DOCKER_SOCKET env into the start command — see Agent runtimes) or via the API (POST /api/v1/agents/enrollment-tokens) with a valid tenant session. | Set SM_ENROLLMENT_TOKEN and SM_REALTIME_URL (and usually SM_AGENT_ID) via your orchestrator’s secrets or EnvironmentFile. | . Stateless (default): the agent does not persist enrollment material. Every pod or process restart must receive the same env-configured secrets (or a new token if you rotate). Optional file persistence: set SM_AGENT_PERSIST_CREDENTIALS=1 if you want the legacy behavior: on first successful connection the agent writes SM_CREDENTIAL_PATH with 0600 permissions and can reload token/id/url from that file on later starts without passing the raw token in the environment. Rotate or revoke tokens at the control plane if a host is compromised; treat a persisted credential file like a secret. ",
+    "url": "/agent/install.html#enrollment-and-credentials",
+    
+    "relUrl": "/agent/install.html#enrollment-and-credentials"
+  },"95": {
+    "doc": "Install Agent",
+    "title": "Run with systemd",
+    "content": "A reference unit file is in the repo at apps/agent/packaging/systemd/service-monitor-agent.service. Copy and adapt it: . [Service] Environment=SM_REALTIME_URL=wss://your-kaiad.example.com/realtime Environment=NODE_ENV=production Environment=SM_ENROLLMENT_TOKEN=your-one-time-token # Or use EnvironmentFile=/etc/kaiad/agent.env for secrets (not committed to git) ExecStart=/usr/local/bin/agent . Prefer EnvironmentFile= for secrets instead of inline Environment= in shared templates. Then: . sudo systemctl daemon-reload sudo systemctl enable --now service-monitor-agent sudo journalctl -u service-monitor-agent -f . ",
+    "url": "/agent/install.html#run-with-systemd",
+    
+    "relUrl": "/agent/install.html#run-with-systemd"
+  },"96": {
+    "doc": "Install Agent",
+    "title": "Run with Docker",
+    "content": "Mount the Docker socket when you need Docker-backed commands and log streaming: . docker run -d --name kaiad-agent --restart=unless-stopped \\ -e NODE_ENV=production \\ -e SM_REALTIME_URL=wss://your-kaiad.example.com/realtime \\ -e SM_ENROLLMENT_TOKEN=your-token \\ -v /var/run/docker.sock:/var/run/docker.sock \\ kaiad-agent:latest . For a persistent credential file across restarts, set SM_AGENT_PERSIST_CREDENTIALS=1, mount a host directory, and set SM_CREDENTIAL_PATH=/data/agent-credential.json. ",
+    "url": "/agent/install.html#run-with-docker",
+    
+    "relUrl": "/agent/install.html#run-with-docker"
+  },"97": {
+    "doc": "Install Agent",
+    "title": "Local development (monorepo)",
+    "content": "With API and dependencies running per the main repository README: . cd apps/agent SM_REALTIME_URL=ws://localhost:3001/realtime \\ SM_AGENT_ID=local-agent \\ SM_ENROLLMENT_TOKEN=dev-token \\ go run ./cmd/agent . Use a token your API accepts (for example the dev enrollment flow configured for your environment). ",
+    "url": "/agent/install.html#local-development-monorepo",
+    
+    "relUrl": "/agent/install.html#local-development-monorepo"
+  },"98": {
+    "doc": "Install Agent",
+    "title": "Verify",
+    "content": ". | Logs: On start you should see the agent id, WebSocket URL, and Docker socket path. | Connectivity: If TLS or routing is wrong, the process will log connection errors and retry with backoff. | Control plane: Confirm the agent appears connected in the dashboard; if the realtime tier is misconfigured, see Realtime gateway. | . ",
+    "url": "/agent/install.html#verify",
+    
+    "relUrl": "/agent/install.html#verify"
+  },"99": {
+    "doc": "Install Agent",
+    "title": "Related",
+    "content": ". | Agent networking — egress-only model and hardening checklist. | Configure the control plane — API ports and stack layout. | Realtime gateway — troubleshooting WSS and command delivery. | . ",
+    "url": "/agent/install.html#related",
+    
+    "relUrl": "/agent/install.html#related"
+  },"100": {
+    "doc": "KaiadAgent CRD",
+    "title": "KaiadAgent CRD reference",
+    "content": "The Kaiad operator reconciles a KaiadAgent custom resource into a running agent Pod plus the supporting Kubernetes objects (Deployment, ServiceAccount, scoped RBAC, optional ImagePullSecret reference). This page is the field-level reference for the CR. For the install narrative (operator credential, first CR), see Install on Kubernetes — both Helm and plain kubectl apply paths are documented there. For the underlying agent binary itself, see Install Agent. The CRD source of truth is deploy/operator/api/v1alpha1/kaiadagent_types.go; the rendered CRD YAML lives at deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml (the file is plain apiextensions.k8s.io/v1, applicable with kubectl apply -f whether or not you use Helm). ",
+    "url": "/reference/kaiad-agent-crd.html#kaiadagent-crd-reference",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#kaiadagent-crd-reference"
+  },"101": {
+    "doc": "KaiadAgent CRD",
+    "title": "Identity",
+    "content": "| Property | Value | . | API group | kaiad.dev | . | Version | v1alpha1 | . | Kind | KaiadAgent | . | Scope | Namespaced | . | Short name | kagent | . | List kind | KaiadAgentList | . kubectl examples: . kubectl get kaiadagents -A kubectl get kagent -n kaiad-system edge-agent -o yaml . ",
+    "url": "/reference/kaiad-agent-crd.html#identity",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#identity"
+  },"102": {
+    "doc": "KaiadAgent CRD",
+    "title": "Printer columns",
+    "content": "kubectl get kaiadagents emits these columns by default (from the +kubebuilder:printcolumn markers on the Go type): . | Column | JSONPath | Notes | . | Image | .spec.image | The agent container image the operator deploys. | . | AgentId | .status.enrolledAgentId | Set once the agent has registered with the control plane via the enrollment token. | . | Ready | .status.conditions[?(@.type=='Ready')].status | True when the pod is ready AND the control plane confirms the agent is online. | . | Age | .metadata.creationTimestamp | Standard Age column. | . ",
+    "url": "/reference/kaiad-agent-crd.html#printer-columns",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#printer-columns"
+  },"103": {
+    "doc": "KaiadAgent CRD",
+    "title": "spec fields",
+    "content": "| Path | Type | Required | Validation | Description | . | spec.controlPlane.realtimeUrl | string | yes | Pattern ^wss?://.+ | WebSocket URL the agent dials. Typically wss://panel.example.com/realtime; ws://… is accepted for in-cluster control planes that haven’t terminated TLS. | . | spec.enrollment.secretRef.name | string | yes | non-empty | Name of a Secret in the same namespace as the CR holding the bootstrap enrollment token. Pre-provision via kubectl create secret generic &lt;name&gt; --from-literal=token=&lt;value&gt;. | . | spec.enrollment.secretRef.key | string | no | default token | Key inside the Secret. | . | spec.serviceId | string | no | — | Pins every log frame and command from this agent to a specific Kaiad service id (mirrors SM_SERVICE_ID in the manual flow). Leave unset when the agent observes many services. | . | spec.image | string | yes | MinLength=1 | Agent container image ref. Typically ghcr.io/innkeeperdevops/kaiad-agent:&lt;tag&gt;. | . | spec.resources | core/v1.ResourceRequirements | no | — | Standard k8s requests/limits shape, applied to the agent container. | . | spec.nodeSelector | map[string]string | no | — | Standard k8s node selector. | . | spec.tolerations | []core/v1.Toleration | no | — | Standard k8s tolerations. | . | spec.imagePullSecrets | []core/v1.LocalObjectReference | no | — | Names of dockerconfigjson Secrets the kubelet uses to pull the agent image. Typically &lt;agent&gt;-pull — the panel emits one alongside the enrollment Secret so kubelets can pull from the built-in Kaiad registry. | . | spec.manages | []ManagesRule | no | MaxItems=32 | RBAC rules the operator grants to the agent’s ServiceAccount. Each entry is validated against the allow-list below; anything outside is rejected. | . ManagesRule fields . Each entry under spec.manages[] becomes (at most) one Role and one ClusterRole grant: . | Path | Type | Required | Notes | . | apiGroups | []string | yes | Kubernetes API groups (e.g. [\"apps\"], [\"\"] for core). | . | resources | []string | yes (MinItems=1) | Resource plurals (deployments, pods, pods/log, …). | . | verbs | []string | yes (MinItems=1) | RBAC verbs (get, list, watch, patch, …). | . | namespaceSelector | metav1.LabelSelector | no | When present, restricts the rule to namespaces matching the selector. When omitted, the rule applies cluster-wide (a ClusterRole is generated). Setting an empty {} matches every namespace but still uses per-namespace Roles, which the operator narrows on namespace events. | . RBAC allow-list . The operator validates spec.manages against this map before generating any Role/ClusterRole. Anything outside fails admission with Ready=False, Reason=InvalidSpec, naming the offending (group, resource, verb). | API Group | Resources | Permitted verbs | . | apps | deployments, statefulsets | get, list, watch, patch, update | . | apps | daemonsets | get, list, watch | . | \"\" (core) | pods, pods/log | get, list, watch | . | \"\" (core) | events | get, list, watch, create, patch | . | \"\" (core) | configmaps | get, list, watch | . | batch | jobs | get, list, watch, create, delete | . | batch | cronjobs | get, list, watch | . The intent is that a tenant who can apply a KaiadAgent CR cannot escalate to cluster-admin or read Secrets through it. Adding a row should be a deliberate decision — pair it with a test in deploy/operator/internal/controller/rbac_test.go. Source: deploy/operator/internal/controller/allowlist.go. ",
+    "url": "/reference/kaiad-agent-crd.html#spec-fields",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#spec-fields"
+  },"104": {
+    "doc": "KaiadAgent CRD",
+    "title": "status fields",
+    "content": "The operator owns status; do not edit it by hand. +kubebuilder:subresource:status means kubectl edit on the CR doesn’t touch it either. | Path | Type | Notes | . | status.conditions | []metav1.Condition | See condition types below. | . | status.enrolledAgentId | string | The agent id assigned by the control plane on first successful enrollment. Stable across restarts. | . | status.observedGeneration | int64 | metadata.generation of the spec the operator last reconciled. Use this to detect a stale status. | . | status.deploymentName | string | Name of the Deployment the operator created. Useful for kubectl describe deploy &lt;name&gt;. | . Condition types . | Type | True means | Common failure reasons | . | Ready | Pod is Ready AND control plane has confirmed the agent is online. | EnrollmentFailed, DeploymentPending, AgentNotOnline. | . | EnrollmentValid | A usable bootstrap token exists in the referenced Secret. | SecretNotFound, MissingKey, EmptyToken. | . | Reconciling | The operator is mid-apply. | (transient; flips back to False after settle.) | . A failure reason on Ready=False is mirrored in the condition’s message field with the exact offending tuple or upstream error — look at kubectl get kagent &lt;name&gt; -o yaml under status.conditions[] when triage starts. ",
+    "url": "/reference/kaiad-agent-crd.html#status-fields",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#status-fields"
+  },"105": {
+    "doc": "KaiadAgent CRD",
+    "title": "Minimal KaiadAgent",
+    "content": "The smallest spec that will actually run: . apiVersion: kaiad.dev/v1alpha1 kind: KaiadAgent metadata: name: edge-agent namespace: kaiad-system spec: controlPlane: realtimeUrl: wss://panel.example.com/realtime enrollment: secretRef: name: kaiad-enrollment image: ghcr.io/innkeeperdevops/kaiad-agent:v1.2.3 . The Secret it references: . kubectl -n kaiad-system create secret generic kaiad-enrollment \\ --from-literal=token='&lt;paste-from-panel&gt;' . Generate the token in the panel under Settings → Enrollment tokens → Generate token before applying the CR. ",
+    "url": "/reference/kaiad-agent-crd.html#minimal-kaiadagent",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#minimal-kaiadagent"
+  },"106": {
+    "doc": "KaiadAgent CRD",
+    "title": "Full example with RBAC + pull secret",
+    "content": "apiVersion: kaiad.dev/v1alpha1 kind: KaiadAgent metadata: name: edge-agent namespace: kaiad-system spec: controlPlane: realtimeUrl: wss://panel.example.com/realtime enrollment: secretRef: name: kaiad-enrollment key: token image: ghcr.io/innkeeperdevops/kaiad-agent:v1.2.3 # Optional: pin every log frame from this agent to one service. serviceId: svc-api-1 # Standard pod knobs. resources: requests: { cpu: 50m, memory: 64Mi } limits: { cpu: 500m, memory: 256Mi } nodeSelector: kaiad.dev/role: agent tolerations: - key: kaiad.dev/dedicated operator: Equal value: agent effect: NoSchedule # Pull the agent image (and any workload images Kaiad built) from the # built-in registry. The panel emits this Secret alongside the # enrollment Secret. imagePullSecrets: - name: edge-agent-pull manages: - apiGroups: [\"apps\"] resources: [\"deployments\", \"statefulsets\"] verbs: [\"get\", \"list\", \"watch\", \"patch\", \"update\"] namespaceSelector: matchLabels: kaiad.dev/managed: \"true\" - apiGroups: [\"\"] resources: [\"pods\", \"pods/log\"] verbs: [\"get\", \"list\", \"watch\"] namespaceSelector: matchLabels: kaiad.dev/managed: \"true\" - apiGroups: [\"batch\"] resources: [\"jobs\"] verbs: [\"get\", \"list\", \"watch\", \"create\", \"delete\"] namespaceSelector: matchLabels: kaiad.dev/managed: \"true\" . ",
+    "url": "/reference/kaiad-agent-crd.html#full-example-with-rbac--pull-secret",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#full-example-with-rbac--pull-secret"
+  },"107": {
+    "doc": "KaiadAgent CRD",
+    "title": "Reconcile lifecycle",
+    "content": "flowchart TB CR[\"KaiadAgent CR(spec.manages, controlPlane,enrollment.secretRef, image, ...)\"] CR --> R1{manages ruleson allowlist?} R1 -->|no| F1[\"Ready=FalseReason=InvalidSpec\"] R1 -->|yes| R2{enrollment Secret+ key present?} R2 -->|no| F2[\"EnrollmentValid=FalseReason=SecretNotFound /MissingKey / EmptyToken\"] R2 -->|yes| R3[Ensure ServiceAccount + Roles / ClusterRolesper manages rules] R3 --> R4[Ensure Deploymentimage, env, imagePullSecrets] R4 --> R5{Pod Ready?} R5 -->|no, transient| F3[\"Ready=FalseReason=DeploymentPending\"] R5 -->|yes| R6{Control planesees agent online?} R6 -->|no| F4[\"Ready=FalseReason=AgentNotOnline\"] R6 -->|yes| OK[\"Ready=Truestatus.enrolledAgentId setReconciling=False\"] . | Validate spec — manages against the allow-list. Any rule outside the allow-list → Ready=False, Reason=InvalidSpec and the reconcile stops here. | Resolve enrollment Secret — read spec.enrollment.secretRef.name from the CR’s namespace. Missing or empty key → EnrollmentValid=False and the reconcile retries on Secret update. | Ensure ServiceAccount + RBAC — create the agent’s ServiceAccount; for each manages[] rule, create the namespace-scoped Roles + RoleBindings (or one ClusterRole + ClusterRoleBinding when namespaceSelector is omitted). | Ensure Deployment — 1-replica Deployment running the spec.image container, with SM_REALTIME_URL, SM_ENROLLMENT_TOKEN (from the Secret), and optional SM_SERVICE_ID injected as env. imagePullSecrets threaded onto the Pod spec. | Wait for the pod — flip Reconciling=False. Once the kubelet reports Ready=True AND the control plane responds that the agent is online, flip Ready=True and record enrolledAgentId. | . Owner references make all the generated objects garbage-collect when the CR is deleted. ClusterRoles / ClusterRoleBindings (which can’t carry namespace-scoped owner refs) are deleted by the controller’s finalizer. ",
+    "url": "/reference/kaiad-agent-crd.html#reconcile-lifecycle",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#reconcile-lifecycle"
+  },"108": {
+    "doc": "KaiadAgent CRD",
+    "title": "Removing an agent",
+    "content": "kubectl delete kaiadagent edge-agent -n kaiad-system . Behavior: . | The agent Pod stops first; the control plane flips the agent to offline after heartbeat timeout (~30s). | Owner-referenced objects (Deployment, ServiceAccount, Roles, RoleBindings) are garbage-collected by Kubernetes. | ClusterRoles and ClusterRoleBindings are deleted explicitly by the finalizer. | The enrollment Secret you created is not removed (the operator doesn’t own it). Delete it separately if the token shouldn’t outlive the agent. | . ",
+    "url": "/reference/kaiad-agent-crd.html#removing-an-agent",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#removing-an-agent"
+  },"109": {
+    "doc": "KaiadAgent CRD",
+    "title": "Troubleshooting condition values",
+    "content": "Before any of these reasons can show up, the CRD must actually be installed. A kubectl apply of a KaiadAgent against a cluster without the CRD fails at kubectl time (not in the operator) with: . error: resource mapping not found for name: \"&lt;name&gt;\" namespace: \"&lt;ns&gt;\" no matches for kind \"KaiadAgent\" in version \"kaiad.dev/v1alpha1\" ensure CRDs are installed first . Apply the CRD once per cluster — see Install on Kubernetes for the install command — then retry your CR apply. The CRD is cluster-scoped, so every namespace inherits it. | Reason | Meaning | Next step | . | InvalidSpec | A manages[] rule names a tuple outside the allow-list. | Fix the rule or open an issue arguing for the new allow-list entry. | . | SecretNotFound | spec.enrollment.secretRef.name doesn’t exist in the namespace. | Create it (kubectl create secret generic …). | . | MissingKey | The Secret exists but the configured key (default token) isn’t set. | Add the key or adjust enrollment.secretRef.key. | . | EmptyToken | The key is set but empty. | Mint a real enrollment token in the panel. | . | EnrollmentRejected | The control plane rejected the token (expired, revoked, or wrong tenant). | Mint a new token; tokens are tenant-bound at mint time and can’t be moved. | . | DeploymentPending | The Deployment exists but no Pod is Ready yet. | kubectl -n &lt;ns&gt; describe deploy &lt;status.deploymentName&gt; for scheduling / pull errors. | . | AgentNotOnline | The Pod is Ready but the control plane hasn’t seen a heartbeat. | Check egress to realtimeUrl from inside the cluster; agent pod stdout will name the connect failure. | . ",
+    "url": "/reference/kaiad-agent-crd.html#troubleshooting-condition-values",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#troubleshooting-condition-values"
+  },"110": {
+    "doc": "KaiadAgent CRD",
+    "title": "See also",
+    "content": ". | Install on Kubernetes — install narrative with both Helm and plain kubectl apply paths. | Binding services to agents — many-to-many binding lifecycle. | Built-in OCI registry — what the imagePullSecrets Secret authenticates against. | Agent networking — egress and TLS expectations. | Operator code: deploy/operator/api/v1alpha1/kaiadagent_types.go, deploy/operator/internal/controller/. | . ",
+    "url": "/reference/kaiad-agent-crd.html#see-also",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html#see-also"
+  },"111": {
+    "doc": "KaiadAgent CRD",
+    "title": "KaiadAgent CRD",
+    "content": " ",
+    "url": "/reference/kaiad-agent-crd.html",
+    
+    "relUrl": "/reference/kaiad-agent-crd.html"
+  },"112": {
+    "doc": "Install on Kubernetes",
+    "title": "Install Kaiad agent on Kubernetes",
+    "content": "For Kubernetes clusters, the Kaiad operator reconciles a KaiadAgent custom resource into a running agent Deployment. This is the recommended install path for k8s — the manual start-command flow described in Install Agent remains for VMs, edge devices, and dev laptops. ",
+    "url": "/agent/kubernetes.html#install-kaiad-agent-on-kubernetes",
+    
+    "relUrl": "/agent/kubernetes.html#install-kaiad-agent-on-kubernetes"
+  },"113": {
+    "doc": "Install on Kubernetes",
+    "title": "Architecture in one paragraph",
+    "content": "The operator owns the agent’s pod-side lifecycle (Deployment, ServiceAccount, scoped RBAC, enrollment Secret). The agent itself, once running, manages workload Deployments via the kube API in kubernetes runtime mode. They are two separate concerns, intentionally: the operator handles agent infra, the agent handles workload lifecycle. We did not put the agent in the same pod as the workload — kubelet owns sibling container lifecycle, so the agent loses its ability to restart or replace workloads. ",
+    "url": "/agent/kubernetes.html#architecture-in-one-paragraph",
+    
+    "relUrl": "/agent/kubernetes.html#architecture-in-one-paragraph"
+  },"114": {
+    "doc": "Install on Kubernetes",
+    "title": "Prerequisites",
+    "content": ". | A Kubernetes cluster (1.27+) and kubectl access. | Network egress from the cluster to your Kaiad control plane on HTTPS/WSS. | An admin or owner login on the Kaiad panel (you’ll need to mint an operator API credential). | helm 3.14+ only if you take the helm install path — there’s an equivalent plain kubectl apply path below. | . ",
+    "url": "/agent/kubernetes.html#prerequisites",
+    
+    "relUrl": "/agent/kubernetes.html#prerequisites"
+  },"115": {
+    "doc": "Install on Kubernetes",
+    "title": "1. Mint an operator API credential",
+    "content": "The operator needs a long-lived bearer token to call the Kaiad API on your behalf (for minting short-TTL enrollment tokens). Create one once per cluster. See the API Credentials reference for the full lifecycle (rotation, revocation, scopes). curl -X POST https://panel.example.com/api/v1/admin/api-credentials \\ -H \"Authorization: Bearer $YOUR_OWNER_SESSION_TOKEN\" \\ -H \"Content-Type: application/json\" \\ -d '{\"name\":\"k8s-operator\",\"scopes\":[\"enrollment-tokens.create\"]}' . The response includes a one-time token field — save it. The credential hash is stored server-side; you cannot retrieve the raw token later. If you lose it, revoke the credential and mint a new one. ",
+    "url": "/agent/kubernetes.html#1-mint-an-operator-api-credential",
+    
+    "relUrl": "/agent/kubernetes.html#1-mint-an-operator-api-credential"
+  },"116": {
+    "doc": "Install on Kubernetes",
+    "title": "2. Install the operator",
+    "content": "Two equivalent paths — pick one. Both install the same objects: the kaiadagents.kaiad.dev CRD, a 1-replica operator Deployment, and the operator’s own ServiceAccount + ClusterRole + ClusterRoleBinding. Option A: Helm . kubectl create namespace kaiad-system # Recommended: pre-provision the credential Secret so the chart doesn't # template it (template-rendered Secrets leak into the Helm release object). kubectl create secret generic kaiad-operator-credentials \\ --namespace kaiad-system \\ --from-literal=token=\"$KAIAD_OPERATOR_TOKEN\" helm install kaiad-operator \\ oci://ghcr.io/innkeeperdevops/charts/kaiad-operator \\ --namespace kaiad-system \\ --set kaiad.apiBaseURL=https://panel.example.com \\ --set kaiad.apiCredentialSecret.name=kaiad-operator-credentials . Option B: plain kubectl apply (no Helm) . Three kubectl apply invocations: install the CRD, create the namespace . | credential Secret, install the operator manifests. | . 1. Install the CRD. Pinned to a release tag — bump when upgrading. kubectl apply -f https://raw.githubusercontent.com/InnKeeperDevOps/kaiad/main/deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml . 2. Create the namespace and credential Secret. kubectl create namespace kaiad-system kubectl create secret generic kaiad-operator-credentials \\ --namespace kaiad-system \\ --from-literal=token=\"$KAIAD_OPERATOR_TOKEN\" . 3. Install the operator manifests. Save as kaiad-operator.yaml (adjust the image tag and KAIAD_API_BASE_URL) and apply. # kaiad-operator.yaml — operator ServiceAccount, RBAC, Deployment. # Equivalent to `helm template kaiad-operator deploy/operator/charts/kaiad-operator # --namespace kaiad-system --set kaiad.apiBaseURL=https://panel.example.com # --set kaiad.apiCredentialSecret.name=kaiad-operator-credentials`. apiVersion: v1 kind: ServiceAccount metadata: name: kaiad-operator namespace: kaiad-system --- # The ClusterRole grants both the operator's own management surface # AND the union of every (group, resource, verb) in the agent RBAC # allow-list — Kubernetes prevents the operator from creating Roles # for permissions it doesn't itself hold. Keep this in sync with # deploy/operator/internal/controller/allowlist.go. apiVersion: rbac.authorization.k8s.io/v1 kind: ClusterRole metadata: name: kaiad-operator rules: # --- Operator's own management surface --- - apiGroups: [\"kaiad.dev\"] resources: [\"kaiadagents\"] verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"] - apiGroups: [\"kaiad.dev\"] resources: [\"kaiadagents/status\", \"kaiadagents/finalizers\"] verbs: [\"get\", \"update\", \"patch\"] - apiGroups: [\"apps\"] resources: [\"deployments\"] verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"] - apiGroups: [\"\"] resources: [\"serviceaccounts\", \"secrets\"] verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"] - apiGroups: [\"\"] resources: [\"namespaces\"] verbs: [\"get\", \"list\", \"watch\"] - apiGroups: [\"rbac.authorization.k8s.io\"] resources: [\"roles\", \"rolebindings\", \"clusterroles\", \"clusterrolebindings\"] verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"] - apiGroups: [\"coordination.k8s.io\"] resources: [\"leases\"] verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\"] - apiGroups: [\"\"] resources: [\"pods\"] verbs: [\"list\", \"delete\"] # --- Agent allow-list union (must mirror allowlist.go) --- - apiGroups: [\"apps\"] resources: [\"statefulsets\"] verbs: [\"get\", \"list\", \"watch\", \"patch\", \"update\"] - apiGroups: [\"apps\"] resources: [\"daemonsets\"] verbs: [\"get\", \"list\", \"watch\"] - apiGroups: [\"\"] resources: [\"pods\", \"pods/log\"] verbs: [\"get\", \"list\", \"watch\"] - apiGroups: [\"\"] resources: [\"events\"] verbs: [\"get\", \"list\", \"watch\", \"create\", \"patch\"] - apiGroups: [\"\"] resources: [\"configmaps\"] verbs: [\"get\", \"list\", \"watch\"] - apiGroups: [\"batch\"] resources: [\"jobs\"] verbs: [\"get\", \"list\", \"watch\", \"create\", \"delete\"] - apiGroups: [\"batch\"] resources: [\"cronjobs\"] verbs: [\"get\", \"list\", \"watch\"] --- apiVersion: rbac.authorization.k8s.io/v1 kind: ClusterRoleBinding metadata: name: kaiad-operator roleRef: apiGroup: rbac.authorization.k8s.io kind: ClusterRole name: kaiad-operator subjects: - kind: ServiceAccount name: kaiad-operator namespace: kaiad-system --- apiVersion: apps/v1 kind: Deployment metadata: name: kaiad-operator namespace: kaiad-system labels: app.kubernetes.io/name: kaiad-operator spec: replicas: 1 selector: matchLabels: app.kubernetes.io/name: kaiad-operator template: metadata: labels: app.kubernetes.io/name: kaiad-operator spec: serviceAccountName: kaiad-operator securityContext: runAsNonRoot: true seccompProfile: type: RuntimeDefault containers: - name: manager # Pin to a release tag — :latest works but skews silently. image: ghcr.io/innkeeperdevops/kaiad-operator:vX.Y.Z imagePullPolicy: IfNotPresent args: - --leader-elect # disable in dev with --leader-elect=false - --metrics-bind-address=:8080 - --health-probe-bind-address=:8081 env: # Required when you want Ready=True to wait for the control # plane to confirm the agent is online. Omit both env vars # to get pod-readiness-only behavior. - name: KAIAD_API_BASE_URL value: https://panel.example.com - name: KAIAD_API_CREDENTIAL valueFrom: secretKeyRef: name: kaiad-operator-credentials key: token - name: KAIAD_OPERATOR_NAMESPACE valueFrom: fieldRef: fieldPath: metadata.namespace ports: - name: metrics containerPort: 8080 - name: health containerPort: 8081 livenessProbe: httpGet: { path: /healthz, port: health } readinessProbe: httpGet: { path: /readyz, port: health } securityContext: allowPrivilegeEscalation: false capabilities: drop: [\"ALL\"] readOnlyRootFilesystem: true resources: requests: { cpu: 50m, memory: 64Mi } limits: { cpu: 500m, memory: 256Mi } . kubectl apply -f kaiad-operator.yaml . Confirm . Either install path: . kubectl -n kaiad-system get pods,deploy,clusterrole | grep kaiad . The pod should reach Ready 1/1 within a minute. ",
+    "url": "/agent/kubernetes.html#2-install-the-operator",
+    
+    "relUrl": "/agent/kubernetes.html#2-install-the-operator"
+  },"117": {
+    "doc": "Install on Kubernetes",
+    "title": "3. Apply a KaiadAgent resource",
+    "content": "Verify the CRD is installed first. A kubectl apply of a KaiadAgent against a cluster that doesn’t have the CRD yet fails with: . error: resource mapping not found for name: \"&lt;name&gt;\" namespace: \"&lt;ns&gt;\" no matches for kind \"KaiadAgent\" in version \"kaiad.dev/v1alpha1\" ensure CRDs are installed first . Quick check: . kubectl get crd kaiadagents.kaiad.dev # NAME CREATED AT # kaiadagents.kaiad.dev 2026-… . If that returns (NotFound), install the CRD before continuing: . kubectl apply -f https://raw.githubusercontent.com/InnKeeperDevOps/kaiad/main/deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml . CRDs are cluster-scoped — once installed, every namespace can apply KaiadAgent resources. Option A (Helm) installs the CRD as part of helm install; Option B’s first step does the same. helm template | kubectl apply -f - does NOT install CRDs (Helm only renders templates from templates/, not from crds/); use helm install proper, or apply the CRD URL above as a separate step. First, generate an enrollment token in the panel under Settings → Enrollment tokens → Generate token and create a Secret holding it in the agent’s namespace: . kubectl -n kaiad-system create secret generic kaiad-enrollment \\ --from-literal=token='&lt;paste-token-here&gt;' . Then write the CR: . # edge-agent.yaml apiVersion: kaiad.dev/v1alpha1 kind: KaiadAgent metadata: name: edge-agent namespace: kaiad-system spec: controlPlane: realtimeUrl: wss://panel.example.com/realtime enrollment: secretRef: name: kaiad-enrollment # the Secret you created above key: token # default; omit to use 'token' image: ghcr.io/innkeeperdevops/kaiad-agent:vX.Y.Z serviceId: svc-api-1 # optional: pin log frames to one Kaiad service manages: - apiGroups: [\"apps\"] resources: [\"deployments\", \"statefulsets\"] verbs: [\"get\", \"list\", \"watch\", \"patch\", \"update\"] namespaceSelector: matchLabels: kaiad.dev/managed: \"true\" - apiGroups: [\"\"] resources: [\"pods\", \"pods/log\"] verbs: [\"get\", \"list\", \"watch\"] namespaceSelector: matchLabels: kaiad.dev/managed: \"true\" . The Kaiad panel (Agents → Enrollment Tokens → “Kubernetes (operator)” tab) generates this YAML for you with the right realtimeUrl pre-filled and the right enrollment Secret name. Copy it from there to avoid typos. kubectl apply -f edge-agent.yaml . For the full field-by-field schema (every spec/status field, the namespaceSelector semantics, what each Condition reason means), see KaiadAgent CRD reference. ",
+    "url": "/agent/kubernetes.html#3-apply-a-kaiadagent-resource",
+    
+    "relUrl": "/agent/kubernetes.html#3-apply-a-kaiadagent-resource"
+  },"118": {
+    "doc": "Install on Kubernetes",
+    "title": "4. Verify",
+    "content": "kubectl get kaiadagents -A # NAME IMAGE AGENTID READY AGE # edge-agent ghcr.io/innkeeperdevops/kaiad-agent:latest agt-... True 45s . Within 60 seconds you should see the agent appear online in the Kaiad panel under the Agents page. ",
+    "url": "/agent/kubernetes.html#4-verify",
+    
+    "relUrl": "/agent/kubernetes.html#4-verify"
+  },"119": {
+    "doc": "Install on Kubernetes",
+    "title": "Pulling workload images from the Kaiad registry",
+    "content": "Services built by Kaiad land in the built-in OCI registry at &lt;KAIAD_REGISTRY_HOST&gt;/&lt;service-name&gt;:&lt;git-sha&gt;. When the agent deploys those services, the cluster’s kubelet needs credentials to pull from that registry — Kaiad doesn’t accept anonymous pulls. The operator generates an imagePullSecrets Secret per KaiadAgent containing a long-lived enrollment-token-derived registrytoken in docker-config-json shape. The Secret is referenced in the Deployments the agent creates for managed workloads, so kubelets docker pull against Kaiad authenticate transparently. The enrollment token grants pull-only, scoped to any repository — push from this credential is rejected. Token rotation is handled by the operator’s reconcile loop; you don’t need to refresh the Secret manually. If you see ImagePullBackOff with unauthorized: authentication required, check: . | The Secret exists (kubectl -n &lt;workload-ns&gt; get secret kaiad-pull). | The workload Deployment references it (imagePullSecrets: [{name: kaiad-pull}]). | The image ref starts with KAIAD_REGISTRY_HOST (not the loopback alias). | The cluster can resolve and reach that hostname (egress + DNS) — see Agent networking. | . ",
+    "url": "/agent/kubernetes.html#pulling-workload-images-from-the-kaiad-registry",
+    
+    "relUrl": "/agent/kubernetes.html#pulling-workload-images-from-the-kaiad-registry"
+  },"120": {
+    "doc": "Install on Kubernetes",
+    "title": "RBAC scope: what manages actually allows",
+    "content": "For the field-by-field CRD reference (every spec/status field, the full allow-list, condition types and reasons), see KaiadAgent CRD reference. The summary version is below. The operator validates spec.manages against an allow-list. As of v0.1 the allow-list contains: . | API Group | Resources | Verbs | . | apps | deployments, statefulsets | get, list, watch, patch, update | . | apps | daemonsets | get, list, watch | . | (core) | pods, pods/log | get, list, watch | . | (core) | events | get, list, watch, create, patch | . | (core) | configmaps | get, list, watch | . | batch | jobs | get, list, watch, create, delete | . | batch | cronjobs | get, list, watch | . Anything outside this list — including secrets, clusterroles, or wildcards — is rejected at admission time and surfaced as Ready=False, Reason=InvalidSpec. If your workflow needs a verb not in the allow-list, that’s a deliberate review point — open an issue rather than working around it. ",
+    "url": "/agent/kubernetes.html#rbac-scope-what-manages-actually-allows",
+    
+    "relUrl": "/agent/kubernetes.html#rbac-scope-what-manages-actually-allows"
+  },"121": {
+    "doc": "Install on Kubernetes",
+    "title": "Removing an agent",
+    "content": "Delete the CR; the operator garbage-collects the Deployment, ServiceAccount, and namespaced RBAC objects via owner references: . kubectl delete kaiadagent edge-agent -n kaiad-system . ClusterRoles and ClusterRoleBindings (which can’t carry namespace-scoped owner refs) are deleted explicitly by the controller during finalizer processing. ",
+    "url": "/agent/kubernetes.html#removing-an-agent",
+    
+    "relUrl": "/agent/kubernetes.html#removing-an-agent"
+  },"122": {
+    "doc": "Install on Kubernetes",
+    "title": "Troubleshooting",
+    "content": "**error: resource mapping not found for name: \"&lt;n&gt;\" namespace: \"&lt;ns&gt;\" / no matches for kind \"KaiadAgent\" in version \"kaiad.dev/v1alpha1\" / ensure CRDs are installed first** The CRD isn’t installed in the cluster. Apply it before applying any KaiadAgent resource: kubectl apply -f https://raw.githubusercontent.com/InnKeeperDevOps/kaiad/main/deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml kubectl get crd kaiadagents.kaiad.dev # should now exist . Helm’s helm install applies the chart’s crds/ directory automatically; helm template | kubectl apply -f - does NOT — apply the CRD URL above separately if you use the template flow. Ready=False, Reason=InvalidSpec spec.manages contains a rule outside the allow-list. The status message names the offending tuple. Adjust the rule or pick a different resource. Ready=False, Reason=EnrollmentFailed The operator could not mint a token. Common causes: wrong kaiad.apiBaseURL, missing/revoked operator credential, or the Kaiad API is unreachable from the cluster. kubectl -n kaiad-system logs deploy/kaiad-operator has the request error. Ready=False, Reason=AgentNotOnline The pod is running but the control plane has not seen the agent yet. Check egress from the cluster to the realtime URL, and look at the agent pod’s stdout for connection errors. Ready=False, Reason=DeploymentPending Standard k8s scheduling/pull issues. kubectl -n &lt;agent-ns&gt; describe deployment &lt;agent-name&gt;. ",
+    "url": "/agent/kubernetes.html#troubleshooting",
+    
+    "relUrl": "/agent/kubernetes.html#troubleshooting"
+  },"123": {
+    "doc": "Install on Kubernetes",
+    "title": "See also",
+    "content": ". | KaiadAgent CRD reference — every field, the RBAC allow-list, status conditions, reconcile lifecycle. | Install Agent (Linux/VM) — manual flow for non-k8s. | Agent runtimes — what docker / podman / shell / kubernetes actually do. | Agent networking — egress and TLS. | Design doc: docs/superpowers/specs/2026-05-08-kaiad-agent-operator-design.md. | Operator repo: deploy/operator/. | . ",
+    "url": "/agent/kubernetes.html#see-also",
+    
+    "relUrl": "/agent/kubernetes.html#see-also"
+  },"124": {
+    "doc": "Install on Kubernetes",
+    "title": "Install on Kubernetes",
+    "content": " ",
+    "url": "/agent/kubernetes.html",
+    
+    "relUrl": "/agent/kubernetes.html"
+  },"125": {
+    "doc": "Onboarding a service",
+    "title": "Onboarding a service",
+    "content": "This page walks an operator from “I have a Git repository” to “Kaiad is building it on every push and deploying the result to my agents.” It assumes the control plane is already running and at least one agent is enrolled. If neither is true, complete those steps first: . | Configure the control plane | Install Agent | . ",
+    "url": "/getting-started/onboarding-services.html",
+    
+    "relUrl": "/getting-started/onboarding-services.html"
+  },"126": {
+    "doc": "Onboarding a service",
+    "title": "What you’ll do",
+    "content": ". | Add an SSH key Kaiad can use to clone the repo. | Add the service in the panel, pointing it at the repo and at least one agent. | Write a kaiad.yaml at the repo root. | Trigger a build, watch the log, and verify the image lands in the built-in registry. | (Optional) Configure domains / load balancers so the running service is reachable. | . The full path from git push to a running container looks like this: . sequenceDiagram autonumber participant Dev as Developer participant Git as GitHub participant W as Build worker(in-process) participant Reg as Native registry(/v2/*) participant API as Kaiad API participant Agt as Bound agent participant Pod as Workload runtime Dev->>Git: git push origin main Note over W: Poller picks up the new SHA(or panel triggers manually) W->>Git: clone @ SHA W->>W: read kaiad.yaml,resolve dependsOn,substitute {vars} W->>W: run build container W->>W: crane assemble runtime image W->>Reg: PUT manifest + blob uploads(in-process JWT, no /registry/token) W->>API: finishBuild status=success,imageRef recorded API->>Agt: redeploy_service commandover WSS Agt->>Reg: docker / kubelet pull(registrytoken from imagePullSecret) Reg-->>Agt: blob stream (lo_read 64K chunks) Agt->>Pod: stop old / start new(docker run or apps/v1 patch) Pod-->>Agt: container running Agt-->>API: heartbeat + status . ",
+    "url": "/getting-started/onboarding-services.html#what-youll-do",
+    
+    "relUrl": "/getting-started/onboarding-services.html#what-youll-do"
+  },"127": {
+    "doc": "Onboarding a service",
+    "title": "1. SSH key",
+    "content": "Kaiad clones each build’s source over SSH. The key lives in the panel’s SSH Keys page and is referenced by name on the service. | Public key goes on GitHub / GitLab / your forge as a deploy key with read access to the repo. | Private key is pasted into the panel, AES-256-GCM-encrypted with the platform’s KAIAD_ENCRYPTION_KEY, and persisted in Postgres. | . For organisation-wide setups, a single deploy-key-style account often backs many services. For tightly-scoped access, generate one keypair per repo. If you’ve configured the GitHub App path (getting-started/github-app.md), public repos can sometimes be cloned without an SSH key. Most operators still set one — auto-fix mutations need write access through the App or the key. ",
+    "url": "/getting-started/onboarding-services.html#1-ssh-key",
+    
+    "relUrl": "/getting-started/onboarding-services.html#1-ssh-key"
+  },"128": {
+    "doc": "Onboarding a service",
+    "title": "2. Add the service in the panel",
+    "content": "In the Services page, click Add Service. Fields: . | Field | What to put | . | Name | Lowercase k8s-style label. Becomes part of the pushed image ref (&lt;registry&gt;/&lt;name&gt;:&lt;sha&gt;) and is what other services reference in dependsOn. | . | Git Repository URL | git@github.com:org/repo.git (recommended) or the HTTPS form for public repos. | . | SSH Key | The key you added in step 1. Required when the URL is SSH. | . | Branch | The branch Kaiad polls for pushes. Typically main. | . | Docker Image | Legacy field — leave blank when using kaiad.yaml. | . | Compose Path | Legacy field — leave blank when using kaiad.yaml. | . | Pipeline Name | Required when the repo’s kaiad.yaml is multi-pipeline (services: { … }). Leave blank for the single-pipeline form. | . | Bound agents | One or more enrolled agents that will run the deployable. Many-to-many: the same agent can host multiple services and a service can be deployed to multiple agents (HA / multi-cluster). | . The service is created immediately. You can edit any field later without losing builds. ",
+    "url": "/getting-started/onboarding-services.html#2-add-the-service-in-the-panel",
+    
+    "relUrl": "/getting-started/onboarding-services.html#2-add-the-service-in-the-panel"
+  },"129": {
+    "doc": "Onboarding a service",
+    "title": "3. Write kaiad.yaml",
+    "content": "kaiad.yaml lives at the repo root and tells Kaiad how to build, package, and deploy the service. The full schema is documented in the pipeline reference; a minimal single-pipeline file looks like: . version: 1 build: image: node:22 steps: - npm ci - npm run build - cp -r dist /artifacts/dist artifacts: - dist runtime: image: gcr.io/distroless/nodejs22-debian12 copy: - from: dist to: /app/dist command: [\"node\", \"/app/dist/server.js\"] ports: - port: 3000 name: http . Three things to internalise about this shape: . | build: runs in a one-shot container that mounts /workspace (your repo at the requested SHA) and /artifacts (writable scratch space). Anything you write to /artifacts/... and list under artifacts: survives into the runtime image. | runtime: is assembled with crane. Each runtime.copy becomes one new image layer on top of runtime.image. No host docker build is involved — the pipeline runs entirely inside the kaiad container. | ports: declares what the runtime image listens on. domains: and per-environment overrides reference these ports. | . For multi-pipeline repos (e.g. a PHP service paired with an nginx front-end) use the services: form: . version: 1 services: php: build: { … } runtime: { … } ports: [{ port: 9000, name: fastcgi }] nginx: runtime: { … } ports: [{ port: 80, name: http }] dependsOn: [php] . Each entry under services: is its own pipeline. Two MonitoredService records — one per pipeline — point at the same repo with different Pipeline Name values (php, nginx). Build variables . Strings inside build:, runtime:, and dockerfile: may interpolate brace-delimited variables. The most common ones: . | {kaiad_registry_host} — the external registry hostname (so you don’t hard-code panel.kaiad.dev). | {&lt;dep&gt;_version} — full git SHA of a dependsOn service’s latest successful build. With dependsOn: [php-image], you can write image: \"{kaiad_registry_host}/php-image:{php_image_version}\". | . A full list lives in pipeline variables. ",
+    "url": "/getting-started/onboarding-services.html#3-write-kaiadyaml",
+    
+    "relUrl": "/getting-started/onboarding-services.html#3-write-kaiadyaml"
+  },"130": {
+    "doc": "Onboarding a service",
+    "title": "4. Trigger a build",
+    "content": "Three ways to kick off the first build: . | Manual — click Builds on the service row, then the trigger button. Useful for first runs and for re-running a stuck build. | Push — the build worker polls the configured branch; new commits fire builds automatically. | Dependency — when a service this one lists in dependsOn: produces a successful build, Kaiad enqueues a follow-up build here. | . The build page streams the log live. Stages you should see: . ── MANUAL build #&lt;id&gt; &lt;service&gt;@&lt;short-sha&gt; ── cloning git@github.com:org/repo.git @ &lt;sha&gt; dep: foo → build &lt;id&gt; sha=&lt;short&gt; image=panel.kaiad.dev/foo:&lt;sha&gt; (only if dependsOn) ── build stage — image=&lt;build.image&gt; ── &lt;your build steps' stdout&gt; captured artifact &lt;name&gt; (&lt;bytes&gt; bytes) ── runtime image (crane assembly) ── &lt;crane append / push output&gt; done in &lt;s&gt;s . A green build records its pushed image ref in the build row (visible on the Builds tab and the service detail). The image lives in the built-in registry at panel.&lt;your-host&gt;/&lt;service-name&gt;:&lt;git-sha&gt; and at the moving :latest tag. ",
+    "url": "/getting-started/onboarding-services.html#4-trigger-a-build",
+    
+    "relUrl": "/getting-started/onboarding-services.html#4-trigger-a-build"
+  },"131": {
+    "doc": "Onboarding a service",
+    "title": "5. Deployment",
+    "content": "Every successful deployable build (the default kind: value) dispatches a redeploy to every bound agent. The agent pulls the new image and rolls it according to its runtime backend: . | Agent runtime | Rollout mechanism | . | Docker | Pull → stop old container → start new with same name + ports. | . | Kubernetes | Patches the agent’s KaiadAgent CRD; the operator reconciles a Deployment / Service / Ingress. | . | Shell | Runs the configured executor’s deploy command with the new image ref. | . Bind agents from the Agents page if you didn’t pick any at service creation time. See Binding services to agents for the full lifecycle. Domains and load balancers . domains: route an external hostname to one of your declared ports:. Add an entry like: . domains: - host: app.example.com port: 3000 protocol: https . The agent’s runtime backend translates this into a k8s Ingress, a Docker label, or whatever its executor knows how to publish. TLS is terminated at the ingress; the container itself speaks plain HTTP on the declared port. For per-environment overrides (staging on a different host, production on the canonical one), use the environments: map — see the pipeline reference. ",
+    "url": "/getting-started/onboarding-services.html#5-deployment",
+    
+    "relUrl": "/getting-started/onboarding-services.html#5-deployment"
+  },"132": {
+    "doc": "Onboarding a service",
+    "title": "Common gotchas",
+    "content": ". | MANIFEST_BLOB_UNKNOWN at runtime push. A blob the manifest references isn’t in the registry. Almost always means the build.image step crashed before the artifact was produced. Check the build log above the runtime stage. | Token lacks pull access to repository:&lt;name&gt; during crane append. The runtime image’s base is a kaiad-hosted ref this build isn’t authorized to pull. Add the dep to dependsOn: so the build worker grants pull-scope on it automatically. | kaiad.yaml is multi-pipeline (services: ...); set the service's pipelineName to choose one. The repo grew a second pipeline since you last edited the service. Open the service in the panel and set the Pipeline Name to one of the keys under services:. | unresolved template variable(s) in kaiad.yaml: {foo}. You used a {var} that wasn’t declared — typically a dependsOn typo, or a reference to {&lt;dep&gt;_version} where &lt;dep&gt; should be the dep’s service name with hyphens turned into underscores. | KAIAD_BUILDS_HOST_DIR is not set. The compose env that points the build worker at the host workspace path is missing. See the prod/dev compose files under env/. | . ",
+    "url": "/getting-started/onboarding-services.html#common-gotchas",
+    
+    "relUrl": "/getting-started/onboarding-services.html#common-gotchas"
+  },"133": {
+    "doc": "Onboarding a service",
+    "title": "Where to go next",
+    "content": ". | Pipeline reference — every field in kaiad.yaml. | Pipeline variables — the full list of interpolation variables. | Built-in registry — how pull/push and image storage work. | Binding services to agents — many-to-many semantics and migration patterns. | . ",
+    "url": "/getting-started/onboarding-services.html#where-to-go-next",
+    
+    "relUrl": "/getting-started/onboarding-services.html#where-to-go-next"
+  },"134": {
+    "doc": "Pipeline variables",
+    "title": "Pipeline variables",
+    "content": "Strings inside kaiad.yaml may contain brace-delimited variables that the build worker substitutes before each build runs. Substitution covers every string field — build.image, build.steps, runtime.image, runtime.command, dockerfile.args, etc. — and applies whether or not the pipeline has any dependsOn entries. Source: apps/worker/src/builddeps.ts. ",
+    "url": "/reference/pipeline-variables.html",
+    
+    "relUrl": "/reference/pipeline-variables.html"
+  },"135": {
+    "doc": "Pipeline variables",
+    "title": "Syntax",
+    "content": "build: image: \"{kaiad_registry_host}/php-image:{php_image_version}\" . Variables are wrapped in single braces and contain only lowercase letters, digits, and underscores. Unknown variables are left intact in the rendered string and the build fails with: . unresolved template variable(s) in kaiad.yaml: {foo} {bar} available: {kaiad_registry_host} {kaiad_registry_internal} … . That lets you spot template typos immediately rather than shipping a broken image ref to docker pull. ",
+    "url": "/reference/pipeline-variables.html#syntax",
+    
+    "relUrl": "/reference/pipeline-variables.html#syntax"
+  },"136": {
+    "doc": "Pipeline variables",
+    "title": "System variables",
+    "content": "Always available. Sourced from the build worker’s environment (KAIAD_REGISTRY_HOST, KAIAD_REGISTRY_INTERNAL — set in env/&lt;env&gt;/docker-compose.yml). | Variable | Value | Use it for | . | {kaiad_registry_host} | External registry hostname (e.g. panel.kaiad.dev). | The image ref recorded in build rows and pulled by agents. | . | {kaiad_registry_internal} | Loopback hostname the worker uses for in-container pushes (e.g. 127.0.0.1:8091). | Rarely used in kaiad.yaml; useful for diagnostic scripts that need to reach the registry from inside the kaiad container. | . Example: . # Old, hostname hard-coded — works but bakes panel.kaiad.dev into the repo. build: image: panel.kaiad.dev/php-image:cd121a7929a4... # Better — portable across dev / staging / prod. build: image: \"{kaiad_registry_host}/php-image:{php_image_version}\" . ",
+    "url": "/reference/pipeline-variables.html#system-variables",
+    
+    "relUrl": "/reference/pipeline-variables.html#system-variables"
+  },"137": {
+    "doc": "Pipeline variables",
+    "title": "Dependency variables",
+    "content": "For every entry in dependsOn:, the worker resolves the latest successful build of that service (tenant-scoped, by service name) and exposes the following variables. The placeholder &lt;dep&gt; is the dep’s service name with hyphens turned into underscores (php-image → php_image). | Variable | Value | Notes | . | {&lt;dep&gt;_version} | Full git SHA of the dep’s latest successful build. | This is what the dep was actually pushed under — &lt;registry&gt;/&lt;dep&gt;:{&lt;dep&gt;_version} resolves to a tag that exists. | . | {&lt;dep&gt;_short_version} | 12-char prefix of the full SHA. | For display / log lines / labels where the full SHA is unwieldy. | . | {&lt;dep&gt;_git_sha} | Same as {&lt;dep&gt;_version} — full SHA. | Alias for readability. | . | {&lt;dep&gt;_build_id} | UUID of the build row that produced the dep. | Useful only for audit / debugging — not used in image refs. | . | {&lt;dep&gt;_image_ref} | Full image reference incl. tag (e.g. panel.kaiad.dev/php-image:cd121a7929a4…). | Only set when the dep build produced an image (most do). | . | {&lt;dep&gt;_image} | Image stem (no tag). Same as {&lt;dep&gt;_image_ref} with the :&lt;sha&gt; stripped. | For ergonomics: {php_image_image}:{php_image_short_version} is equivalent to {php_image_image_ref} but easier to read at a glance. | . Example with dependsOn: [php-image, shared-config]: . {php_image_version} → cd121a7929a4b2219fbc37644a29c14533288c4c {php_image_short_version} → cd121a7929a4 {php_image_image_ref} → panel.kaiad.dev/php-image:cd121a7929a4… {php_image_image} → panel.kaiad.dev/php-image {shared_config_version} → 9cc57d29c5112e4df5f1128cf31bcaa2c929264b {shared_config_short_version} → 9cc57d29c511 . If a dep has no successful build yet, the build fails before substitution runs: . dependency \"php-image\" has no successful build yet — trigger or wait for its build first . ",
+    "url": "/reference/pipeline-variables.html#dependency-variables",
+    
+    "relUrl": "/reference/pipeline-variables.html#dependency-variables"
+  },"138": {
+    "doc": "Pipeline variables",
+    "title": "Auto-set container env vars (not template vars)",
+    "content": "Don’t confuse template variables ({foo} rewritten in the yaml) with environment variables exposed inside the build container. The build worker also sets these on every build container, accessible from your steps: via $VAR shell syntax: . | Env var | Value | . | GIT_SHA | Full SHA of the commit being built. | . | GIT_BRANCH | The branch this build was triggered on. | . | KAIAD_SERVICE_NAME | This service’s MonitoredService name. | . Plus anything you set under build.env:. So a step can do: . build: steps: - echo \"building ${KAIAD_SERVICE_NAME} @ ${GIT_SHA}\" - go build -ldflags \"-X main.gitSha=${GIT_SHA}\" -o /artifacts/server . These are NOT available for {var} template substitution in the yaml — they live inside the container, not the parsed pipeline. ",
+    "url": "/reference/pipeline-variables.html#auto-set-container-env-vars-not-template-vars",
+    
+    "relUrl": "/reference/pipeline-variables.html#auto-set-container-env-vars-not-template-vars"
+  },"139": {
+    "doc": "Pipeline variables",
+    "title": "Where substitution does NOT apply",
+    "content": ". | environments.&lt;name&gt; keys — the map keys (environment names) are validated against a strict regex before substitution would have a chance to run. | pipelineName values on MonitoredService — that’s a panel / database field, not part of the yaml. | Cross-pipeline references inside a multi-pipeline file — each inner pipeline gets its own substitution pass with the same vars. There’s no syntax for one pipeline to reference another’s sub-fields. | . ",
+    "url": "/reference/pipeline-variables.html#where-substitution-does-not-apply",
+    
+    "relUrl": "/reference/pipeline-variables.html#where-substitution-does-not-apply"
+  },"140": {
+    "doc": "Pipeline variables",
+    "title": "Naming rules",
+    "content": "Variable names must match ^[a-z0-9_]+$ (case-insensitive in the matcher, but the system / dep vars are emitted lowercase). Service names with hyphens are mapped to underscores in the variable name: . php-image → {php_image_version} shared.lib → {shared_lib_version} (any non-[a-z0-9_] char → _) WorkerCore → {workercore_version} (lowercased) . The mapping is name.toLowerCase().replace(/[^a-z0-9_]/g, \"_\"). ",
+    "url": "/reference/pipeline-variables.html#naming-rules",
+    
+    "relUrl": "/reference/pipeline-variables.html#naming-rules"
+  },"141": {
+    "doc": "Pipeline variables",
+    "title": "End-to-end example",
+    "content": "A repo where the runtime image is built on top of a sibling php-image service and tagged with the right SHA: . version: 1 dependsOn: [php-image] build: # Use the latest hardened PHP base from our registry. image: \"{kaiad_registry_host}/php-image:{php_image_version}\" steps: - composer install --no-dev --no-interaction - tar -cf /artifacts/code.tar -C . artifacts: - code.tar runtime: # Same base — composer'd code is layered on top. image: \"{kaiad_registry_host}/php-image:{php_image_version}\" layers: [code.tar] command: [\"php-fpm\", \"--nodaemonize\"] ports: [{ port: 9000, name: fastcgi }] . A successful build of php-image will automatically trigger a rebuild here, so the runtime image always tracks the latest PHP base. ",
+    "url": "/reference/pipeline-variables.html#end-to-end-example",
+    
+    "relUrl": "/reference/pipeline-variables.html#end-to-end-example"
+  },"142": {
+    "doc": "Pipeline variables",
+    "title": "See also",
+    "content": ". | kaiad.yaml reference — every field, every option. | Onboarding a service — step-by-step setup. | . ",
+    "url": "/reference/pipeline-variables.html#see-also",
+    
+    "relUrl": "/reference/pipeline-variables.html#see-also"
+  },"143": {
+    "doc": "kaiad.yaml reference",
+    "title": "kaiad.yaml reference",
+    "content": "kaiad.yaml lives at the root of a monitored service’s Git repository. It describes how Kaiad builds, packages, and deploys the service. The full schema is enforced by Zod in packages/contracts/src/pipeline.ts; this page is the human-readable version. For onboarding narrative (panel UI, SSH keys, first build), see Onboarding a service. For interpolation syntax see Pipeline variables. The stages a single build runs through: . flowchart TB trig trig -->|manual / push / dep success| claim[Claim queued row] claim --> clone[git clone @ SHA] clone --> read[Read kaiad.yaml] read -->|missing| skip[Skip build, no_pipeline] read --> pick[Pick pipeline by pipelineName] pick --> deps{dependsOn?} deps -->|yes| resolve[resolveDeps: latest successful build of each dep] deps -->|no| sub[Build var map] resolve --> sub sub --> subst[Substitute variables in pipeline strings] subst --> mode{build mode} mode -->|\"build + runtime\"| buildc[Run build container] mode -->|dockerfile| dockerf[docker build] buildc --> art[Capture artifacts to /artifacts] art --> crane[crane append layers onto runtime.image] crane --> push1[\"crane push: image to registry\"] push1 --> done dockerf --> save[docker save tar] save --> push2[\"crane push: tar to registry\"] push2 --> done done[Record imageRef, mark success] --> kind{kind} kind -->|deployable| dispatch[Dispatch redeploy to bound agents] kind -->|supporting| trigger[Trigger downstream builds that depend on this] dispatch --> trigger . ",
+    "url": "/reference/pipeline.html",
+    
+    "relUrl": "/reference/pipeline.html"
+  },"144": {
+    "doc": "kaiad.yaml reference",
+    "title": "Two top-level shapes",
+    "content": "A kaiad.yaml is either a single-pipeline file (one image, one deployable) or a multi-pipeline file (services: map — many images in one repo). Single-pipeline . version: 1 build: { … } runtime: { … } ports: [{ port: 8080 }] domains: [{ host: app.example.com, port: 8080, protocol: https }] . The MonitoredService referencing this repo leaves Pipeline Name blank. Multi-pipeline . version: 1 services: api: build: { … } runtime: { … } ports: [{ port: 8080 }] worker: build: { … } runtime: { … } dependsOn: [api] . Each MonitoredService that points at this repo sets Pipeline Name to one of the keys (api, worker, …). One repo can back several MonitoredService records — one per pipeline — each with their own agents and domain wiring. flowchart LR subgraph Repo[\"Repo: app-stack (one Git repository)\"] YAML[\"kaiad.yamlversion: 1services:&nbsp;&nbsp;php: { ... }&nbsp;&nbsp;nginx: { ... dependsOn: [php] }\"] end subgraph Panel[\"Kaiad panel (two MonitoredService rows)\"] SVC1[\"MonitoredService 'app-php'gitRepoUrl: app-stackpipelineName: php\"] SVC2[\"MonitoredService 'app-nginx'gitRepoUrl: app-stackpipelineName: nginx\"] end subgraph Images[\"Pushed images\"] IMG1[\"registry/app-php:&lt;sha&gt;\"] IMG2[\"registry/app-nginx:&lt;sha&gt;\"] end Repo -.->|each row picks one inner pipeline| SVC1 Repo -.-> SVC2 SVC1 -->|build worker| IMG1 SVC2 -->|build worker| IMG2 SVC1 -.->|\"agentIds: [a1, a2]\"| AG1[Agent a1] SVC1 -.-> AG2[Agent a2] SVC2 -.->|\"agentIds: [a3]\"| AG3[Agent a3] . Field semantics inside an inner pipeline are identical to the single-pipeline shape; the only difference is that the version: 1 declaration is shared and lives at the file root. ",
+    "url": "/reference/pipeline.html#two-top-level-shapes",
+    
+    "relUrl": "/reference/pipeline.html#two-top-level-shapes"
+  },"145": {
+    "doc": "kaiad.yaml reference",
+    "title": "version: 1 — required",
+    "content": "version: 1 . Currently the only supported value. Older or newer values fail parse. ",
+    "url": "/reference/pipeline.html#version-1--required",
+    
+    "relUrl": "/reference/pipeline.html#version-1--required"
+  },"146": {
+    "doc": "kaiad.yaml reference",
+    "title": "Build modes (mutually exclusive)",
+    "content": "A pipeline produces a runtime image in one of two ways. You can use the build + artifacts + runtime trio or dockerfile: — never both. Mode A — build / artifacts / runtime . The default. Kaiad runs a one-shot build container, captures named files into /artifacts/..., then layers them onto a runtime image with crane. | Field | Type | Required | Default | Notes | . | build.image | string | yes | — | Docker image used as the build environment. Anything pullable by the host docker daemon. | . | build.steps | string[] | yes | — | Shell commands run sequentially, each via sh -c. set -eu is applied automatically. | . | build.env | map&lt;string,string&gt; | no | {} | Extra env vars exposed to all steps. | . | artifacts | string[] | no | [] | Filenames under /artifacts/ to capture. Must match the from: in runtime.copy and runtime.layers. | . | runtime.image | string | no | scratch | Base image for the pushed runtime. | . | runtime.copy | array | no | [] | Each entry is { from: &lt;artifact-name&gt;, to: &lt;abs-path-in-image&gt; }. | . | runtime.layers | string[] | no | [] | Tar archives (from artifacts:) appended verbatim as filesystem layers. | . | runtime.command | string[] | yes (if runtime present) | — | Exec-form entrypoint argv ([\"node\", \"/app/server.js\"]). | . Inside the build container, the worker bind-mounts: . | /workspace — the repo checked out at the build’s SHA (read-write). | /artifacts — empty scratch dir. Anything written here that matches an entry in artifacts: is preserved. | . Environment variables automatically set on every step: GIT_SHA, GIT_BRANCH, KAIAD_SERVICE_NAME. Example: . build: image: golang:1.22 env: CGO_ENABLED: \"0\" steps: - go build -o /artifacts/server ./cmd/server - go test ./... artifacts: - server runtime: image: gcr.io/distroless/static copy: - from: server to: /server command: [\"/server\"] . Mode B — dockerfile . Falls back to a host docker build and pushes the result. Useful when upstream tooling already ships a Dockerfile that’s hard to reproduce as build steps. | Field | Type | Required | Default | Notes | . | dockerfile.path | string | no | Dockerfile | Relative to repo root. | . | dockerfile.context | string | no | . | Build context, relative to repo root. | . | dockerfile.args | map&lt;string,string&gt; | no | {} | --build-arg map. | . | dockerfile.target | string | no | — | --target stage for multi-stage builds. | . Example: . dockerfile: path: docker/Dockerfile context: . args: NODE_ENV: production target: runtime . Cannot coexist with build, artifacts, or runtime. The schema rejects pipelines that try to set both. ",
+    "url": "/reference/pipeline.html#build-modes-mutually-exclusive",
+    
+    "relUrl": "/reference/pipeline.html#build-modes-mutually-exclusive"
+  },"147": {
+    "doc": "kaiad.yaml reference",
+    "title": "Deployment fields",
+    "content": "These apply to whichever build mode you pick. kind . kind: deployable # default # or: kind: supporting . | deployable — every successful build dispatches a redeploy to bound agents. The default. | supporting — the build produces an artifact (typically a base image other services use) but is never deployed to agents even when bound. Use this for “library” repos like a hardened PHP base image referenced by app builds via dependsOn:. | . dependsOn . dependsOn: - php-image - shared-config . Names of other MonitoredServices in the same tenant that must have a successful build before this one can run. Effects: . | Build worker waits for each dep’s latest successful build and exposes its outputs as variables ({php_image_version}, etc.). | A successful build of this service triggers downstream rebuilds of any service that lists this name in its dependsOn:. | The build worker’s JWT scope includes pull access on each kaiad- hosted dep so crane can fetch dep images during runtime assembly. | . Failures cascade: if a dep has no successful build yet, this build fails with dependency \"&lt;name&gt;\" has no successful build yet. flowchart TB subgraph Sup[\"kind: supporting\"] PHPI[\"php-image(hardened PHP base)build → image only,never deployed\"] end subgraph Dep[\"kind: deployable\"] SITE[\"site-phpdependsOn: [php-image]\"] WORK[\"jobs-phpdependsOn: [php-image]\"] end PHPI -.->|exposes vars| VARS[\"{php_image_version}{php_image_image_ref}{kaiad_registry_host}\"] VARS -.-> SITE VARS -.-> WORK SITE -->|pushed image| AGD[Bound agents → deploy] WORK -->|pushed image| AGD PHPI -. \"successful buildtriggers\" .-> SITE PHPI -. \"rebuild of everydownstream consumer\" .-> WORK . ports . ports: - port: 8080 name: http # optional, human-readable protocol: TCP # TCP (default) | UDP - port: 9090 name: metrics . Declares which TCP/UDP ports the runtime image exposes. Required when domains: references any port. Used by the agent to publish the service. instances . instances: 3 # default 1; 0 is allowed (scaled-to-zero) . Default replica count when no environment-specific override applies. domains . domains: - host: app.example.com port: 8080 protocol: https # https = TLS terminated at ingress - host: '*.preview.example.com' # wildcards allowed port: 8080 protocol: https . | port must appear in ports:. | protocol: https means the ingress terminates TLS; the container itself speaks plain HTTP on the declared port. | protocol: http disables TLS termination — typical for cluster-internal hostnames. | . Wildcard hosts (*.foo.com) are allowed; the ingress backend has to support them (most do). loadBalancer . How the agent should publish the service. Defaults to {type: none} (cluster-internal). Per-environment overrides can change this. # k8s: provider-managed LoadBalancer (AWS/GCP/Azure). loadBalancer: type: k8s annotations: service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing . # MetalLB: bare-metal LB controller with optional address pool. loadBalancer: type: metallb addressPool: prod-public . # MetalLB with a PINNED fixed IP (cluster convention: a fixed IP from # a pool). Renders the Service with annotation # metallb.universe.tf/loadBalancerIPs: 192.168.1.228 # loadBalancerIPs accepts a single IP or a comma-separated list, and # can be combined with addressPool to pin an IP that belongs to a pool. loadBalancer: type: metallb addressPool: first-pool # optional loadBalancerIPs: 192.168.1.228 . # ingress-nginx: Service.type=ClusterIP + Ingress resources. loadBalancer: type: nginx ingressClass: nginx # default tlsSecret: app-tls # optional pre-existing Secret . # Cluster-internal only. loadBalancer: { type: none } . namespace . namespace: my-app . Kubernetes namespace (or Docker project name when the agent is docker-based). Lowercase k8s-style: alphanumeric + hyphens, max 63 chars. When unset, the agent picks: . | k8s runtime: the agent’s own pod namespace. | docker runtime: the literal kaiad. | . environments . Per-environment overrides for instances, domains, loadBalancer, and namespace. Top-level values are the defaults; any field omitted inside an environment falls back to the top-level value. instances: 1 domains: - host: dev.app.example.com port: 8080 protocol: https loadBalancer: { type: nginx } environments: staging: instances: 2 domains: - host: staging.app.example.com port: 8080 protocol: https production: instances: 5 domains: - host: app.example.com port: 8080 protocol: https loadBalancer: type: nginx tlsSecret: prod-app-tls namespace: prod . Environment names follow the same shape as namespaces (^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$). They’re matched against the agent’s configured environment label at deploy time. ",
+    "url": "/reference/pipeline.html#deployment-fields",
+    
+    "relUrl": "/reference/pipeline.html#deployment-fields"
+  },"148": {
+    "doc": "kaiad.yaml reference",
+    "title": "Validation rules enforced at parse time",
+    "content": "The Zod schema rejects yaml violating any of: . | version != 1 | dockerfile: together with build:, runtime:, or artifacts:. | runtime.copy.from or runtime.layers entry that isn’t in artifacts:. | domains without any matching entry in ports:. | domains[*].port that isn’t declared in ports:. | An environment name that doesn’t match the k8s label shape. | An artifact / runtime.copy.to path containing .. or starting with / (for artifacts) — defense against malicious yaml. | . The build worker fails fast with a human-readable error on any of these. ",
+    "url": "/reference/pipeline.html#validation-rules-enforced-at-parse-time",
+    
+    "relUrl": "/reference/pipeline.html#validation-rules-enforced-at-parse-time"
+  },"149": {
+    "doc": "kaiad.yaml reference",
+    "title": "Real-world examples",
+    "content": "Node.js single-pipeline . version: 1 build: image: node:22 steps: - npm ci --no-audit --no-fund - npm run build - cp -r dist /artifacts/dist artifacts: - dist runtime: image: gcr.io/distroless/nodejs22-debian12 copy: - from: dist to: /app/dist command: [\"node\", \"/app/dist/server.js\"] ports: - port: 3000 name: http domains: - host: api.example.com port: 3000 protocol: https . Spring Boot fat JAR . version: 1 build: image: maven:3.9-eclipse-temurin-17 steps: - mvn -B -DskipTests package - cp target/*.jar /artifacts/app.jar artifacts: - app.jar runtime: image: eclipse-temurin:17-jre copy: - from: app.jar to: /app/app.jar command: - java - -XX:MaxRAMPercentage=75 - -jar - /app/app.jar ports: - port: 8080 name: http . Supporting base image + app . php-image is a kind: supporting build that produces a hardened PHP runtime. site-php depends on it and uses variables to reference the latest build. php-image/kaiad.yaml: . version: 1 kind: supporting dockerfile: path: Dockerfile . site-php/kaiad.yaml: . version: 1 dependsOn: [php-image] build: image: \"{kaiad_registry_host}/php-image:{php_image_version}\" steps: - composer install --no-dev --no-interaction - tar -cf /artifacts/code.tar -C . artifacts: - code.tar runtime: image: \"{kaiad_registry_host}/php-image:{php_image_version}\" layers: [code.tar] command: [\"php-fpm\", \"--nodaemonize\"] ports: - port: 9000 name: fastcgi . Notice {kaiad_registry_host} and {php_image_version} — see variables for the full list. Multi-pipeline (php + nginx in one repo) . version: 1 services: php: build: image: composer:2 steps: - composer install --no-dev - cp -r vendor /artifacts/vendor - cp -r src /artifacts/src artifacts: [vendor, src] runtime: image: php:8.3-fpm-alpine copy: - { from: vendor, to: /var/www/vendor } - { from: src, to: /var/www/src } command: [\"php-fpm\", \"--nodaemonize\"] ports: [{ port: 9000, name: fastcgi }] nginx: dockerfile: path: nginx/Dockerfile ports: [{ port: 80, name: http }] domains: - host: app.example.com port: 80 protocol: https dependsOn: [php] . Two MonitoredService records reference this repo — one with Pipeline Name php, the other nginx. Each can be bound to different agents. ",
+    "url": "/reference/pipeline.html#real-world-examples",
+    
+    "relUrl": "/reference/pipeline.html#real-world-examples"
+  },"150": {
+    "doc": "kaiad.yaml reference",
+    "title": "See also",
+    "content": ". | Pipeline variables — interpolation syntax and the available variables. | Built-in registry — what happens to the image after a build succeeds. | Onboarding a service — end-to-end walkthrough. | . ",
+    "url": "/reference/pipeline.html#see-also",
+    
+    "relUrl": "/reference/pipeline.html#see-also"
+  },"151": {
+    "doc": "PostgreSQL failure",
+    "title": "PostgreSQL failure",
+    "content": "PostgreSQL is the system of record for tenants, RBAC, incidents, agents, services, audit-related state, and the built-in OCI registry (image blobs in pg_largeobject, manifests inline as BYTEA — see registry reference). ",
+    "url": "/runbooks/postgres-failure.html",
+    
+    "relUrl": "/runbooks/postgres-failure.html"
+  },"152": {
+    "doc": "PostgreSQL failure",
+    "title": "Symptoms",
+    "content": ". | HTTP 5xx on CRUD and authenticated routes; health endpoints may report DB unhealthy. | /v2/* returns 503 UNAVAILABLE (Registry storage not configured); docker pull and crane push fail; build worker can’t push new images. | Agents fail to pull workload images with ImagePullBackOff / unauthorized — manifests can’t be served. | Worker errors on transactions, connection pool exhaustion, or migration/version mismatch. | Replication lag or failover events (managed Postgres), or disk full / corruption alerts. | . ",
+    "url": "/runbooks/postgres-failure.html#symptoms",
+    
+    "relUrl": "/runbooks/postgres-failure.html#symptoms"
+  },"153": {
+    "doc": "PostgreSQL failure",
+    "title": "Impact",
+    "content": ". | Critical: Control plane and workers cannot persist or read tenant data; new incidents and policy checks may fail. | Critical for builds + deploys: the registry is unreachable, so newly-built images can’t be pushed and previously-built images can’t be pulled. Already-running workloads on agents are unaffected (kubelet/docker has the image locally); only new pulls fail. | Severe during migration: schema drift blocks startup until migrations succeed. Registry-related migrations add the registry_blobs, registry_manifests, registry_tags, registry_uploads tables — failure here means the kaiad process won’t start. | Disk pressure specifically: blob storage in pg_largeobject can grow large fast. A few GB of layers is normal per service. Run pnpm --filter @sm/api registry:gc before treating “disk full” as a Postgres capacity problem. | . ",
+    "url": "/runbooks/postgres-failure.html#impact",
+    
+    "relUrl": "/runbooks/postgres-failure.html#impact"
+  },"154": {
+    "doc": "PostgreSQL failure",
+    "title": "Immediate actions",
+    "content": ". | Distinguish availability (instance down, network) vs capacity (connections, disk, CPU). | For connection storms: scale pool limits carefully; restart misbehaving clients; avoid thundering herd. | For disk: expand storage or purge bloat per ops policy; ensure autovacuum and monitoring. | For failover (HA): confirm DNS/endpoints updated; verify app connection strings and read/write roles. | Do not delete data in panic; restore from backup/snapshot only via approved restore procedure. | . ",
+    "url": "/runbooks/postgres-failure.html#immediate-actions",
+    
+    "relUrl": "/runbooks/postgres-failure.html#immediate-actions"
+  },"155": {
+    "doc": "PostgreSQL failure",
+    "title": "Validation checks",
+    "content": ". | psql or admin SQL from an app host succeeds with the same creds as the API/worker. | Migrations applied to expected version; API readiness passes. | Spot-check tenant-scoped read/write in staging or a safe canary query. | Worker can complete a job that touches Postgres (incident update, agent command). | . ",
+    "url": "/runbooks/postgres-failure.html#validation-checks",
+    
+    "relUrl": "/runbooks/postgres-failure.html#validation-checks"
+  },"156": {
+    "doc": "Realtime gateway",
+    "title": "Realtime gateway (agent WSS)",
+    "content": "The agent realtime tier carries bidirectional WSS: telemetry up, AgentCommand down. It may share a process with the HTTP API or run separately behind a load balancer. ",
+    "url": "/runbooks/realtime-gateway.html#realtime-gateway-agent-wss",
+    
+    "relUrl": "/runbooks/realtime-gateway.html#realtime-gateway-agent-wss"
+  },"157": {
+    "doc": "Realtime gateway",
+    "title": "Symptoms",
+    "content": ". | Agents disconnect or flap; dashboard shows offline or missing telemetry. | Commands not delivered; backlog in Redis-backed per-agent queues (if used) grows. | Load balancer 502/504 on WSS path; TLS or upgrade errors at the edge. | . ",
+    "url": "/runbooks/realtime-gateway.html#symptoms",
+    
+    "relUrl": "/runbooks/realtime-gateway.html#symptoms"
+  },"158": {
+    "doc": "Realtime gateway",
+    "title": "Impact",
+    "content": ". | High: No live agent channel—log streaming and remote remediation steps that depend on the agent stop working. | Partial: Some agents OK (other regions/instances); investigate affinity and gateway instance health. | . ",
+    "url": "/runbooks/realtime-gateway.html#impact",
+    
+    "relUrl": "/runbooks/realtime-gateway.html#impact"
+  },"159": {
+    "doc": "Realtime gateway",
+    "title": "Immediate actions",
+    "content": ". | Confirm edge routing: WSS path, TLS termination, and WebSocket upgrade headers allowed. | If multiple gateway instances: verify sticky sessions or shared Redis command queue (design must not rely on single-node memory). | Drain misbehaving instances: stop new connections, allow in-flight acks, then restart (per deploy playbook). | Check Redis if command durability/replay depends on it; see Redis failure. | Validate agent token / enrollment config unchanged; clock skew within tolerance. | . ",
+    "url": "/runbooks/realtime-gateway.html#immediate-actions",
+    
+    "relUrl": "/runbooks/realtime-gateway.html#immediate-actions"
+  },"160": {
+    "doc": "Realtime gateway",
+    "title": "Validation checks",
+    "content": ". | Sample agent shows connected state; heartbeat or enrollment succeeds. | Send a no-op or safe AgentCommand in non-prod; observe ack path. | Metrics/logs: stable connection count, low error rate on upgrade path. | After gateway deploy: reconnect storm subsides without sustained 5xx. | . ",
+    "url": "/runbooks/realtime-gateway.html#validation-checks",
+    
+    "relUrl": "/runbooks/realtime-gateway.html#validation-checks"
+  },"161": {
+    "doc": "Realtime gateway",
+    "title": "Realtime gateway",
+    "content": " ",
+    "url": "/runbooks/realtime-gateway.html",
+    
+    "relUrl": "/runbooks/realtime-gateway.html"
+  },"162": {
+    "doc": "Redis failure",
+    "title": "Redis failure",
+    "content": "Redis backs BullMQ (job orchestration) and may support sessions, rate limits, or light cache in the API tier. ",
+    "url": "/runbooks/redis-failure.html",
+    
+    "relUrl": "/runbooks/redis-failure.html"
+  },"163": {
+    "doc": "Redis failure",
+    "title": "Symptoms",
+    "content": ". | Jobs remain queued or stalled; remediation and GitHub-related work does not progress. | API errors referencing Redis connection, timeouts, or ECONNREFUSED / NOAUTH. | Sudden memory or eviction alerts; elevated latency on queue operations. | . ",
+    "url": "/runbooks/redis-failure.html#symptoms",
+    
+    "relUrl": "/runbooks/redis-failure.html#symptoms"
+  },"164": {
+    "doc": "Redis failure",
+    "title": "Impact",
+    "content": ". | High: No durable queue progress—remediation jobs, webhooks, and scheduled tasks back up. | Medium (if Redis only used for optional cache/session): degraded auth or throttling behavior depending on deployment. | . ",
+    "url": "/runbooks/redis-failure.html#impact",
+    
+    "relUrl": "/runbooks/redis-failure.html#impact"
+  },"165": {
+    "doc": "Redis failure",
+    "title": "Immediate actions",
+    "content": ". | Confirm scope: single node vs cluster; note ACL/password and TLS requirements from your env config. | Check process / managed service health, CPU, memory, persistence (AOF/RDB) if applicable. | Verify network path from API and worker hosts to Redis (security groups, firewall, service name in K8s). | If memory pressure: inspect maxmemory policy; avoid unbounded keys; scale vertically or shard if sustained. | After recovery: restart workers if they wedged on connection loss (follow worker runbook if jobs still stuck). | . ",
+    "url": "/runbooks/redis-failure.html#immediate-actions",
+    
+    "relUrl": "/runbooks/redis-failure.html#immediate-actions"
+  },"166": {
+    "doc": "Redis failure",
+    "title": "Validation checks",
+    "content": ". | redis-cli -u … PING (or provider console) returns PONG. | BullMQ queues show consumption (depth decreasing); sample job completes end-to-end. | API and worker logs show stable Redis connections over several minutes. | Re-run a known-good enqueue path (e.g. test job or webhook replay in non-prod) if available. | . ",
+    "url": "/runbooks/redis-failure.html#validation-checks",
+    
+    "relUrl": "/runbooks/redis-failure.html#validation-checks"
+  },"167": {
+    "doc": "Built-in OCI registry",
+    "title": "Built-in OCI registry",
+    "content": "Kaiad ships a native OCI Distribution v2 registry served by the same Fastify process as /api/v1/*. It accepts standard docker push / crane push / docker pull traffic at &lt;panel-host&gt;/v2/... and stores blobs in Postgres. There is no registry:2 sidecar — earlier deployments that ran one are migrated in Phase 3 of the rollout. Source: apps/api/src/registry/. ",
+    "url": "/reference/registry.html",
+    
+    "relUrl": "/reference/registry.html"
+  },"168": {
+    "doc": "Built-in OCI registry",
+    "title": "What it gives you",
+    "content": ". | A registry every kaiad instance hosts itself. No separate container, no extra Postgres, no extra port to expose. | JWT-bearer auth identical to the docker/distribution token spec — the same /registry/token endpoint mints tokens for browsers, agents, the build worker, and external clients. | Cross-repo blob mounts so a shared base image’s layers don’t get re-uploaded for every dependent build. | Streaming reads via Postgres Large Objects — docker pull of a 500MB layer doesn’t materialize the layer in the Node heap. | A panel UI under Registry that lists repositories, tags, sizes, and creation timestamps, with admin-only delete actions. | . ",
+    "url": "/reference/registry.html#what-it-gives-you",
+    
+    "relUrl": "/reference/registry.html#what-it-gives-you"
+  },"169": {
+    "doc": "Built-in OCI registry",
+    "title": "Endpoints",
+    "content": "Standard OCI Distribution v1.1 subset, mounted under /v2/: . | Method + path | Purpose | Required scope | . | GET /v2/ | Auth ping (401 + Bearer challenge if unauthenticated). | (any valid token) | . | GET /v2/_catalog | Paginated list of repositories. | registry:catalog:* | . | GET /v2/&lt;name&gt;/tags/list | Paginated list of tags for &lt;name&gt;. | repository:&lt;name&gt;:pull | . | HEAD /v2/&lt;name&gt;/manifests/&lt;ref&gt; | Manifest exists? &lt;ref&gt; may be tag or sha256 digest. | repository:&lt;name&gt;:pull | . | GET /v2/&lt;name&gt;/manifests/&lt;ref&gt; | Fetch manifest body. | repository:&lt;name&gt;:pull | . | PUT /v2/&lt;name&gt;/manifests/&lt;ref&gt; | Push manifest; tag if &lt;ref&gt; isn’t a digest. | repository:&lt;name&gt;:push | . | DELETE /v2/&lt;name&gt;/manifests/&lt;digest&gt; | Delete manifest by digest. | repository:&lt;name&gt;:delete | . | HEAD /v2/&lt;name&gt;/blobs/&lt;digest&gt; | Blob exists? | repository:&lt;name&gt;:pull | . | GET /v2/&lt;name&gt;/blobs/&lt;digest&gt; | Fetch blob with optional Range:. | repository:&lt;name&gt;:pull | . | DELETE /v2/&lt;name&gt;/blobs/&lt;digest&gt; | Delete blob. | repository:&lt;name&gt;:delete | . | POST /v2/&lt;name&gt;/blobs/uploads/ | Start an upload session (or monolithic with ?digest=, or cross-repo mount with ?mount=…&amp;from=…). | repository:&lt;name&gt;:push | . | PATCH /v2/&lt;name&gt;/blobs/uploads/&lt;uuid&gt; | Append a chunk. | repository:&lt;name&gt;:push | . | PUT /v2/&lt;name&gt;/blobs/uploads/&lt;uuid&gt;?digest=&lt;d&gt; | Finalize the upload with optional last chunk. | repository:&lt;name&gt;:push | . | GET /v2/&lt;name&gt;/blobs/uploads/&lt;uuid&gt; | Resume status (Range: 0-&lt;received-1&gt;). | repository:&lt;name&gt;:push | . | DELETE /v2/&lt;name&gt;/blobs/uploads/&lt;uuid&gt; | Cancel session, reclaim partial blob. | repository:&lt;name&gt;:push | . _catalog and tags/list support OCI-standard pagination: pass ?n=&lt;count&gt;&amp;last=&lt;cursor&gt;; the server returns a Link: &lt;/v2/_catalog?n=…&amp;last=…&gt;; rel=\"next\" header when more is available. ",
+    "url": "/reference/registry.html#endpoints",
+    
+    "relUrl": "/reference/registry.html#endpoints"
+  },"170": {
+    "doc": "Built-in OCI registry",
+    "title": "Auth model",
+    "content": "The auth flow has two shapes: external clients follow the standard docker/distribution challenge-response; the embedded build worker shortcuts the round trip by signing its own JWT in-process. sequenceDiagram autonumber participant C as Client(docker / crane / kubelet) participant V as Kaiad /v2/* participant T as Kaiad /registry/token participant K as registry-auth keypair(/data/registry-auth/) rect rgba(180, 220, 255, 0.35) Note over C,K: External clients (cold cache) C->>V: GET /v2/&lt;name&gt;/manifests/&lt;ref&gt; V-->>C: 401 + WWW-Authenticate:Bearer realm=…/registry/token,service=kaiad-registry,scope=repository:&lt;name&gt;:pull C->>T: GET /registry/token?scope=…Authorization: Basic admin:&lt;real-token&gt; T->>K: load signing key T-->>C: { token: \"&lt;JWT&gt;\" } C->>V: GET /v2/&lt;name&gt;/manifests/&lt;ref&gt;Authorization: Bearer &lt;JWT&gt; V->>K: verify signature + kid V-->>C: 200 + manifest body end rect rgba(220, 255, 200, 0.35) Note over C,K: Build worker (embedded — shortcut) Note right of V: Worker is in the same processso it has filesystem accessto the keypair directly. C->>K: signRegistryToken(access=push+pull) K-->>C: pre-minted JWT in config.json registrytoken C->>V: GET /v2/&lt;name&gt;/manifests/&lt;ref&gt;Authorization: Bearer &lt;JWT&gt; V-->>C: 200 + manifest body end . Token endpoint . GET /registry/token mints JWTs that the registry verifies on every /v2/* request. The shape matches the docker/distribution token spec (RS256, libtrust kid, iss / aud / access claims). Callers present Basic auth on the token request. Three credential classes are recognised: . | Credential | Granted access | . | Owner / admin kaiad session token | pull,push,* on any repository. | . | Enrollment token | pull only on any repository. | . | Anything else | 401 — no token issued. | . WWW-Authenticate challenge . When a /v2/* request arrives without (or with an invalid) bearer token, the server returns: . HTTP/1.1 401 Unauthorized WWW-Authenticate: Bearer realm=\"&lt;KAIAD_REGISTRY_REALM&gt;\",service=\"kaiad-registry\",scope=\"repository:&lt;name&gt;:&lt;action&gt;\" . The realm comes from KAIAD_REGISTRY_REALM (an absolute URL — set in the compose env). Internal clients use a loopback URL like http://127.0.0.1:8091/registry/token; external clients receive whatever the operator set. Token TTL . Default 1 hour. Override via REGISTRY_AUTH_TOKEN_TTL_SECONDS. The build worker bumps this from the docker/distribution default of 5 min because multi-GB layer uploads can outlast a tighter window and trigger an inconvenient mid-push 401. In-process JWT minting . The build worker runs in the same container as the API, so it doesn’t go through /registry/token. It reads the same registry-auth keypair the verifier uses and signs its own JWTs with the appropriate scope per build (push on the service’s repo, pull on every kaiad-hosted dep). The result is written into the per-build docker-config.json as a registrytoken entry, bypassing the Basic-auth round-trip entirely. This is why the prod deployment doesn’t need to maintain an admin API credential just to let builds push. ",
+    "url": "/reference/registry.html#auth-model",
+    
+    "relUrl": "/reference/registry.html#auth-model"
+  },"171": {
+    "doc": "Built-in OCI registry",
+    "title": "Storage",
+    "content": "| Table | Holds | Backend | . | registry_blobs | digest → (size, content_oid, media_type) | Bytes in pg_largeobject referenced by content_oid. Streamed 64 KB at a time via loread/lo_put. Caps at the 4 TB pg_largeobject limit. | . | registry_manifests | digest → (repo, media_type, body, refs) | Body inline as BYTEA (manifests are KB-scale). config_digest, layer_digests[], and referenced_manifest_digests[] columns enable garbage collection. | . | registry_tags | (repo, tag) → manifest_digest | FK to registry_manifests with ON DELETE RESTRICT — you can’t reap a manifest while a tag still points at it. | . | registry_uploads | uuid → in-flight blob upload state | One row per active session, with content_oid, received_bytes, expires_at. Reaped by GC after expiry. | . Schema lives in packages/db/src/schema.ts; query helpers in packages/db/src/registry.ts. Storage references and the data flow on a pull: . flowchart LR subgraph DB[Postgres] BR[\"registry_blobs rowdigest → content_oid, size\"] LO[(\"pg_largeobject(content_oid)\")] MN[\"registry_manifests(BYTEA, inline)\"] TG[\"registry_tags(repo, tag) → manifest_digest\"] end TG -->|FK ON DELETE RESTRICT| MN MN -.->|config_digest +layer_digests| BR BR -.->|oid| LO subgraph API[Kaiad API process] H[\"/v2/&lt;name&gt;/blobs/&lt;digest&gt; handler\"] R[\"openBlobReadStream(pool, oid)BEGIN; lo_open; loread×N; lo_close; COMMIT\"] end H -->|lookup digest| BR H --> R R -.->|streams 64K chunks| LO R ==>|\"reply.send(stream)\"| Client[Client HTTP response] . Why pg Large Objects (not BYTEA)? . | BYTEA caps at 1 GB per field; some image layers (ML models, fat composer trees) exceed that. | BYTEA reads materialize the full value into the libpq buffer, so a 500 MB layer pull would allocate 500 MB in the Node heap. Large Objects support 64 KB-chunked streaming via loread, keeping memory flat per request. | Same pg_dump story, same Postgres credentials, no second database to operate. | . ",
+    "url": "/reference/registry.html#storage",
+    
+    "relUrl": "/reference/registry.html#storage"
+  },"172": {
+    "doc": "Built-in OCI registry",
+    "title": "Pulling from outside the panel",
+    "content": "Agent / Kubelet . Agents enrolled with an enrollment token can use that token as the password in a docker login (or as the registrytoken in config.json). Kubernetes installs of the agent generate an imagePullSecrets Secret automatically when reconciling a KaiadAgent CRD — see Kubernetes install. The token grants pull-only, scoped to any repository the registry hosts. Push from an enrollment token is rejected. Operator (docker push) . # Outside the kaiad container — uses the public realm. echo $KAIAD_OWNER_TOKEN | docker login panel.kaiad.dev -u admin --password-stdin docker push panel.kaiad.dev/my-image:latest . The owner / admin token comes from your kaiad session (visible in the panel under API Credentials for long-lived programmatic access — see API credentials). CI . Pre-mint a JWT once and stick it in ~/.docker/config.json as a registrytoken: . TOKEN=$(curl -sf -u admin:$KAIAD_TOKEN \\ \"https://panel.kaiad.dev/registry/token?service=kaiad-registry&amp;scope=repository:my-image:push,pull\" \\ | jq -r .token) cat &gt; ~/.docker/config.json &lt;&lt;JSON { \"auths\": { \"panel.kaiad.dev\": { \"registrytoken\": \"$TOKEN\" } } } JSON crane push my-image.tar panel.kaiad.dev/my-image:v1 . Tokens are short-lived (1 h by default). For long-running CI use the Basic-auth path so crane re-mints automatically when the JWT expires. ",
+    "url": "/reference/registry.html#pulling-from-outside-the-panel",
+    
+    "relUrl": "/reference/registry.html#pulling-from-outside-the-panel"
+  },"173": {
+    "doc": "Built-in OCI registry",
+    "title": "The Registry panel page",
+    "content": "Lists every repository known to the local Postgres, with expandable rows showing per-tag info: tag name, manifest digest, total size (config + layers), creation date. Behind the scenes the page calls GET /api/v1/registry/repositories and GET /api/v1/registry/repositories/:name/tags. Those endpoints read the same Postgres tables the /v2/* server uses — no separate registry HTTP call. Admin users see a delete action per tag. Deleting a tag drops the mapping immediately; the underlying manifest and blobs become candidates for the next GC sweep. ",
+    "url": "/reference/registry.html#the-registry-panel-page",
+    
+    "relUrl": "/reference/registry.html#the-registry-panel-page"
+  },"174": {
+    "doc": "Built-in OCI registry",
+    "title": "Garbage collection",
+    "content": "Run-once CLI: . pnpm --filter @sm/api registry:gc . In order, the sweep reclaims: . | Expired upload sessions — registry_uploads rows with expires_at &lt; now(). The partial blob’s content_oid is unlinked. | Orphan manifests — manifests with no tag pointing at them AND not referenced by any manifest list. Deleted. | Orphan blobs — registry_blobs rows whose digest isn’t in any manifest’s config_digest or layer_digests. Row removed, content_oid unlinked. | . Run order matters: deleting manifests first lets blob GC pick up newly-orphaned blobs in the same pass. Output: . [gc] scanning expired uploads (now=2026-05-12T07:30:00.000Z) [gc] reclaimed 0 expired upload(s) [gc] scanning orphan manifests [gc] reclaimed 3 orphan manifest(s) [gc] scanning orphan blobs [gc] reclaimed 12 orphan blob(s), 1574826452 bytes expiredUploadsReclaimed: 0 orphanManifestsReclaimed: 3 orphanBlobsReclaimed: 12 bytesReclaimed: 1574826452 . GC is idempotent and safe to run while the registry serves traffic — every step uses single-row deletes (no global locks). A race against an in-flight push at worst surfaces a 404 on a blob the push was about to reference, and the crane retry will succeed on the next attempt. There’s no built-in cron yet; wire it into your own scheduler (k8s CronJob, systemd timer, a /loop skill, etc.). ",
+    "url": "/reference/registry.html#garbage-collection",
+    
+    "relUrl": "/reference/registry.html#garbage-collection"
+  },"175": {
+    "doc": "Built-in OCI registry",
+    "title": "Compose env vars",
+    "content": "Used by both the API (verifier) and the build worker (signer): . | Var | Default | Notes | . | KAIAD_REGISTRY_HOST | panel.dev.kaiad.dev | External hostname recorded in image refs and pulled by agents. | . | KAIAD_REGISTRY_INTERNAL | same as KAIAD_REGISTRY_HOST | Loopback hostname the build worker pushes to. Compose default: 127.0.0.1:&lt;PORT&gt;. | . | KAIAD_REGISTRY_REALM | /registry/token (relative) | Set this to an absolute URL. Crane’s Go HTTP client rejects relative realm URLs. Compose default: http://127.0.0.1:&lt;PORT&gt;/registry/token. | . | KAIAD_REGISTRY_PUSH_USER / KAIAD_REGISTRY_PUSH_PASSWORD | admin / dev-token | Fallback Basic-auth credentials used only when the worker can’t find the registry-auth keypair on disk (standalone worker, not embedded). | . | REGISTRY_AUTH_KEY_PATH | &lt;DATA_DIR&gt;/registry-auth/key.pem | Private signing key. Generated on first boot if missing. | . | REGISTRY_AUTH_CERT_PATH | &lt;DATA_DIR&gt;/registry-auth/cert.pem | Public cert; libtrust kid is derived from the SPKI. | . | REGISTRY_AUTH_ISSUER | kaiad | JWT iss claim. | . | REGISTRY_AUTH_SERVICE | kaiad-registry | JWT aud claim. | . | REGISTRY_AUTH_TOKEN_TTL_SECONDS | 3600 | Token lifetime. | . The dev and prod compose files under env/ show the full wiring. ",
+    "url": "/reference/registry.html#compose-env-vars",
+    
+    "relUrl": "/reference/registry.html#compose-env-vars"
+  },"176": {
+    "doc": "Built-in OCI registry",
+    "title": "History and design notes",
+    "content": "Originally the registry was a registry:2 sidecar — see the commit chain starting at 83728ed feat(registry): bring up an OCI registry alongside the dev stack and ending with the Phase-3 cutover commits. The sidecar served /v2/* directly and Kaiad’s API only managed JWT minting + a couple of admin proxy endpoints. The native implementation replaced the sidecar in May 2026. Motivation: . | One process to operate. No second container to ship, restart, or observe. | Direct DB access for the panel’s admin endpoints — no HTTP round trip through the registry just to list tags. | Tight integration with the build worker: minting tokens in-process removes the need to provision an admin credential just so internal builds can push. | A single content-addressable storage layer (Postgres) instead of two (Postgres + a registry’s filesystem volume). | . The four-phase rollout — schema + read path, write path, cutover, polish — is described in the commit history under feat: and feat(registry): messages. ",
+    "url": "/reference/registry.html#history-and-design-notes",
+    
+    "relUrl": "/reference/registry.html#history-and-design-notes"
+  },"177": {
+    "doc": "Built-in OCI registry",
+    "title": "See also",
+    "content": ". | kaiad.yaml reference | Pipeline variables — including {kaiad_registry_host}. | Onboarding a service | . ",
+    "url": "/reference/registry.html#see-also",
+    
+    "relUrl": "/reference/registry.html#see-also"
+  },"178": {
+    "doc": "Agent runtimes",
+    "title": "Agent runtimes",
+    "content": "The Kaiad agent supports four runtime backends. The runtime decides how the agent executes container operations, runs the auto-fix and plan executors (run_cursor_plan, run_claude_plan, run_fix_plan), and reconciles sync_desired_state updates from the platform. You pick the runtime when you generate the enrollment token in the panel. The choice is just a set of environment variables baked into the agent’s start command — nothing on the platform side changes. ",
+    "url": "/agent/runtimes.html",
+    
+    "relUrl": "/agent/runtimes.html"
+  },"179": {
+    "doc": "Agent runtimes",
+    "title": "At a glance",
+    "content": "| Runtime | What the agent talks to | Container ops | run_step | Auto-fix / plan | Best for | . | Docker (default) | local Docker daemon socket | yes | yes | yes (containerized when isolation enabled) | VMs, single-host servers, the common case | . | Podman | local podman socket | yes (via Docker-compatible API) | yes | yes (no rootful daemon) | RHEL/Fedora hosts, rootless setups | . | Shell | the host shell directly | no (docker_op is rejected) | yes | yes (uncontained, host PATH) | hosts without Docker; supervisor-managed processes | . | Kubernetes | kube API via mounted SA token | not mapped yet (use run_step + kubectl) | yes | yes (uncontained inside the agent pod) | clusters; managed by the Kaiad operator | . Mechanism: every runtime is selected via SM_AGENT_RUNTIME_OVERRIDE, except Docker (which is the default) and Podman (which uses the Docker runtime path with SM_DOCKER_SOCKET redirected to the podman socket). The agent log line at startup confirms what’s active: . kaiad hello: agent runtime backend=docker . ",
+    "url": "/agent/runtimes.html#at-a-glance",
+    
+    "relUrl": "/agent/runtimes.html#at-a-glance"
+  },"180": {
+    "doc": "Agent runtimes",
+    "title": "Docker (default)",
+    "content": "The agent talks to a local Docker daemon over its Unix socket. This is the original runtime and the most fully-featured. What you get . | Native handling of docker_op commands: start, stop, build, run, compose_up, compose_down. | The agent streams logs from existing containers on enrollment so the panel sees app log lines immediately. | Plan executors (run_cursor_plan, run_claude_plan) and auto-fix (run_fix_plan) run in disposable workspaces. When container isolation is enabled (the agent runs the executor inside a sibling container) the workspace is fully sandboxed. | . Prerequisites . | Docker Engine on the host (any recent version with the v1.41+ API). | The agent process must be in a group that can write to /var/run/docker.sock, or run as root. A common pattern is a dedicated kaiad user added to the docker group. | . Environment . | Variable | Default | Purpose | . | SM_DOCKER_SOCKET | /var/run/docker.sock | Override if your daemon listens elsewhere (e.g. rootless ~/.docker/desktop/docker.sock). | . | SM_ENABLE_LOG_STREAMING | (on) | Set to 0 to suppress automatic log tailing on connect. | . The enrollment-token start command for Docker omits any SM_AGENT_RUNTIME_OVERRIDE — Docker is the default branch in the agent’s kaiad hello switch. Caveats . | The agent never spawns a Docker daemon. If the daemon is down the agent stays connected to Kaiad but docker_op returns errors. | On Docker Desktop hosts the socket lives at a different path; either symlink to /var/run/docker.sock or set SM_DOCKER_SOCKET. | . Verify . # Should print the daemon's API version, not connection refused. curl --unix-socket \"$SM_DOCKER_SOCKET\" http://localhost/_ping . ",
+    "url": "/agent/runtimes.html#docker-default",
+    
+    "relUrl": "/agent/runtimes.html#docker-default"
+  },"181": {
+    "doc": "Agent runtimes",
+    "title": "Podman",
+    "content": "Podman speaks the Docker API on a local socket (when launched with podman system service). The agent treats Podman as a Docker drop-in: same code path, different socket path. What you get . | Everything Docker gives you, except: rootless containers by default, no daemon process, and friendlier permissions on RHEL-family / SELinux hosts. | . Prerequisites . | podman 4.0+ on the host. | The Podman API socket activated. Two common ways: . | System service (root): sudo systemctl enable --now podman.socket # socket is at /run/podman/podman.sock . | User service (rootless): systemctl --user enable --now podman.socket # socket is at $XDG_RUNTIME_DIR/podman/podman.sock . | . | . Environment . The runtime selector emits this in the start command: . SM_DOCKER_SOCKET=/run/podman/podman.sock /usr/local/bin/agent . For rootless Podman, override the socket path to your user runtime dir: . SM_DOCKER_SOCKET=$XDG_RUNTIME_DIR/podman/podman.sock /usr/local/bin/agent . Caveats . | Podman exposes the Docker API but a few niche endpoints differ in behavior. The operations the agent uses (ping, list containers, start/stop, exec, build) are all covered. | compose_up / compose_down shell out to a literal docker-compose binary today, not docker compose v2. On Podman hosts either install podman-compose and symlink it as docker-compose, or install the classic docker-compose binary and export DOCKER_HOST=unix:///run/podman/podman.sock so it talks to the Podman socket. | Rootless Podman’s networking model differs from Docker (slirp4netns by default). If your auto-fix workflow assumes host networking, validate it on a real Podman host before relying on it. | . Verify . SM_DOCKER_SOCKET=/run/podman/podman.sock \\ curl --unix-socket /run/podman/podman.sock http://localhost/_ping . ",
+    "url": "/agent/runtimes.html#podman",
+    
+    "relUrl": "/agent/runtimes.html#podman"
+  },"182": {
+    "doc": "Agent runtimes",
+    "title": "Shell",
+    "content": "The agent runs commands directly on the host. There is no container indirection — run_step shells out via bash -c, plan executors run the configured CLI in a temp workspace under /tmp, and there is no docker_op support. A small process supervisor (internal/processsup) handles the sync_desired_state flow: it reconciles desired processes against running ones, redirects each process’s stdout/stderr to a log file under /tmp/sm-agent, and tails those files through the same log shipper Docker hosts use. What you get . | Works on any Linux/macOS host with no container runtime. | Plan executors run with the agent’s own UID and PATH — no isolation per execution. This is convenient for development hosts and appropriate when the agent itself is the workload boundary. | Suitable for shell-only services (a Java or Python process with no Docker wrapper) where Kaiad’s job is mostly observation + auto-fix. | . Prerequisites . | The CLIs the agent needs to execute on your host’s PATH: . | git for plan/fix workspaces. | cursor and/or claude if you use the corresponding executors. | Whatever the workload itself uses (go, node, python3, etc.). | . | . Environment . SM_AGENT_RUNTIME_OVERRIDE=shell /usr/local/bin/agent . | Variable | Default | Purpose | . | SM_AGENT_RUNTIME_OVERRIDE | (unset) | Set to shell to opt out of Docker. | . | SM_LOGSHIP_BUFFER | 50 | Lines of context kept per service for app_log_error frames. | . Caveats . | docker_op is disabled and the agent reports it as such on each call. If you need container ops, use Docker or Podman. | The plan executors run uncontained. Treat the agent host as a trust boundary; don’t run shell-runtime agents on hosts you wouldn’t give the configured AI CLI shell access to. | Process supervision uses /tmp/sm-agent. On hosts that wipe /tmp on reboot, agent-managed processes restart from scratch on each reboot — fine for dev, surprising for prod. | . Verify . After enrollment, confirm the runtime in the agent log: . kaiad hello: agent runtime backend=shell shell-runtime supervisor + tailer wired (agent=...) . ",
+    "url": "/agent/runtimes.html#shell",
+    
+    "relUrl": "/agent/runtimes.html#shell"
+  },"183": {
+    "doc": "Agent runtimes",
+    "title": "Kubernetes",
+    "content": "The agent runs inside a pod and uses its mounted ServiceAccount token to talk to the kube API. This is the runtime the Kaiad agent operator installs by default — applying a KaiadAgent CR is the recommended path; manual installation on Kubernetes is unusual. Environment . SM_AGENT_RUNTIME_OVERRIDE=kubernetes /usr/local/bin/agent . The operator also sets SM_AGENT_PERSIST_CREDENTIALS=1 so the agent records its post-enrollment credential into a mounted volume and re-uses it across restarts. Caveats . | docker_op is not yet mapped for kubernetes — the agent returns docker_op is not mapped for \"kubernetes\" runtime yet; use run_step with kubectl. Plan to wire kubectl rollout restart and kubectl apply -f for the common operations once the operator stabilizes. | The agent’s view of “the workload” is whatever the KaiadAgent.spec.manages allow-list grants it. If a Deployment is outside the rule list, the agent can’t see it. This is intentional — see the allow-list reference. | . For everything else, see the dedicated Install on Kubernetes page. ",
+    "url": "/agent/runtimes.html#kubernetes",
+    
+    "relUrl": "/agent/runtimes.html#kubernetes"
+  },"184": {
+    "doc": "Agent runtimes",
+    "title": "Switching runtimes on a running host",
+    "content": "Re-enroll. The runtime is set at agent startup from kaiad hello plus SM_AGENT_RUNTIME_OVERRIDE; changing it in-place means restarting the agent process with new env. The simplest path is: . | Generate a fresh enrollment token in the panel with the runtime you want (Agents → Enrollment Tokens → pick runtime → Generate token). | Stop the agent, delete its credential file (~/.service-monitor/agent-credential.json by default; override with SM_CREDENTIAL_PATH), and run the new start command. | . The platform’s view of the agent doesn’t change — the same agent id re-enrolls under the new credential. ",
+    "url": "/agent/runtimes.html#switching-runtimes-on-a-running-host",
+    
+    "relUrl": "/agent/runtimes.html#switching-runtimes-on-a-running-host"
+  },"185": {
+    "doc": "Agent runtimes",
+    "title": "Choosing",
+    "content": "Most teams want Docker. Pick Podman if your host policy forbids the Docker daemon. Pick Shell for hosts with no container runtime, or where the workload itself runs as a host process and you want supervised tailing + auto-fix without a container layer. Use Kubernetes when you have a cluster — and prefer the operator install over hand-rolling the manifests. ",
+    "url": "/agent/runtimes.html#choosing",
+    
+    "relUrl": "/agent/runtimes.html#choosing"
+  },"186": {
+    "doc": "UX Voice & Terminology",
+    "title": "UX voice &amp; terminology",
+    "content": "Guidance for in-product copy, errors, and documentation so the admin experience stays consistent with the Control Slate product voice. ",
+    "url": "/admin/ux-voice.html#ux-voice--terminology",
+    
+    "relUrl": "/admin/ux-voice.html#ux-voice--terminology"
+  },"187": {
+    "doc": "UX Voice & Terminology",
+    "title": "Voice",
+    "content": ". | Direct, calm, precise. Say what the user needs to know without filler. | Prefer plain language. Avoid jargon where possible. When a technical term is required, link to the glossary or reference so readers can go deeper. | Active voice. Prefer “We queued the remediation plan” over passive constructions. | Errors should briefly explain what happened, include a stable code (and correlation ID when available), and suggest a concrete next action (where to click or what to change). | . ",
+    "url": "/admin/ux-voice.html#voice",
+    
+    "relUrl": "/admin/ux-voice.html#voice"
+  },"188": {
+    "doc": "UX Voice & Terminology",
+    "title": "Terminology map",
+    "content": "Use the preferred term on the left in UI, API messages, and docs. Avoid the alternatives unless you are quoting external systems. | Preferred | Avoid | . | incident | “alert”, “issue” | . | remediation plan | “fix”, “patch” | . | agent | “client”, “daemon” | . | enrollment | “registration”, “onboarding” | . | policy deny | “blocked”, “forbidden” | . | dry run / test run | “simulation”, “preview” | . | tenant | “organization”, “account” | . ",
+    "url": "/admin/ux-voice.html#terminology-map",
+    
+    "relUrl": "/admin/ux-voice.html#terminology-map"
+  },"189": {
+    "doc": "UX Voice & Terminology",
+    "title": "Error message pattern",
+    "content": "Structure product and API errors as: . What happened → Code (and correlation ID) → What to do next . Keep each segment short; put details in logs or linked docs when needed. Example . GitHub merge denied — POLICY_DENY (correlation: abc-123) — Update automation policy in Settings → Automation to allow merge_pr for this repository. ",
+    "url": "/admin/ux-voice.html#error-message-pattern",
+    
+    "relUrl": "/admin/ux-voice.html#error-message-pattern"
+  },"190": {
+    "doc": "UX Voice & Terminology",
+    "title": "UX Voice & Terminology",
+    "content": " ",
+    "url": "/admin/ux-voice.html",
+    
+    "relUrl": "/admin/ux-voice.html"
+  },"191": {
+    "doc": "Worker failure",
+    "title": "Worker failure",
+    "content": "Workers consume BullMQ jobs: ingest/detection, GitHub API calls, notifications, and AgentCommand dispatch via the realtime tier. ",
+    "url": "/runbooks/worker-failure.html",
+    
+    "relUrl": "/runbooks/worker-failure.html"
+  },"192": {
+    "doc": "Worker failure",
+    "title": "Symptoms",
+    "content": ". | Queue depth grows; jobs retry or move to failed in BullMQ. | No GitHub mutations (PR, merge, dispatch) completing; webhooks enqueue but nothing finishes. | Worker pods/processes crash looping, OOM, or idle while Redis is healthy. | . ",
+    "url": "/runbooks/worker-failure.html#symptoms",
+    
+    "relUrl": "/runbooks/worker-failure.html#symptoms"
+  },"193": {
+    "doc": "Worker failure",
+    "title": "Impact",
+    "content": ". | High: Remediation and automation stop; incidents may be detected but not resolved. | Partial: Only some queues or tenants affected—check concurrency, rate limits, and per-tenant failures. | . ",
+    "url": "/runbooks/worker-failure.html#impact",
+    
+    "relUrl": "/runbooks/worker-failure.html#impact"
+  },"194": {
+    "doc": "Worker failure",
+    "title": "Immediate actions",
+    "content": ". | Correlate with Redis failure and PostgreSQL failure; fix upstream first if broken. | Inspect worker logs for GitHub 401/403/429, installation token issues, or policy denials. | Scale worker replicas or concurrency if CPU-bound legitimately; avoid masking leaks. | For poison messages: quarantine job payload per incident process; do not disable retries globally without review. | If dispatch to agents fails: see Realtime gateway. | . ",
+    "url": "/runbooks/worker-failure.html#immediate-actions",
+    
+    "relUrl": "/runbooks/worker-failure.html#immediate-actions"
+  },"195": {
+    "doc": "Worker failure",
+    "title": "Validation checks",
+    "content": ". | BullMQ shows active consumers; failed rate returns to baseline. | End-to-end test: enqueue job → GitHub or agent side effect completes. | Webhook → job → outcome path verified in staging or with a safe production operation. | Resource usage stable (memory/FDs); no repeated crash signature. | . ",
+    "url": "/runbooks/worker-failure.html#validation-checks",
+    
+    "relUrl": "/runbooks/worker-failure.html#validation-checks"
+  }
+}

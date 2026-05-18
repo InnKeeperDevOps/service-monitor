@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Kaiad favicon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1f3a" />
+      <stop offset="100%" stop-color="#132f55" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#bg)" />
+  <path d="M20 18v28h6V34l14 12h9L33 32l16-14h-9L26 30V18z" fill="#ffffff" />
+  <path d="M16 43c6-3 11-3 17 0s11 3 17 0" fill="none" stroke="#36d7ff" stroke-width="3" stroke-linecap="round" />
+</svg>
