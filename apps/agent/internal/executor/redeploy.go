@@ -273,6 +273,7 @@ func teardownKubernetes(ctx context.Context, serviceID, serviceName, namespace s
 		}
 	}
 	name := k8sResourceName(serviceID, serviceName)
+	log.Printf("[agent:teardown:k8s] start service=%s name=%q ns=%q", serviceID, name, namespace)
 	var out strings.Builder
 	for _, kind := range []string{"deployment", "service", "ingress"} {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -282,6 +283,11 @@ func teardownKubernetes(ctx context.Context, serviceID, serviceName, namespace s
 		fmt.Fprintf(&out, "%s/%s: %s", kind, name, strings.TrimSpace(string(combined)))
 		if err != nil {
 			fmt.Fprintf(&out, " (err: %v)", err)
+			log.Printf("[agent:teardown:k8s] delete %s/%s ns=%q FAILED: %v: %s",
+				kind, name, namespace, err, strings.TrimSpace(string(combined)))
+		} else {
+			log.Printf("[agent:teardown:k8s] delete %s/%s ns=%q: %s",
+				kind, name, namespace, strings.TrimSpace(string(combined)))
 		}
 		out.WriteString("\n")
 	}
@@ -305,9 +311,13 @@ func (e *Executor) executeRedeployService(
 	)
 	switch backend {
 	case RuntimeDocker:
-		return e.redeployDocker(ctx, dc, in)
+		res := e.redeployDocker(ctx, dc, in)
+		log.Printf("[agent:executor] redeploy_service done backend=docker service=%s success=%t", in.serviceID, res.Success)
+		return res
 	case RuntimeKubernetes:
-		return e.redeployKubernetes(ctx, in)
+		res := e.redeployKubernetes(ctx, in)
+		log.Printf("[agent:executor] redeploy_service done backend=kubernetes service=%s success=%t", in.serviceID, res.Success)
+		return res
 	case RuntimeShell:
 		return CommandResult{
 			Success: false,
@@ -653,22 +663,36 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 		namespace = "default"
 	}
 
+	log.Printf("[agent:redeploy:k8s] start service=%s name=%q ns=%q lb=%s image=%s build=%s",
+		in.serviceID, in.serviceName, namespace, in.loadBalancer.typ, in.imageRef, in.buildID)
+
 	// Make sure the namespace exists. `kubectl create ns --dry-run=client
 	// -o yaml | kubectl apply -f -` is idempotent — apply is a no-op
 	// when the ns already exists, and creates it when it doesn't.
 	// Failure here isn't fatal; the subsequent apply will surface a
 	// clearer error if the namespace doesn't exist and we couldn't
 	// create it (e.g. agent SA lacks namespaces.create cluster perm).
+	// The outcome is logged either way so an RBAC-denied namespace
+	// ensure is visible in the agent log instead of being swallowed.
 	ensureCtx, ensureCancel := context.WithTimeout(ctx, 10*time.Second)
 	dryRun := exec.CommandContext(ensureCtx, "kubectl", "create", "ns", namespace, "--dry-run=client", "-o", "yaml")
 	dryOut, dryErr := dryRun.Output()
 	ensureCancel()
-	if dryErr == nil {
+	if dryErr != nil {
+		log.Printf("[agent:redeploy:k8s] namespace dry-run render failed (non-fatal) ns=%q: %v", namespace, dryErr)
+	} else {
 		applyCtx, applyCancel := context.WithTimeout(ctx, 10*time.Second)
 		applyNs := exec.CommandContext(applyCtx, "kubectl", "apply", "-f", "-")
 		applyNs.Stdin = strings.NewReader(string(dryOut))
-		_, _ = applyNs.CombinedOutput()
+		nsOut, nsErr := applyNs.CombinedOutput()
 		applyCancel()
+		if nsErr != nil {
+			log.Printf("[agent:redeploy:k8s] namespace ensure FAILED (non-fatal) ns=%q: %v: %s",
+				namespace, nsErr, strings.TrimSpace(string(nsOut)))
+		} else {
+			log.Printf("[agent:redeploy:k8s] namespace ensured ns=%q: %s",
+				namespace, strings.TrimSpace(string(nsOut)))
+		}
 	}
 
 	yaml := renderK8sManifests(in, namespace)
@@ -714,6 +738,9 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 			// to the transport at this point so the agent log is the
 			// best place to surface the failure.
 			log.Printf("[agent:executor] lb_status_report send failed: %v", err)
+		} else {
+			log.Printf("[agent:redeploy:k8s] lb_status_report sent service=%s ns=%q lb=%s ip=%q host=%q (intent — not a confirmation the manifest applied)",
+				in.serviceID, namespace, in.loadBalancer.typ, externalIP, externalHostname)
 		}
 	}()
 
@@ -721,14 +748,22 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 	combined, err := cmd.CombinedOutput()
 	out.Write(combined)
 	if err != nil {
+		log.Printf("[agent:redeploy:k8s] kubectl apply FAILED service=%s ns=%q resource=%s lb=%s: %v: %s",
+			in.serviceID, namespace, resourceName, in.loadBalancer.typ, err, strings.TrimSpace(string(combined)))
 		return CommandResult{Success: false, Output: out.String() + fmt.Sprintf("\nkubectl apply: %v\n", err)}
 	}
+	log.Printf("[agent:redeploy:k8s] kubectl apply OK service=%s ns=%q resource=%s lb=%s: %s",
+		in.serviceID, namespace, resourceName, in.loadBalancer.typ, strings.TrimSpace(string(combined)))
 
 	externalIP, externalHostname = queryK8sLbAddress(cctx, namespace, in.loadBalancer.typ, resourceName)
 
 	if externalIP != "" || externalHostname != "" {
+		log.Printf("[agent:redeploy:k8s] lb endpoint service=%s ns=%q ip=%q host=%q",
+			in.serviceID, namespace, externalIP, externalHostname)
 		fmt.Fprintf(&out, "\nlb endpoint: %s%s\n", externalIP, externalHostname)
 	} else {
+		log.Printf("[agent:redeploy:k8s] lb endpoint pending service=%s ns=%q (cluster has not assigned an IP yet)",
+			in.serviceID, namespace)
 		out.WriteString("\nlb endpoint: (pending; cluster has not assigned an IP yet)\n")
 	}
 	return CommandResult{Success: true, Output: out.String() + "redeploy ok\n"}

@@ -1,0 +1,29 @@
+---
+description: The synload (prod) Kubernetes cluster is strictly read-only — never mutate it
+globs: *
+alwaysApply: true
+---
+
+# Synload Cluster — Read-Only
+
+The synload cluster is the production Kubernetes cluster where the prod
+kaiad-agent (`kagent-5a78ae77…`) and the monitored services run. Its
+kubeconfig is at `~/.kube/config_synload`.
+
+## Binding rules
+
+- **NEVER mutate the synload cluster.** Only read.
+- Permitted `kubectl` verbs against synload: `get`, `describe`, `logs`,
+  `top`, `version`, `api-resources`, `explain`, `config view`,
+  `cluster-info`, `events`, and `--dry-run=client` previews.
+- **Forbidden** against synload: `apply`, `create`, `delete`, `patch`,
+  `edit`, `replace`, `scale`, `rollout restart/undo`, `annotate`,
+  `label`, `cordon`, `drain`, `set`, `exec`, `cp`, `port-forward`,
+  `attach`, `run`, or anything that writes to the cluster — directly or
+  via the agent's `run_step`/command channel.
+- Always target synload explicitly with
+  `KUBECONFIG=~/.kube/config_synload` (or `--kubeconfig`). Never make it
+  the default context. The default `~/.kube/config` (`kaiad-test`) is a
+  separate, unrelated dev cluster.
+- Any change to synload (e.g. rolling the agent pod, applying a CR) must
+  be performed by the user. Provide exact commands; do not run them.
