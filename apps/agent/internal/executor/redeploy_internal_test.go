@@ -92,6 +92,38 @@ func TestLbStatusReportsAndHelpers(t *testing.T) {
 	_ = registryAuthFromEnv("panel.kaiad.dev/x:tag")
 }
 
+func TestRenderK8sManifestsMetalLBPinnedIP(t *testing.T) {
+	payload := richPayload("metallb")
+	lb := payload["loadBalancer"].(map[string]interface{})
+	lb["addressPool"] = "first-pool"
+	lb["loadBalancerIPs"] = "192.168.1.228"
+
+	in, err := parseRedeployPayload(payload)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if in.loadBalancer.loadBalancerIPs != "192.168.1.228" {
+		t.Fatalf("loadBalancerIPs not parsed: %q", in.loadBalancer.loadBalancerIPs)
+	}
+	yaml := renderK8sManifests(in, "prod")
+	for _, want := range []string{
+		"type: LoadBalancer",
+		"metallb.universe.tf/loadBalancerIPs",
+		"192.168.1.228",
+		"metallb.universe.tf/address-pool",
+	} {
+		if !strings.Contains(yaml, want) {
+			t.Fatalf("rendered Service missing %q in:\n%s", want, yaml)
+		}
+	}
+
+	// Without loadBalancerIPs the annotation must NOT appear.
+	in2, _ := parseRedeployPayload(richPayload("metallb"))
+	if strings.Contains(renderK8sManifests(in2, "prod"), "loadBalancerIPs") {
+		t.Fatal("loadBalancerIPs annotation emitted when unset")
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a

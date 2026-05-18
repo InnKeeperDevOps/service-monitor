@@ -266,6 +266,18 @@ loadBalancer:
 ```
 
 ```yaml
+# MetalLB with a PINNED fixed IP (cluster convention: a fixed IP from
+# a pool). Renders the Service with annotation
+#   metallb.universe.tf/loadBalancerIPs: 192.168.1.228
+# loadBalancerIPs accepts a single IP or a comma-separated list, and
+# can be combined with addressPool to pin an IP that belongs to a pool.
+loadBalancer:
+  type: metallb
+  addressPool: first-pool       # optional
+  loadBalancerIPs: 192.168.1.228
+```
+
+```yaml
 # ingress-nginx: Service.type=ClusterIP + Ingress resources.
 loadBalancer:
   type: nginx

@@ -73,11 +73,12 @@ type domainSpec struct {
 }
 
 type loadBalancerSpec struct {
-	typ          string            // "none" | "k8s" | "metallb" | "nginx"
-	annotations  map[string]string // type=k8s
-	addressPool  string            // type=metallb
-	ingressClass string            // type=nginx
-	tlsSecret    string            // type=nginx
+	typ             string            // "none" | "k8s" | "metallb" | "nginx"
+	annotations     map[string]string // type=k8s
+	addressPool     string            // type=metallb
+	loadBalancerIPs string            // type=metallb (pinned fixed IP/IPs)
+	ingressClass    string            // type=nginx
+	tlsSecret       string            // type=nginx
 }
 
 // parseRedeployPayload pulls fields out of the loosely-typed JSON map
@@ -143,6 +144,9 @@ func parseRedeployPayload(payload map[string]interface{}) (redeployInput, error)
 		}
 		if s, ok := raw["addressPool"].(string); ok {
 			in.loadBalancer.addressPool = s
+		}
+		if s, ok := raw["loadBalancerIPs"].(string); ok {
+			in.loadBalancer.loadBalancerIPs = s
 		}
 		if s, ok := raw["ingressClass"].(string); ok {
 			in.loadBalancer.ingressClass = s
@@ -806,6 +810,9 @@ func buildLbStatusReport(agentID string, in redeployInput, namespace, externalIP
 		if in.loadBalancer.addressPool != "" {
 			detail["addressPool"] = in.loadBalancer.addressPool
 		}
+		if in.loadBalancer.loadBalancerIPs != "" {
+			detail["loadBalancerIPs"] = in.loadBalancer.loadBalancerIPs
+		}
 	case "nginx":
 		ingressClass := in.loadBalancer.ingressClass
 		if ingressClass == "" {
@@ -906,6 +913,9 @@ func renderK8sManifests(in redeployInput, namespace string) string {
 		svcType = "LoadBalancer"
 		if in.loadBalancer.addressPool != "" {
 			annotations["metallb.universe.tf/address-pool"] = in.loadBalancer.addressPool
+		}
+		if in.loadBalancer.loadBalancerIPs != "" {
+			annotations["metallb.universe.tf/loadBalancerIPs"] = in.loadBalancer.loadBalancerIPs
 		}
 	case "nginx", "none":
 		// ClusterIP — for nginx, the Ingress fronts it; for none, only

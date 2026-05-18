@@ -251,6 +251,31 @@ environments:
       });
     });
 
+    it("accepts metallb with a pinned loadBalancerIPs (alone and with addressPool)", () => {
+      const r = parsePipelineYaml(`${base}
+loadBalancer:
+  type: metallb
+  loadBalancerIPs: 192.168.1.228
+environments:
+  production:
+    loadBalancer:
+      type: metallb
+      addressPool: first-pool
+      loadBalancerIPs: 192.168.1.228,192.168.1.229
+`);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.pipeline.loadBalancer).toEqual({
+        type: "metallb",
+        loadBalancerIPs: "192.168.1.228"
+      });
+      expect(r.pipeline.environments.production?.loadBalancer).toEqual({
+        type: "metallb",
+        addressPool: "first-pool",
+        loadBalancerIPs: "192.168.1.228,192.168.1.229"
+      });
+    });
+
     it("rejects unknown loadBalancer type", () => {
       const r = parsePipelineYaml(`${base}
 loadBalancer:

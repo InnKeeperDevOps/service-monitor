@@ -147,13 +147,21 @@ export const pipelineLoadBalancerSchema = z.discriminatedUnion("type", [
     /** Free-form annotations applied to the Service. */
     annotations: z.record(z.string()).default({})
   }),
-  // MetalLB (bare-metal IPAM controller). Service.type=LoadBalancer
-  // with a `metallb.universe.tf/address-pool` annotation when
-  // addressPool is set; otherwise MetalLB picks from any pool.
+  // MetalLB (bare-metal IPAM controller). Service.type=LoadBalancer.
+  // `addressPool` sets metallb.universe.tf/address-pool (any IP from
+  // that pool). `loadBalancerIPs` pins a specific external IP (or
+  // comma-separated list) via metallb.universe.tf/loadBalancerIPs —
+  // the cluster convention for a fixed IP from a pool. Both may be set
+  // together; with neither, MetalLB picks from any pool.
   z.object({
     type: z.literal("metallb"),
     /** Address pool name. Sets the metallb.universe.tf/address-pool annotation. */
-    addressPool: z.string().min(1).optional()
+    addressPool: z.string().min(1).optional(),
+    /**
+     * Fixed external IP, or comma-separated IPs, to pin. Sets the
+     * metallb.universe.tf/loadBalancerIPs annotation.
+     */
+    loadBalancerIPs: z.string().min(1).optional()
   }),
   // ingress-nginx. Service.type=ClusterIP; Ingress resource per host
   // with `ingressClassName: nginx` (or whatever `ingressClass` overrides
