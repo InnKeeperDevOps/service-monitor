@@ -695,6 +695,40 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 		}
 	}
 
+	// Self-provision the image-pull Secret in the target namespace so
+	// private Kaiad-registry images pull without an admin pre-creating
+	// it. Built from the registry creds the agent already holds
+	// (KAIAD_REGISTRY_USER/PASSWORD); idempotent via dry-run | apply.
+	// Non-fatal — logged either way; the rendered Deployment references
+	// this secret name (see renderK8sManifests / KAIAD_IMAGE_PULL_SECRET).
+	if ps := strings.TrimSpace(os.Getenv("KAIAD_IMAGE_PULL_SECRET")); ps != "" {
+		auth := registryAuthFromEnv(in.imageRef)
+		secCtx, secCancel := context.WithTimeout(ctx, 10*time.Second)
+		gen := exec.CommandContext(secCtx, "kubectl", "create", "secret", "docker-registry", ps,
+			"-n", namespace,
+			"--docker-server="+auth.ServerAddress,
+			"--docker-username="+auth.Username,
+			"--docker-password="+auth.Password,
+			"--dry-run=client", "-o", "yaml")
+		secOut, secErr := gen.Output()
+		secCancel()
+		if secErr != nil {
+			log.Printf("[agent:redeploy:k8s] pull-secret render failed (non-fatal) ns=%q secret=%q: %v", namespace, ps, secErr)
+		} else {
+			aCtx, aCancel := context.WithTimeout(ctx, 10*time.Second)
+			ap := exec.CommandContext(aCtx, "kubectl", "apply", "-f", "-")
+			ap.Stdin = strings.NewReader(string(secOut))
+			apOut, apErr := ap.CombinedOutput()
+			aCancel()
+			if apErr != nil {
+				log.Printf("[agent:redeploy:k8s] pull-secret ensure FAILED (non-fatal) ns=%q secret=%q: %v: %s",
+					namespace, ps, apErr, strings.TrimSpace(string(apOut)))
+			} else {
+				log.Printf("[agent:redeploy:k8s] pull-secret ensured ns=%q secret=%q", namespace, ps)
+			}
+		}
+	}
+
 	yaml := renderK8sManifests(in, namespace)
 
 	// Stage to a tmpfile and `kubectl apply -f`. Stays simpler than

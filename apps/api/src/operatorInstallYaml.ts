@@ -4,7 +4,7 @@
 // deploy/operator/charts/kaiad-operator/ is the source of truth — the
 // constants below MUST stay in sync with the chart templates.
 
-const APP_VERSION = "0.1.2";
+const APP_VERSION = "0.1.3";
 const NAME = "kaiad-operator";
 
 // Mirrors deploy/operator/charts/kaiad-operator/crds/kaiadagents.yaml.
@@ -178,7 +178,7 @@ const CLUSTER_ROLE_RULES = `  - apiGroups: ["kaiad.dev"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -203,6 +203,12 @@ const CLUSTER_ROLE_RULES = `  - apiGroups: ["kaiad.dev"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch", "create", "patch"]

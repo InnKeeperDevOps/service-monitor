@@ -45,12 +45,21 @@ var allowedRBAC = map[string]map[string]map[string]struct{}{
 		"services": {
 			"get": {}, "list": {}, "watch": {}, "create": {}, "update": {}, "patch": {}, "delete": {},
 		},
-		// `kubectl apply` reads the target namespace before applying
-		// (and the agent does a best-effort `create ns --dry-run | apply`).
-		// get/list/watch lets a cluster-scoped manages rule cover that
-		// without granting namespace creation/deletion.
+		// The agent self-provisions the target namespace it deploys into
+		// (resolved per-service from kaiad.yaml) so no admin has to
+		// pre-create/label it. create is required for that; delete is
+		// deliberately withheld (deleting a namespace nukes everything in
+		// it — far beyond the agent's deploy mandate).
 		"namespaces": {
-			"get": {}, "list": {}, "watch": {},
+			"get": {}, "list": {}, "watch": {}, "create": {},
+		},
+		// create ONLY — the agent writes its own image-pull Secret
+		// (dockerconfigjson, built from creds it already holds) into the
+		// target namespace so private Kaiad-registry images pull. No
+		// get/list/watch: the agent still cannot READ any cluster Secret,
+		// so the allow-list's "can't exfiltrate secrets" guarantee holds.
+		"secrets": {
+			"create": {},
 		},
 		"events": {
 			"get": {}, "list": {}, "watch": {}, "create": {}, "patch": {},
