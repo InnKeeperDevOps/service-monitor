@@ -760,14 +760,11 @@ export function buildServer(opts: BuildServerOptions = {}) {
         return;
       }
 
-      const existing = await getRegistryManifestByTag(ctx.queryFn, repo, "latest");
-      if (existing) {
-        await setRegistryRepoVisibility(ctx.queryFn, repo, true);
-        console.error(`[image-bootstrap] ${repo}:latest already present; ensured public`);
-        return;
-      }
-
       if (!fs.existsSync(bundle)) {
+        // Nothing to publish from this build; keep an existing repo public.
+        if (await getRegistryManifestByTag(ctx.queryFn, repo, "latest")) {
+          await setRegistryRepoVisibility(ctx.queryFn, repo, true);
+        }
         console.error(`[image-bootstrap] no baked bundle at ${bundle}; skipping ${repo}`);
         return;
       }
@@ -775,6 +772,14 @@ export function buildServer(opts: BuildServerOptions = {}) {
         console.error(`[image-bootstrap] crane not found at ${craneBin}; cannot publish ${repo}`);
         return;
       }
+
+      // Publish :<version> only when that exact tag isn't there yet, but
+      // ALWAYS (re)push the moving :latest to THIS build's baked bundle —
+      // successive builds (and version bumps) ship different agent code,
+      // so :latest must track the current image. crane push is
+      // content-addressed, so re-pushing identical bytes is a no-op.
+      const versionPresent = await getRegistryManifestByTag(ctx.queryFn, repo, version);
+      const tags = versionPresent ? ["latest"] : [version, "latest"];
 
       // Mint our own push token (the dev-token shortcut is disabled in
       // prod, so don't rely on it). Signed with the same registry key
@@ -792,14 +797,14 @@ export function buildServer(opts: BuildServerOptions = {}) {
         );
         const run = promisify(execFile);
         const env = { ...process.env, DOCKER_CONFIG: cfgDir };
-        for (const tag of [version, "latest"]) {
+        for (const tag of tags) {
           console.error(`[image-bootstrap] pushing ${bundle} → ${registry}/${repo}:${tag}`);
           await run(craneBin, ["--insecure", "push", bundle, `${registry}/${repo}:${tag}`], {
             env
           });
         }
         await setRegistryRepoVisibility(ctx.queryFn, repo, true);
-        console.error(`[image-bootstrap] published ${repo} and set public`);
+        console.error(`[image-bootstrap] ${repo}: published ${tags.join(", ")} (version ${version}); set public`);
       } finally {
         fs.rmSync(cfgDir, { recursive: true, force: true });
       }
