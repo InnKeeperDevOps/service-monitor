@@ -232,11 +232,16 @@ func WithAppStatsCollector(fn func(agentID string) ([][]byte, error)) ClientOpti
 	}
 }
 
+// DefaultAgentVersion is the version the agent reports to the control
+// plane unless overridden via WithVersion(...) or $SM_AGENT_VERSION.
+// Bump on every agent release.
+const DefaultAgentVersion = "0.1.1"
+
 func NewClient(url string, agentID string, opts ...ClientOption) *Client {
 	c := &Client{
 		url:               url,
 		agentID:           agentID,
-		version:           "0.1.0",
+		version:           DefaultAgentVersion,
 		heartbeatInterval: 10 * time.Second,
 		minBackoff:        time.Second,
 		maxBackoff:        60 * time.Second,
@@ -250,7 +255,7 @@ func NewClient(url string, agentID string, opts ...ClientOption) *Client {
 	if c.rng == nil {
 		c.rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
-	if v := os.Getenv("SM_AGENT_VERSION"); v != "" && c.version == "0.1.0" {
+	if v := os.Getenv("SM_AGENT_VERSION"); v != "" && c.version == DefaultAgentVersion {
 		c.version = v
 	}
 	if c.protocolDebug == nil && agentdebug.Enabled() {
