@@ -58,8 +58,21 @@ function formatRuntime(rt: LoadBalancerEntry["agentRuntime"]): string {
 const rows = computed<FlatRow[]>(() => {
   const out: FlatRow[] = [];
   for (const e of entries.value) {
+    // metallb pinned IP (spec.loadBalancer.loadBalancerIPs, carried in
+    // the lb_status_report detail). Surface it while the address is
+    // still unallocated so the row shows the *configured* IP rather than
+    // a bare "(pending)" — e.g. when metallb hasn't honored it yet, or
+    // can't because it's outside every IPAddressPool.
+    const pinnedIp =
+      e.lbType === "metallb" ? ((e.detail.loadBalancerIPs as string | undefined) ?? "") : "";
     const endpoint =
-      e.externalIp ?? e.externalHostname ?? (e.lbType === "none" ? "(cluster-internal)" : "(pending)");
+      e.externalIp ??
+      e.externalHostname ??
+      (pinnedIp
+        ? `${pinnedIp} (pending)`
+        : e.lbType === "none"
+          ? "(cluster-internal)"
+          : "(pending)");
     const kind: FlatRow["externalKind"] = e.externalIp
       ? "ip"
       : e.externalHostname
@@ -111,7 +124,11 @@ function lbDetailLabel(e: LoadBalancerEntry): string {
   switch (e.lbType) {
     case "metallb": {
       const pool = (e.detail.addressPool as string | undefined) ?? "";
-      return pool ? `metallb (pool: ${pool})` : "metallb";
+      const pinned = (e.detail.loadBalancerIPs as string | undefined) ?? "";
+      const parts: string[] = [];
+      if (pool) parts.push(`pool: ${pool}`);
+      if (pinned) parts.push(`pinned: ${pinned}`);
+      return parts.length ? `metallb (${parts.join(" · ")})` : "metallb";
     }
     case "nginx": {
       const cls = (e.detail.ingressClass as string | undefined) ?? "nginx";
