@@ -637,6 +637,28 @@ func shortServiceName(serviceID string) string {
 // to ship with kubectl on PATH and a service account that has
 // create/update verbs on apps/Deployment, /Service, and
 // networking.k8s.io/Ingress — both wired by the operator.
+// ensureKubectlCreate runs a `kubectl create …` and logs the outcome,
+// treating "AlreadyExists" as idempotent success. Used for namespace +
+// pull-secret self-provisioning, where the agent's grant is create-only
+// (no get/patch) so `kubectl apply` (read-modify-write) can't be used.
+// Always non-fatal: a genuine RBAC failure is logged, and the
+// subsequent manifest apply surfaces a clear error if it mattered.
+func ensureKubectlCreate(ctx context.Context, kind, namespace, name string, args []string) {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, "kubectl", args...).CombinedOutput()
+	res := strings.TrimSpace(string(out))
+	switch {
+	case err == nil:
+		log.Printf("[agent:redeploy:k8s] %s ensured ns=%q name=%q: %s", kind, namespace, name, res)
+	case strings.Contains(res, "AlreadyExists") || strings.Contains(res, "already exists"):
+		log.Printf("[agent:redeploy:k8s] %s already present ns=%q name=%q (ok)", kind, namespace, name)
+	default:
+		log.Printf("[agent:redeploy:k8s] %s ensure FAILED (non-fatal) ns=%q name=%q: %v: %s",
+			kind, namespace, name, err, res)
+	}
+}
+
 func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) CommandResult {
 	if _, err := exec.LookPath("kubectl"); err != nil {
 		return CommandResult{
@@ -666,67 +688,28 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 	log.Printf("[agent:redeploy:k8s] start service=%s name=%q ns=%q lb=%s image=%s build=%s",
 		in.serviceID, in.serviceName, namespace, in.loadBalancer.typ, in.imageRef, in.buildID)
 
-	// Make sure the namespace exists. `kubectl create ns --dry-run=client
-	// -o yaml | kubectl apply -f -` is idempotent — apply is a no-op
-	// when the ns already exists, and creates it when it doesn't.
-	// Failure here isn't fatal; the subsequent apply will surface a
-	// clearer error if the namespace doesn't exist and we couldn't
-	// create it (e.g. agent SA lacks namespaces.create cluster perm).
-	// The outcome is logged either way so an RBAC-denied namespace
-	// ensure is visible in the agent log instead of being swallowed.
-	ensureCtx, ensureCancel := context.WithTimeout(ctx, 10*time.Second)
-	dryRun := exec.CommandContext(ensureCtx, "kubectl", "create", "ns", namespace, "--dry-run=client", "-o", "yaml")
-	dryOut, dryErr := dryRun.Output()
-	ensureCancel()
-	if dryErr != nil {
-		log.Printf("[agent:redeploy:k8s] namespace dry-run render failed (non-fatal) ns=%q: %v", namespace, dryErr)
-	} else {
-		applyCtx, applyCancel := context.WithTimeout(ctx, 10*time.Second)
-		applyNs := exec.CommandContext(applyCtx, "kubectl", "apply", "-f", "-")
-		applyNs.Stdin = strings.NewReader(string(dryOut))
-		nsOut, nsErr := applyNs.CombinedOutput()
-		applyCancel()
-		if nsErr != nil {
-			log.Printf("[agent:redeploy:k8s] namespace ensure FAILED (non-fatal) ns=%q: %v: %s",
-				namespace, nsErr, strings.TrimSpace(string(nsOut)))
-		} else {
-			log.Printf("[agent:redeploy:k8s] namespace ensured ns=%q: %s",
-				namespace, strings.TrimSpace(string(nsOut)))
-		}
-	}
+	// Ensure the target namespace exists. Plain `kubectl create
+	// namespace` (NOT `apply`): the agent's grant is namespaces
+	// create-only (no get/patch), so apply's read-modify-write would
+	// 403. "AlreadyExists" is the idempotent success case. Non-fatal —
+	// a genuine failure surfaces on the manifest apply below.
+	ensureKubectlCreate(ctx, "namespace", namespace, namespace,
+		[]string{"create", "namespace", namespace})
 
 	// Self-provision the image-pull Secret in the target namespace so
-	// private Kaiad-registry images pull without an admin pre-creating
-	// it. Built from the registry creds the agent already holds
-	// (KAIAD_REGISTRY_USER/PASSWORD); idempotent via dry-run | apply.
-	// Non-fatal — logged either way; the rendered Deployment references
-	// this secret name (see renderK8sManifests / KAIAD_IMAGE_PULL_SECRET).
+	// private Kaiad-registry images pull with no admin pre-step. Built
+	// from the registry creds the agent already holds
+	// (registryAuthFromEnv). Plain `create` for the same create-only
+	// reason; "AlreadyExists" treated as success. Non-fatal. The
+	// rendered Deployment references this secret name (see
+	// renderK8sManifests / KAIAD_IMAGE_PULL_SECRET).
 	if ps := strings.TrimSpace(os.Getenv("KAIAD_IMAGE_PULL_SECRET")); ps != "" {
 		auth := registryAuthFromEnv(in.imageRef)
-		secCtx, secCancel := context.WithTimeout(ctx, 10*time.Second)
-		gen := exec.CommandContext(secCtx, "kubectl", "create", "secret", "docker-registry", ps,
-			"-n", namespace,
-			"--docker-server="+auth.ServerAddress,
-			"--docker-username="+auth.Username,
-			"--docker-password="+auth.Password,
-			"--dry-run=client", "-o", "yaml")
-		secOut, secErr := gen.Output()
-		secCancel()
-		if secErr != nil {
-			log.Printf("[agent:redeploy:k8s] pull-secret render failed (non-fatal) ns=%q secret=%q: %v", namespace, ps, secErr)
-		} else {
-			aCtx, aCancel := context.WithTimeout(ctx, 10*time.Second)
-			ap := exec.CommandContext(aCtx, "kubectl", "apply", "-f", "-")
-			ap.Stdin = strings.NewReader(string(secOut))
-			apOut, apErr := ap.CombinedOutput()
-			aCancel()
-			if apErr != nil {
-				log.Printf("[agent:redeploy:k8s] pull-secret ensure FAILED (non-fatal) ns=%q secret=%q: %v: %s",
-					namespace, ps, apErr, strings.TrimSpace(string(apOut)))
-			} else {
-				log.Printf("[agent:redeploy:k8s] pull-secret ensured ns=%q secret=%q", namespace, ps)
-			}
-		}
+		ensureKubectlCreate(ctx, "pull-secret", namespace, ps,
+			[]string{"create", "secret", "docker-registry", ps, "-n", namespace,
+				"--docker-server=" + auth.ServerAddress,
+				"--docker-username=" + auth.Username,
+				"--docker-password=" + auth.Password})
 	}
 
 	yaml := renderK8sManifests(in, namespace)

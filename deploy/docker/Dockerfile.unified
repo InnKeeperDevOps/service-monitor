@@ -166,7 +166,7 @@ ENV SM_EMBED_WORKER=1
 ENV KAIAD_DATA_DIR=/data
 # Defaults the boot-time publisher reads. Override per environment.
 ENV KAIAD_AGENT_BUNDLE=/opt/kaiad-agent.tar
-ENV KAIAD_AGENT_VERSION=0.1.4
+ENV KAIAD_AGENT_VERSION=0.1.5
 ENV KAIAD_OPERATOR_BUNDLE=/opt/kaiad-operator.tar
 ENV KAIAD_OPERATOR_VERSION=0.1.3
 ENV KAIAD_REGISTRY_INTERNAL=registry:5000
