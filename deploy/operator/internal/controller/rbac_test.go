@@ -36,6 +36,23 @@ func TestValidateManages_AllowList(t *testing.T) {
 			wantErrIn: "",
 		},
 		{
+			name: "allowed: full deploy surface (deployments+services+ingresses create/delete)",
+			rules: []kaiadv1alpha1.ManagesRule{
+				{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets"}, Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
+				{APIGroups: []string{""}, Resources: []string{"services"}, Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
+				{APIGroups: []string{""}, Resources: []string{"namespaces"}, Verbs: []string{"get"}},
+				{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"ingresses"}, Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
+			},
+			wantErrIn: "",
+		},
+		{
+			name: "blocked: pods create (read-only resource)",
+			rules: []kaiadv1alpha1.ManagesRule{
+				{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"create"}},
+			},
+			wantErrIn: `verb "create"`,
+		},
+		{
 			name: "blocked: secrets",
 			rules: []kaiadv1alpha1.ManagesRule{
 				{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get"}},

@@ -27,3 +27,23 @@ kubeconfig is at `~/.kube/config_synload`.
   separate, unrelated dev cluster.
 - Any change to synload (e.g. rolling the agent pod, applying a CR) must
   be performed by the user. Provide exact commands; do not run them.
+
+## Narrow exception — Kaiad-generated manifests only
+
+The only permitted writes to synload are applying **Kaiad's own
+generated manifests**, never hand-crafted cluster surgery:
+
+1. KaiadAgent image/version bump: `kubectl -n kaiad-system patch
+   kaiadagent <name> --type=merge -p
+   '{"spec":{"image":"panel.kaiad.dev/kaiad-agent:<ver>"}}'` (+ a
+   `rollout restart` of the agent Deployment if asked).
+2. Applying the panel-served operator bundle
+   (`panel.kaiad.dev/api/v1/operator/install.yaml`) and the
+   panel-generated `KaiadAgent` CR from the #agents page.
+3. The one-time `kubectl label namespace <ns> kaiad.dev/managed=true`
+   the panel quickstart emits, so the operator-generated RBAC binds.
+
+Everything else stays strictly read-only. No ad-hoc Role/RoleBinding/
+Deployment/Service hand-editing, no changes to any non-kaiad workload.
+Prefer fixing the generated manifests in the repo over patching the
+cluster directly.

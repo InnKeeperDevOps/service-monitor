@@ -165,15 +165,31 @@ function buildKaiadAgentManifest(opts: {
     `    - name: ${derivePullSecretName(agentName)}`,
     ...(serviceId ? [`  serviceId: ${serviceId}`] : []),
     "  manages:",
+    // create/update/patch/delete on deployments + services is the
+    // minimum the agent's redeploy_service/teardown_service need to
+    // actually deploy a monitored service (it `kubectl apply`s a
+    // Deployment + Service, or an Ingress for the nginx LB type).
     "    - apiGroups: [\"apps\"]",
     "      resources: [\"deployments\", \"statefulsets\"]",
-    "      verbs: [\"get\", \"list\", \"watch\", \"patch\", \"update\"]",
+    "      verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"]",
+    "      namespaceSelector:",
+    "        matchLabels:",
+    "          kaiad.dev/managed: \"true\"",
+    "    - apiGroups: [\"\"]",
+    "      resources: [\"services\"]",
+    "      verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"]",
     "      namespaceSelector:",
     "        matchLabels:",
     "          kaiad.dev/managed: \"true\"",
     "    - apiGroups: [\"\"]",
     "      resources: [\"pods\", \"pods/log\"]",
     "      verbs: [\"get\", \"list\", \"watch\"]",
+    "      namespaceSelector:",
+    "        matchLabels:",
+    "          kaiad.dev/managed: \"true\"",
+    "    - apiGroups: [\"networking.k8s.io\"]",
+    "      resources: [\"ingresses\"]",
+    "      verbs: [\"get\", \"list\", \"watch\", \"create\", \"update\", \"patch\", \"delete\"]",
     "      namespaceSelector:",
     "        matchLabels:",
     "          kaiad.dev/managed: \"true\""
@@ -221,6 +237,17 @@ function buildKubectlCreatePullSecretCommand(opts: {
   );
 }
 
+// The generated KaiadAgent's `manages` rules are scoped to namespaces
+// labelled `kaiad.dev/managed=true`. The operator only creates the
+// agent's Role/RoleBinding in namespaces that carry this label, and the
+// agent deploys monitored services into its own namespace by default —
+// so that namespace MUST be labelled or every `kubectl apply` the agent
+// runs is RBAC-forbidden (the deployment silently never happens).
+function buildKubectlLabelNamespaceCommand(opts: { namespace: string }): string {
+  const namespace = opts.namespace.trim() || DEFAULT_KUBE_NAMESPACE;
+  return `kubectl label namespace ${namespace} kaiad.dev/managed=true --overwrite`;
+}
+
 function buildAgentStartCommand(token: string, serviceId?: string | null, runtime: AgentRuntime = "docker"): string {
   const realtimeUrl =
     typeof window === "undefined"
@@ -251,6 +278,7 @@ const copyMessage = ref<string | null>(null);
 const commandCopyMessage = ref<string | null>(null);
 const kubectlCopyMessage = ref<string | null>(null);
 const pullSecretCopyMessage = ref<string | null>(null);
+const labelNamespaceCopyMessage = ref<string | null>(null);
 const kubeAgentName = ref<string>(DEFAULT_KUBE_AGENT_NAME);
 const kubeNamespace = ref<string>(DEFAULT_KUBE_NAMESPACE);
 const kubeImage = ref<string>(defaultAgentImage());
@@ -422,6 +450,18 @@ async function handleCopyPullSecretCommand() {
     pullSecretCopyMessage.value = "Copied kubectl command to clipboard.";
   } catch {
     pullSecretCopyMessage.value = "Unable to copy command automatically.";
+  }
+}
+
+async function handleCopyLabelNamespaceCommand() {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(
+      buildKubectlLabelNamespaceCommand({ namespace: kubeNamespace.value })
+    );
+    labelNamespaceCopyMessage.value = "Copied kubectl command to clipboard.";
+  } catch {
+    labelNamespaceCopyMessage.value = "Unable to copy command automatically.";
   }
 }
 
@@ -826,10 +866,32 @@ const kubeCopyBtn: CSSProperties = {
             }"
           >{{ pullSecretCopyMessage }}</span>
         </div>
+
+        <div :style="kubeStepHeader">
+          <span :style="kubeStepBadge">5</span>
+          <span>Label the namespace so the agent's RBAC is created</span>
+          <span :style="{ fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-secondary)' }">
+            — without this label the operator grants no Role and every deploy is RBAC-forbidden
+          </span>
+        </div>
+        <pre
+          aria-label="kubectl label namespace command"
+          :style="kubeCommandBox"
+        >{{ buildKubectlLabelNamespaceCommand({ namespace: kubeNamespace }) }}</pre>
+        <div :style="kubeCopyRow">
+          <button type="button" :style="kubeCopyBtn" @click="handleCopyLabelNamespaceCommand">Copy kubectl command</button>
+          <span
+            v-if="labelNamespaceCopyMessage"
+            :style="{
+              fontSize: '0.8rem',
+              color: labelNamespaceCopyMessage.startsWith('Copied') ? 'var(--color-success)' : 'var(--color-danger)'
+            }"
+          >{{ labelNamespaceCopyMessage }}</span>
+        </div>
       </div>
 
       <div :style="kubeStepHeader">
-        <span :style="kubeStepBadge">{{ latestToken ? '5' : '3' }}</span>
+        <span :style="kubeStepBadge">{{ latestToken ? '6' : '3' }}</span>
         <span>Apply the <code>KaiadAgent</code> resource</span>
         <span v-if="!latestToken" :style="{ fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-secondary)' }">
           — preview; refreshes as you edit Identity above

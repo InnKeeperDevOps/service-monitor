@@ -17,11 +17,15 @@ import (
 // the design doc and ideally a test in rbac_test.go.
 var allowedRBAC = map[string]map[string]map[string]struct{}{
 	"apps": {
+		// create/delete are required: the agent's redeploy_service
+		// `kubectl apply`s a Deployment (create when absent, patch when
+		// present) and teardown_service deletes it. Without create/delete
+		// the agent can observe but never actually deploy a service.
 		"deployments": {
-			"get": {}, "list": {}, "watch": {}, "patch": {}, "update": {},
+			"get": {}, "list": {}, "watch": {}, "create": {}, "update": {}, "patch": {}, "delete": {},
 		},
 		"statefulsets": {
-			"get": {}, "list": {}, "watch": {}, "patch": {}, "update": {},
+			"get": {}, "list": {}, "watch": {}, "create": {}, "update": {}, "patch": {}, "delete": {},
 		},
 		"daemonsets": {
 			"get": {}, "list": {}, "watch": {},
@@ -35,11 +39,31 @@ var allowedRBAC = map[string]map[string]map[string]struct{}{
 		"pods/log": {
 			"get": {}, "list": {}, "watch": {},
 		},
+		// The agent renders a Service alongside the Deployment for every
+		// k8s/metallb/cluster-ip load-balancer type, and deletes it on
+		// teardown — so it needs the full create/update/delete surface.
+		"services": {
+			"get": {}, "list": {}, "watch": {}, "create": {}, "update": {}, "patch": {}, "delete": {},
+		},
+		// `kubectl apply` reads the target namespace before applying
+		// (and the agent does a best-effort `create ns --dry-run | apply`).
+		// get/list/watch lets a cluster-scoped manages rule cover that
+		// without granting namespace creation/deletion.
+		"namespaces": {
+			"get": {}, "list": {}, "watch": {},
+		},
 		"events": {
 			"get": {}, "list": {}, "watch": {}, "create": {}, "patch": {},
 		},
 		"configmaps": {
 			"get": {}, "list": {}, "watch": {},
+		},
+	},
+	// nginx load-balancer type renders an Ingress instead of a
+	// LoadBalancer Service; teardown deletes it. Mirrors the Service grant.
+	"networking.k8s.io": {
+		"ingresses": {
+			"get": {}, "list": {}, "watch": {}, "create": {}, "update": {}, "patch": {}, "delete": {},
 		},
 	},
 	"batch": {
