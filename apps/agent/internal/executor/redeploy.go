@@ -637,25 +637,55 @@ func shortServiceName(serviceID string) string {
 // to ship with kubectl on PATH and a service account that has
 // create/update verbs on apps/Deployment, /Service, and
 // networking.k8s.io/Ingress — both wired by the operator.
-// ensureKubectlCreate runs a `kubectl create …` and logs the outcome,
-// treating "AlreadyExists" as idempotent success. Used for namespace +
-// pull-secret self-provisioning, where the agent's grant is create-only
-// (no get/patch) so `kubectl apply` (read-modify-write) can't be used.
-// Always non-fatal: a genuine RBAC failure is logged, and the
-// subsequent manifest apply surfaces a clear error if it mattered.
-func ensureKubectlCreate(ctx context.Context, kind, namespace, name string, args []string) {
+func kubectlRun(ctx context.Context, args []string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(cctx, "kubectl", args...).CombinedOutput()
-	res := strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), err
+}
+
+func isAlreadyExists(s string) bool {
+	return strings.Contains(s, "AlreadyExists") || strings.Contains(s, "already exists")
+}
+
+// ensureKubectlCreate runs a `kubectl create …` and logs the outcome.
+// Used for namespace + pull-secret self-provisioning, where the agent's
+// grant is create-only (no get/patch) so `kubectl apply`
+// (read-modify-write) can't be used. Always non-fatal: a genuine RBAC
+// failure is logged and the subsequent manifest apply surfaces a clear
+// error if it mattered.
+//
+// If recreateDeleteArgs is non-nil, an AlreadyExists is repaired by
+// delete + re-create (so e.g. a pull Secret with stale credentials
+// self-heals every deploy — create-only can't overwrite in place). If
+// nil, AlreadyExists is simply treated as idempotent success (correct
+// for namespaces, whose identity carries no mutable payload).
+func ensureKubectlCreate(ctx context.Context, kind, namespace, name string, createArgs, recreateDeleteArgs []string) {
+	res, err := kubectlRun(ctx, createArgs)
 	switch {
 	case err == nil:
 		log.Printf("[agent:redeploy:k8s] %s ensured ns=%q name=%q: %s", kind, namespace, name, res)
-	case strings.Contains(res, "AlreadyExists") || strings.Contains(res, "already exists"):
-		log.Printf("[agent:redeploy:k8s] %s already present ns=%q name=%q (ok)", kind, namespace, name)
-	default:
+		return
+	case !isAlreadyExists(res):
 		log.Printf("[agent:redeploy:k8s] %s ensure FAILED (non-fatal) ns=%q name=%q: %v: %s",
 			kind, namespace, name, err, res)
+		return
+	case recreateDeleteArgs == nil:
+		log.Printf("[agent:redeploy:k8s] %s already present ns=%q name=%q (ok)", kind, namespace, name)
+		return
+	}
+	// AlreadyExists + recreate requested: delete then re-create so the
+	// payload (e.g. registry creds) is refreshed.
+	if dres, derr := kubectlRun(ctx, recreateDeleteArgs); derr != nil {
+		log.Printf("[agent:redeploy:k8s] %s recreate: delete FAILED (non-fatal) ns=%q name=%q: %v: %s",
+			kind, namespace, name, derr, dres)
+		return
+	}
+	if cres, cerr := kubectlRun(ctx, createArgs); cerr != nil {
+		log.Printf("[agent:redeploy:k8s] %s recreate: re-create FAILED (non-fatal) ns=%q name=%q: %v: %s",
+			kind, namespace, name, cerr, cres)
+	} else {
+		log.Printf("[agent:redeploy:k8s] %s recreated ns=%q name=%q (stale payload refreshed)", kind, namespace, name)
 	}
 }
 
@@ -694,22 +724,33 @@ func (e *Executor) redeployKubernetes(ctx context.Context, in redeployInput) Com
 	// 403. "AlreadyExists" is the idempotent success case. Non-fatal —
 	// a genuine failure surfaces on the manifest apply below.
 	ensureKubectlCreate(ctx, "namespace", namespace, namespace,
-		[]string{"create", "namespace", namespace})
+		[]string{"create", "namespace", namespace}, nil)
 
 	// Self-provision the image-pull Secret in the target namespace so
-	// private Kaiad-registry images pull with no admin pre-step. Built
-	// from the registry creds the agent already holds
-	// (registryAuthFromEnv). Plain `create` for the same create-only
-	// reason; "AlreadyExists" treated as success. Non-fatal. The
-	// rendered Deployment references this secret name (see
-	// renderK8sManifests / KAIAD_IMAGE_PULL_SECRET).
+	// private Kaiad-registry images pull with no admin pre-step.
+	//
+	// Credentials match the panel quickstart's working secret: the Kaiad
+	// token-auth registry accepts username "kaiad-agent" + an active
+	// enrollment token as the password (the agent has it in
+	// SM_ENROLLMENT_TOKEN). registryAuthFromEnv is the fallback, but its
+	// dev default (admin/dev-token) is rejected by a production registry,
+	// so prefer the enrollment token when present.
+	//
+	// delete+recreate on AlreadyExists (create-only can't overwrite) so
+	// a secret previously written with stale/wrong creds self-heals.
 	if ps := strings.TrimSpace(os.Getenv("KAIAD_IMAGE_PULL_SECRET")); ps != "" {
-		auth := registryAuthFromEnv(in.imageRef)
+		server := registryHostFromImageRef(in.imageRef)
+		user, pass := "kaiad-agent", strings.TrimSpace(os.Getenv("SM_ENROLLMENT_TOKEN"))
+		if pass == "" {
+			a := registryAuthFromEnv(in.imageRef)
+			server, user, pass = a.ServerAddress, a.Username, a.Password
+		}
 		ensureKubectlCreate(ctx, "pull-secret", namespace, ps,
 			[]string{"create", "secret", "docker-registry", ps, "-n", namespace,
-				"--docker-server=" + auth.ServerAddress,
-				"--docker-username=" + auth.Username,
-				"--docker-password=" + auth.Password})
+				"--docker-server=" + server,
+				"--docker-username=" + user,
+				"--docker-password=" + pass},
+			[]string{"delete", "secret", ps, "-n", namespace, "--ignore-not-found=true"})
 	}
 
 	yaml := renderK8sManifests(in, namespace)

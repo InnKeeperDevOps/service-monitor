@@ -53,13 +53,13 @@ var allowedRBAC = map[string]map[string]map[string]struct{}{
 		"namespaces": {
 			"get": {}, "list": {}, "watch": {}, "create": {},
 		},
-		// create ONLY — the agent writes its own image-pull Secret
-		// (dockerconfigjson, built from creds it already holds) into the
+		// create + delete ONLY — the agent writes (and, to refresh stale
+		// creds, delete+recreates) its own image-pull Secret into the
 		// target namespace so private Kaiad-registry images pull. No
 		// get/list/watch: the agent still cannot READ any cluster Secret,
 		// so the allow-list's "can't exfiltrate secrets" guarantee holds.
 		"secrets": {
-			"create": {},
+			"create": {}, "delete": {},
 		},
 		"events": {
 			"get": {}, "list": {}, "watch": {}, "create": {}, "patch": {},

@@ -187,11 +187,12 @@ function buildKaiadAgentManifest(opts: {
     "    - apiGroups: [\"\"]",
     "      resources: [\"namespaces\"]",
     "      verbs: [\"get\", \"list\", \"watch\", \"create\"]",
-    // create only — the agent writes its own pull Secret; it can never
-    // read cluster Secrets.
+    // create + delete only — the agent writes (and delete+recreates to
+    // refresh stale creds) its own pull Secret; it can never read
+    // cluster Secrets.
     "    - apiGroups: [\"\"]",
     "      resources: [\"secrets\"]",
-    "      verbs: [\"create\"]"
+    "      verbs: [\"create\", \"delete\"]"
   ];
   return lines.join("\n") + "\n";
 }

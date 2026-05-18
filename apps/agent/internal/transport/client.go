@@ -235,7 +235,7 @@ func WithAppStatsCollector(fn func(agentID string) ([][]byte, error)) ClientOpti
 // DefaultAgentVersion is the version the agent reports to the control
 // plane unless overridden via WithVersion(...) or $SM_AGENT_VERSION.
 // Bump on every agent release.
-const DefaultAgentVersion = "0.1.5"
+const DefaultAgentVersion = "0.1.6"
 
 func NewClient(url string, agentID string, opts ...ClientOption) *Client {
 	c := &Client{
